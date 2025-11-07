@@ -102,11 +102,11 @@ app.post('/api/generate-estimate', async (req, res) => {
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: 'You are a master automotive technician with deep technical knowledge. Provide detailed, practical estimates with insider tips. Always respond with valid JSON only, no markdown formatting.' },
+          { role: 'system', content: 'You are a helpful automotive estimator assistant. Always respond with valid JSON only, no markdown formatting.' },
           { role: 'user', content: prompt }
         ],
-        max_tokens: 2500,
-        temperature: 0.2
+        max_tokens: 1500,
+        temperature: 0.1
       })
     });
 
@@ -184,9 +184,7 @@ app.post('/api/generate-estimate', async (req, res) => {
       subtotal,
       timeline: estimate.timeline || '',
       work_steps: estimate.workSteps || [],
-      notes: estimate.notes || '',
-      pro_tips: estimate.proTips || [],
-      warnings: estimate.warnings || []
+      notes: estimate.notes || ''
     };
 
     const { data: savedJob, error: jobErr } = await supabase.from('jobs').insert(jobPayload).select().single();
