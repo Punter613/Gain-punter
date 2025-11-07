@@ -2,35 +2,37 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
-const { OpenAI } = require('openai');
 const { z } = require('zod');
 
 const app = express();
 
-// FIXED: Allow all origins including Claude.ai
+// Bulletproof CORS - Allow everything
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  credentials: false
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 app.use(express.json());
 
 const PORT = process.env.PORT || 4000;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DEFAULT_LABOR_RATE = Number(process.env.DEFAULT_LABOR_RATE || 65);
 
-if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY missing in env');
+if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY missing in env');
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE creds missing in env');
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'P613 Estimator Backend' });
+  res.json({ status: 'ok', service: 'P613 Estimator Backend (Groq-powered)' });
 });
 
 // Input validation schema
@@ -47,8 +49,7 @@ const GenerateSchema = z.object({
 
 // Prompt builder
 function buildPrompt({customer, vehicle, description}) {
-  return `
-You are an experienced automotive service writer for a small independent shop. 
+  return `You are an experienced automotive service writer for a small independent shop. 
 Given a customer job description, produce a concise, itemized ESTIMATE as JSON. The JSON must have these fields:
 
 {
@@ -70,14 +71,13 @@ Requirements:
 - Provide laborHours as a decimal (e.g., 14.5).
 - shopSuppliesPercent default to 7 if you recommend otherwise include justification in notes.
 - The shortDescription should be a one-line summary.
-- Do NOT include markup; return ONLY parsable JSON.
+- Do NOT include markdown backticks or explanations; return ONLY parsable JSON.
 
 Customer: ${customer.name} ${customer.phone ? `phone:${customer.phone}` : ''} ${customer.email ? `email:${customer.email}` : ''}
 Vehicle: ${vehicle || 'Not provided'}
 Job description: ${description}
 
-Example job: "Ford F-150 5.4L V8 motor swap" — produce realistic parts list, hours, and timeline.
-`;
+Example job: "Ford F-150 5.4L V8 motor swap" — produce realistic parts list, hours, and timeline.`;
 }
 
 app.post('/api/generate-estimate', async (req, res) => {
@@ -87,26 +87,50 @@ app.post('/api/generate-estimate', async (req, res) => {
 
     const prompt = buildPrompt({ customer, vehicle, description });
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You are a helpful automotive estimator assistant.' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 900,
-      temperature: 0.1
+    // Call Groq API (OpenAI-compatible)
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: 'You are a helpful automotive estimator assistant. Always respond with valid JSON only, no markdown formatting.' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 1500,
+        temperature: 0.1
+      })
     });
 
-    const text = response.choices?.[0]?.message?.content ?? response.choices?.[0]?.text;
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Groq API error:', errorText);
+      throw new Error(`Groq API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content;
+    
     if (!text) throw new Error('No response from AI');
 
-    const jsonMatch = text.trim().match(/\{[\s\S]*\}$/);
-    const jsonText = jsonMatch ? jsonMatch[0] : text;
+    // Clean up response - remove markdown code blocks if present
+    let cleanText = text.trim();
+    cleanText = cleanText.replace(/```json\n?/g, '');
+    cleanText = cleanText.replace(/```\n?/g, '');
+    cleanText = cleanText.trim();
+
+    // Find JSON object
+    const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+    const jsonText = jsonMatch ? jsonMatch[0] : cleanText;
 
     let estimate;
     try {
       estimate = JSON.parse(jsonText);
     } catch (err) {
+      console.error('JSON parse error. Raw text:', text);
       return res.status(500).json({ error: 'AI returned non-JSON output', raw: text });
     }
 
@@ -181,4 +205,4 @@ app.get('/api/jobs', async (req, res) => {
   res.json({ data });
 });
 
-app.listen(PORT, () => console.log(`P613 estimator backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`P613 estimator backend running on port ${PORT} (Groq-powered)`));
