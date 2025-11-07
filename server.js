@@ -49,35 +49,40 @@ const GenerateSchema = z.object({
 
 // Prompt builder
 function buildPrompt({customer, vehicle, description}) {
-  return `You are an experienced automotive service writer for a small independent shop. 
-Given a customer job description, produce a concise, itemized ESTIMATE as JSON. The JSON must have these fields:
+  return `You are a master automotive technician and service writer with 20+ years of experience in independent repair shops.
+Given a customer job description, produce a DETAILED, professional estimate as JSON.
 
 {
   "jobType": string,
   "shortDescription": string,
   "laborHours": number,
   "laborRate": number,
-  "workSteps": [string],
+  "workSteps": [string (detailed steps with specific actions)],
   "parts": [{"name":string,"cost":number}],
   "shopSuppliesPercent": number,
   "timeline": string,
-  "notes": string
+  "notes": string,
+  "proTips": [string (insider tips, tricks, and things to watch out for)],
+  "warnings": [string (potential issues, gotchas, or things that could go wrong)]
 }
 
 Requirements:
-- Be realistic and conservative for a 1-2 tech shop.
-- Use laborRate = ${DEFAULT_LABOR_RATE} unless the job justifies more.
-- Provide sensible parts and approximate costs (use whole dollars).
-- Provide laborHours as a decimal (e.g., 14.5).
-- shopSuppliesPercent default to 7 if you recommend otherwise include justification in notes.
-- The shortDescription should be a one-line summary.
-- Do NOT include markdown backticks or explanations; return ONLY parsable JSON.
+- Be realistic and conservative for a 1-2 tech independent shop
+- Use laborRate = ${DEFAULT_LABOR_RATE} unless specialty work justifies more
+- Provide detailed parts with realistic costs (whole dollars)
+- laborHours as decimal (e.g., 14.5) - include diagnosis, testing, cleanup time
+- shopSuppliesPercent default to 7%
+- workSteps should be DETAILED with specific actions (not just "remove engine" but "Drain coolant and engine oil, disconnect battery, remove radiator, unbolt motor mounts, etc.")
+- proTips should include: time-savers, special tools needed, parts to inspect while you're in there, torque specs if critical, common shortcuts
+- warnings should include: common problems (stripped bolts, seized parts), year-specific issues, things that break often, hidden labor traps
+- Be conversational and practical - like talking to another tech
+- Return ONLY valid JSON, no markdown
 
 Customer: ${customer.name} ${customer.phone ? `phone:${customer.phone}` : ''} ${customer.email ? `email:${customer.email}` : ''}
-Vehicle: ${vehicle || 'Not provided'}
+Vehicle: ${vehicle || 'Not specified'}
 Job description: ${description}
 
-Example job: "Ford F-150 5.4L V8 motor swap" — produce realistic parts list, hours, and timeline.`;
+Think like a seasoned tech explaining the job to an apprentice - thorough, practical, and real-world focused.`;
 }
 
 app.post('/api/generate-estimate', async (req, res) => {
