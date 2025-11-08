@@ -103,6 +103,135 @@ app.get('/api/vin-lookup/:vin', async (req, res) => {
   }
 });
 
+// Photo Damage Analysis endpoint
+app.post('/api/analyze-photo', async (req, res) => {
+  try {
+    const { imageData } = req.body;
+    
+    if (!imageData) {
+      return res.status(400).json({ error: 'No image data provided' });
+    }
+
+    // Groq Vision API call
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.2-90b-vision-preview',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `You are an expert automotive damage assessor. Analyze this vehicle photo and provide a detailed damage assessment as JSON.
+
+Return ONLY valid JSON with this structure:
+{
+  "damageFound": boolean,
+  "damageAreas": [{"area": "string", "severity": "minor/moderate/severe", "description": "string"}],
+  "recommendedRepairs": [string],
+  "estimatedParts": [{"name": "string", "reason": "string"}],
+  "notes": "string",
+  "confidence": "low/medium/high"
+}
+
+Be specific and practical. If you see damage, describe exactly what needs repair. If no damage is visible, say so.`
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageData
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 1000,
+        temperature: 0.2
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Groq Vision API error:', errorText);
+      throw new Error(`Vision API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content;
+    
+    if (!text) throw new Error('No response from Vision AI');
+
+    // Clean and parse JSON
+    let cleanText = text.trim();
+    cleanText = cleanText.replace(/```json\n?/g, '');
+    cleanText = cleanText.replace(/```\n?/g, '');
+    cleanText = cleanText.trim();
+
+    const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+    const jsonText = jsonMatch ? jsonMatch[0] : cleanText;
+
+    let analysis;
+    try {
+      analysis = JSON.parse(jsonText);
+    } catch (err) {
+      console.error('JSON parse error. Raw text:', text);
+      return res.status(500).json({ error: 'AI returned non-JSON output', raw: text });
+    }
+
+    // Build a human-readable description
+    let description = '';
+    
+    if (analysis.damageFound) {
+      description += 'DAMAGE ANALYSIS:\n\n';
+      
+      if (analysis.damageAreas && analysis.damageAreas.length > 0) {
+        description += 'Damaged Areas:\n';
+        analysis.damageAreas.forEach(area => {
+          description += `- ${area.area} (${area.severity}): ${area.description}\n`;
+        });
+        description += '\n';
+      }
+      
+      if (analysis.recommendedRepairs && analysis.recommendedRepairs.length > 0) {
+        description += 'Recommended Repairs:\n';
+        analysis.recommendedRepairs.forEach(repair => {
+          description += `- ${repair}\n`;
+        });
+        description += '\n';
+      }
+      
+      if (analysis.estimatedParts && analysis.estimatedParts.length > 0) {
+        description += 'Likely Parts Needed:\n';
+        analysis.estimatedParts.forEach(part => {
+          description += `- ${part.name} (${part.reason})\n`;
+        });
+        description += '\n';
+      }
+      
+      if (analysis.notes) {
+        description += `Notes: ${analysis.notes}`;
+      }
+    } else {
+      description = 'No visible damage detected in photo. Customer may need to provide additional photos or describe the issue verbally.';
+    }
+
+    res.json({
+      ok: true,
+      analysis,
+      description: description.trim()
+    });
+
+  } catch (err) {
+    console.error('Photo analysis error', err);
+    res.status(500).json({ error: err.message || 'Failed to analyze photo' });
+  }
+});
+
 // Input validation schema
 const GenerateSchema = z.object({
   customer: z.object({
