@@ -35,6 +35,74 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'P613 Estimator Backend (Groq-powered)' });
 });
 
+// VIN Lookup endpoint (FREE NHTSA API)
+app.get('/api/vin-lookup/:vin', async (req, res) => {
+  try {
+    const { vin } = req.params;
+    
+    // Validate VIN format (17 characters, alphanumeric)
+    if (!vin || vin.length !== 17) {
+      return res.status(400).json({ error: 'VIN must be exactly 17 characters' });
+    }
+
+    // Call NHTSA VIN decoder API (FREE, no API key needed)
+    const response = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/${vin}?format=json`);
+    
+    if (!response.ok) {
+      throw new Error('Failed to lookup VIN');
+    }
+
+    const data = await response.json();
+    
+    // Extract useful fields from the massive response
+    const results = data.Results || [];
+    
+    const getField = (variableId) => {
+      const field = results.find(r => r.VariableId === variableId);
+      return field?.Value || null;
+    };
+
+    const vehicleInfo = {
+      vin: vin.toUpperCase(),
+      year: getField(29) || getField(26), // Model Year
+      make: getField(26) || getField(27), // Make
+      model: getField(28), // Model
+      trim: getField(109), // Trim
+      engine: getField(13) || getField(71), // Engine Config or Displacement
+      engineCylinders: getField(9), // Engine Cylinders
+      displacement: getField(11), // Displacement (L)
+      fuelType: getField(24), // Fuel Type
+      bodyClass: getField(5), // Body Class
+      driveType: getField(15), // Drive Type
+      transmission: getField(37), // Transmission Style
+      vehicleType: getField(39), // Vehicle Type
+      manufacturer: getField(27), // Manufacturer Name
+      plant: getField(31), // Plant City/Country
+      errors: data.Results.filter(r => r.VariableId === 143).map(r => r.Value).join(', ') || null
+    };
+
+    // Build a friendly display string
+    const displayString = [
+      vehicleInfo.year,
+      vehicleInfo.make,
+      vehicleInfo.model,
+      vehicleInfo.trim,
+      vehicleInfo.engine ? `${vehicleInfo.engine}` : null
+    ].filter(Boolean).join(' ');
+
+    res.json({
+      ok: true,
+      vehicle: vehicleInfo,
+      displayString: displayString || 'Unknown Vehicle',
+      raw: data.Results // Include full data for debugging if needed
+    });
+
+  } catch (err) {
+    console.error('VIN lookup error', err);
+    res.status(500).json({ error: err.message || 'Failed to lookup VIN' });
+  }
+});
+
 // Input validation schema
 const GenerateSchema = z.object({
   customer: z.object({
@@ -102,11 +170,11 @@ app.post('/api/generate-estimate', async (req, res) => {
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: 'You are a helpful automotive estimator assistant. Always respond with valid JSON only, no markdown formatting.' },
+          { role: 'system', content: 'You are a master automotive technician with deep technical knowledge. Provide detailed, practical estimates with insider tips. Always respond with valid JSON only, no markdown formatting.' },
           { role: 'user', content: prompt }
         ],
-        max_tokens: 1500,
-        temperature: 0.1
+        max_tokens: 2500,
+        temperature: 0.2
       })
     });
 
@@ -184,7 +252,9 @@ app.post('/api/generate-estimate', async (req, res) => {
       subtotal,
       timeline: estimate.timeline || '',
       work_steps: estimate.workSteps || [],
-      notes: estimate.notes || ''
+      notes: estimate.notes || '',
+      pro_tips: estimate.proTips || [],
+      warnings: estimate.warnings || []
     };
 
     const { data: savedJob, error: jobErr } = await supabase.from('jobs').insert(jobPayload).select().single();
