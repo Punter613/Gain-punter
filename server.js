@@ -77,17 +77,13 @@ app.get('/', (req, res) => {
 
 // VIN Lookup endpoint (FREE NHTSA API)
 app.get('/api/vin-lookup/:vin', async (req, res) => {
-  const requestId = generateRequestId();
-  
   try {
     const { vin } = req.params;
-    log('info', 'VIN lookup requested', { requestId, vin: vin.substring(0, 4) + '...' });
     
     // VIN regex validation: 17 alphanumeric chars, no I, O, or Q
     const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/;
     
     if (!vin || !vinRegex.test(vin.toUpperCase())) {
-      log('warn', 'Invalid VIN format', { requestId, vin });
       return res.status(400).json({ 
         error: 'Invalid VIN format. Must be exactly 17 characters (letters and numbers, no I, O, or Q)' 
       });
@@ -95,14 +91,12 @@ app.get('/api/vin-lookup/:vin', async (req, res) => {
 
     // Add timeout with AbortController
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
-    // Call NHTSA with retry logic
-    const response = await fetchWithRetry(
+    // Call NHTSA VIN decoder API (FREE, no API key needed)
+    const response = await fetch(
       `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/${vin.toUpperCase()}?format=json`,
-      { signal: controller.signal },
-      2, // 2 retries
-      1000 // 1 second initial backoff
+      { signal: controller.signal }
     );
     
     clearTimeout(timeoutId);
@@ -149,17 +143,15 @@ app.get('/api/vin-lookup/:vin', async (req, res) => {
       vehicleInfo.engine ? `${vehicleInfo.engine}` : null
     ].filter(Boolean).join(' ');
 
-    log('info', 'VIN lookup successful', { requestId, vehicle: displayString });
-    
     res.json({
       ok: true,
       vehicle: vehicleInfo,
       displayString: displayString || 'Unknown Vehicle',
-      raw: data.Results
+      raw: data.Results // Include full data for debugging if needed
     });
 
   } catch (err) {
-    log('error', 'VIN lookup failed', { requestId, error: err.message });
+    console.error('VIN lookup error', err);
     if (err.name === 'AbortError') {
       return res.status(504).json({ error: 'VIN lookup timed out. Please try again.' });
     }
@@ -169,47 +161,37 @@ app.get('/api/vin-lookup/:vin', async (req, res) => {
 
 // Photo Damage Analysis endpoint
 app.post('/api/analyze-photo', async (req, res) => {
-  const requestId = generateRequestId();
-  
   try {
     const { imageData } = req.body;
-    log('info', 'Photo analysis requested', { requestId });
     
     // Validate image data
     if (!imageData || typeof imageData !== 'string') {
-      log('warn', 'Invalid image data', { requestId });
       return res.status(400).json({ error: 'No valid image data provided' });
     }
     
     if (!imageData.startsWith('data:image/')) {
-      log('warn', 'Invalid image format', { requestId });
       return res.status(400).json({ error: 'Invalid image format. Must be base64 encoded image.' });
     }
     
-    // Check image size
-    const sizeInMB = (imageData.length * 0.75) / (1024 * 1024);
+    // Check image size (prevent huge uploads)
+    const sizeInMB = (imageData.length * 0.75) / (1024 * 1024); // rough base64 to bytes
     if (sizeInMB > 10) {
-      log('warn', 'Image too large', { requestId, sizeMB: sizeInMB.toFixed(2) });
       return res.status(400).json({ error: 'Image too large. Please compress to under 10MB.' });
     }
 
-    log('info', 'Image validated', { requestId, sizeMB: sizeInMB.toFixed(2) });
-
     // Add timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-    // Groq Vision API call with retry
-    const response = await fetchWithRetry(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
+    // Groq Vision API call
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
         model: 'llama-3.2-90b-vision-preview',
         messages: [
           {
@@ -243,28 +225,20 @@ Be specific and practical. If you see damage, describe exactly what needs repair
         max_tokens: 1000,
         temperature: 0.2
       })
-    },
-    2, // 2 retries
-    2000 // 2 second initial backoff
-  );
+    });
 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
-      log('error', 'Groq Vision API error', { requestId, status: response.status, error: errorText.substring(0, 200) });
+      console.error('Groq Vision API error:', errorText);
       throw new Error(`Vision API error: ${response.status}`);
     }
 
     const data = await response.json();
     const text = data.choices?.[0]?.message?.content;
     
-    if (!text) {
-      log('error', 'No content from Vision API', { requestId });
-      throw new Error('No response from Vision AI');
-    }
-
-    log('info', 'Vision API response received', { requestId, length: text.length });
+    if (!text) throw new Error('No response from Vision AI');
 
     // Clean and parse JSON
     let cleanText = text.trim();
@@ -278,9 +252,8 @@ Be specific and practical. If you see damage, describe exactly what needs repair
     let analysis;
     try {
       analysis = JSON.parse(jsonText);
-      log('info', 'Photo analysis complete', { requestId, damageFound: analysis.damageFound });
     } catch (err) {
-      log('error', 'JSON parse error in photo analysis', { requestId, rawText: text.substring(0, 200) });
+      console.error('JSON parse error. Raw text:', text);
       return res.status(500).json({ error: 'AI returned non-JSON output', raw: text });
     }
 
@@ -328,7 +301,7 @@ Be specific and practical. If you see damage, describe exactly what needs repair
     });
 
   } catch (err) {
-    log('error', 'Photo analysis failed', { requestId, error: err.message, stack: err.stack });
+    console.error('Photo analysis error', err);
     if (err.name === 'AbortError') {
       return res.status(504).json({ error: 'Photo analysis timed out. Please try again with a smaller image.' });
     }
@@ -359,11 +332,15 @@ Analyze these diagnostic trouble codes (DTCs) and provide correlation analysis t
 Vehicle: ${vehicle || 'Not specified'}
 Diagnostic Trouble Codes: ${codes.join(', ')}
 
-IMPORTANT: Use ONLY plain ASCII characters in your response. Do NOT use special Unicode symbols.
-- Use * for bullet points
-- Use -> for arrows
-- Use ! for warnings
-- Use numbers for steps (1. 2. 3.)
+IMPORTANT FORMATTING RULES:
+- Use ONLY standard keyboard characters
+- For bullet points, use: "- " (dash and space)
+- For checkmarks, use: "[x]" 
+- For warnings, use: "WARNING: "
+- For arrows, use: "->" 
+- Do NOT use any emoji or special Unicode characters
+- Use plain numbers for lists: 1. 2. 3.
+- Use asterisks for emphasis: *important*
 
 Provide analysis as JSON with this exact structure:
 
@@ -551,6 +528,13 @@ Requirements:
 - Be conversational and practical - like talking to another tech
 - Return ONLY valid JSON, no markdown
 
+CRITICAL FORMATTING:
+- Use ONLY standard keyboard characters - no Unicode symbols, no emoji
+- For lists use: "- item" (dash space)
+- For emphasis use: plain text or *asterisks*
+- For warnings use: "WARNING: " prefix
+- Do NOT use bullet points, checkmarks, arrows, or special symbols
+
 Customer: ${customer.name} ${customer.phone ? `phone:${customer.phone}` : ''} ${customer.email ? `email:${customer.email}` : ''}
 Vehicle: ${vehicle || 'Not specified'}
 Job description: ${description}
@@ -561,61 +545,26 @@ Think like a seasoned tech explaining the job to an apprentice - thorough, pract
 }
 
 app.post('/api/generate-estimate', async (req, res) => {
-  const requestId = generateRequestId();
-  
   try {
-    log('info', 'Estimate generation requested', { requestId });
-    
     // Validate input
     const parsed = GenerateSchema.parse(req.body);
     const { customer, vehicle, description } = parsed;
-    const { useOemData, vin } = req.body; // Optional: fetch OEM data
 
-    log('info', 'Input validated', { requestId, customer: customer.name, vehicle, useOemData });
+    const prompt = buildPrompt({ customer, vehicle, description });
 
-    // Optionally fetch OEM data if VIN provided and useOemData flag set
-    let oemData = null;
-    if (useOemData && vin) {
-      try {
-        // Determine procedure type from description
-        let procedure = 'general-repair';
-        if (description.toLowerCase().includes('engine') || description.toLowerCase().includes('motor')) {
-          procedure = 'engine-replacement';
-        } else if (description.toLowerCase().includes('brake')) {
-          procedure = 'brake-service';
-        } else if (description.toLowerCase().includes('transmission')) {
-          procedure = 'transmission-service';
-        }
-        
-        // Fetch OEM data (internal call)
-        const oemResponse = await fetch(`http://localhost:${PORT}/api/oem-data/${vin}/${procedure}`);
-        if (oemResponse.ok) {
-          oemData = await oemResponse.json();
-          log('info', 'OEM data fetched successfully', { requestId, procedure });
-        }
-      } catch (oemErr) {
-        log('warn', 'OEM data fetch failed, continuing without it', { requestId, error: oemErr.message });
-        // Continue without OEM data - don't fail the estimate
-      }
-    }
-
-    const prompt = buildPrompt({ customer, vehicle, description, oemData });
-
-    // Add timeout
+    // Add timeout and retry logic
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
-    // Call Groq API with retry logic
-    const response = await fetchWithRetry(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
+    // Call Groq API (OpenAI-compatible)
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: 'You are a master automotive technician with deep technical knowledge. Provide detailed, practical estimates with insider tips. Always respond with valid JSON only, no markdown formatting.' },
@@ -624,17 +573,14 @@ app.post('/api/generate-estimate', async (req, res) => {
         max_tokens: 2500,
         temperature: 0.2
       })
-    },
-    3, // 3 retries for estimate generation (more critical)
-    2000 // 2 second initial backoff
-  );
+    });
 
     clearTimeout(timeoutId);
-    log('info', 'Groq API responded', { requestId, status: response.status });
+    console.log('Got API response, status:', response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
-      log('error', 'Groq API error', { requestId, status: response.status, error: errorText.substring(0, 200) });
+      console.error('Groq API error:', errorText);
       throw new Error(`Groq API error: ${response.status}`);
     }
 
@@ -656,9 +602,8 @@ app.post('/api/generate-estimate', async (req, res) => {
     let estimate;
     try {
       estimate = JSON.parse(jsonText);
-      log('info', 'Estimate parsed successfully', { requestId, jobType: estimate.jobType });
     } catch (err) {
-      log('error', 'JSON parse error', { requestId, rawText: text.substring(0, 200) });
+      console.error('JSON parse error. Raw text:', text);
       return res.status(500).json({ error: 'AI returned non-JSON output', raw: text });
     }
 
@@ -687,14 +632,8 @@ app.post('/api/generate-estimate', async (req, res) => {
         phone: customer.phone || null,
         email: customer.email || null
       }).select().single();
-      if (insertErr) {
-        log('error', 'Customer insert failed', { requestId, error: insertErr.message });
-        throw insertErr;
-      }
+      if (insertErr) throw insertErr;
       customerRecord = insertedCustomer;
-      log('info', 'New customer created', { requestId, customerId: customerRecord.id });
-    } else {
-      log('info', 'Existing customer found', { requestId, customerId: customerRecord.id });
     }
 
     const jobPayload = {
@@ -719,17 +658,7 @@ app.post('/api/generate-estimate', async (req, res) => {
     };
 
     const { data: savedJob, error: jobErr } = await supabase.from('jobs').insert(jobPayload).select().single();
-    if (jobErr) {
-      log('error', 'Job insert failed', { requestId, error: jobErr.message });
-      throw jobErr;
-    }
-
-    log('info', 'Estimate saved successfully', { 
-      requestId, 
-      jobId: savedJob.id, 
-      customerId: customerRecord.id,
-      subtotal 
-    });
+    if (jobErr) throw jobErr;
 
     res.json({
       ok: true,
@@ -740,12 +669,7 @@ app.post('/api/generate-estimate', async (req, res) => {
     });
 
   } catch (err) {
-    log('error', 'Estimate generation failed', { 
-      requestId, 
-      error: err.message, 
-      type: err.constructor.name,
-      stack: err.stack 
-    });
+    console.error('generate-estimate error', err);
     
     // Handle specific error types
     if (err.name === 'AbortError') {
@@ -769,12 +693,4 @@ app.get('/api/jobs', async (req, res) => {
   res.json({ data });
 });
 
-app.listen(PORT, () => {
-  log('info', `P613 estimator backend started`, { 
-    port: PORT, 
-    mode: process.env.NODE_ENV || 'development',
-    groqConfigured: !!GROQ_API_KEY,
-    supabaseConfigured: !!(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
-  });
-  console.log(`P613 estimator backend running on port ${PORT} (Groq-powered)`);
-});
+app.listen(PORT, () => console.log(`P613 estimator backend running on port ${PORT} (Groq-powered)`));
