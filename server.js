@@ -348,10 +348,37 @@ const GenerateSchema = z.object({
   jobType: z.string().max(100).optional()
 });
 
-// Prompt builder
-function buildPrompt({customer, vehicle, description}) {
-  return `You are a master automotive technician and service writer with 20+ years of experience in independent repair shops.
-Given a customer job description, produce a DETAILED, professional estimate as JSON.
+// Prompt builder with optional OEM data
+function buildPrompt({customer, vehicle, description, oemData = null, partsPricing = null}) {
+  let basePrompt = `You are a master automotive technician and service writer with 20+ years of experience in independent repair shops.
+Given a customer job description, produce a DETAILED, professional estimate as JSON.`;
+
+  // Add OEM context if available
+  if (oemData && oemData.found) {
+    basePrompt += `
+
+IMPORTANT: Factory OEM repair data is available from charm.li database for this vehicle and procedure:
+- Factory Labor Time: ${oemData.data.laborHours} hours
+- Factory Steps: ${JSON.stringify(oemData.data.steps)}
+- Torque Specifications: ${JSON.stringify(oemData.data.torqueSpecs)}
+- Known Issues: ${JSON.stringify(oemData.data.knownIssues)}
+- Factory Warnings: ${JSON.stringify(oemData.data.warnings)}
+
+Use this OEM data to inform your estimate. Your labor hours should be close to the factory time (add 10-20% for small shops).
+Include the known issues and warnings in your output.`;
+  }
+
+  // Add parts pricing if available
+  if (partsPricing && partsPricing.length > 0) {
+    basePrompt += `
+
+PARTS PRICING DATA: Real-time pricing from PartsGeek:
+${partsPricing.map(p => `- ${p.partName}: $${p.pricing.priceRange.min}-$${p.pricing.priceRange.max} (${p.pricing.options.length} options available)`).join('\n')}
+
+Use these real prices in your parts list. Choose the mid-range option unless customer specifies budget/premium.`;
+  }
+
+  basePrompt += `
 
 {
   "jobType": string,
@@ -359,23 +386,23 @@ Given a customer job description, produce a DETAILED, professional estimate as J
   "laborHours": number,
   "laborRate": number,
   "workSteps": [string (detailed steps with specific actions)],
-  "parts": [{"name":string,"cost":number}],
+  "parts": [{"name":string,"cost":number${partsPricing ? ',"options":[{"type":string,"price":number}]' : ''}}],
   "shopSuppliesPercent": number,
   "timeline": string,
   "notes": string,
   "proTips": [string (insider tips, tricks, and things to watch out for)],
-  "warnings": [string (potential issues, gotchas, or things that could go wrong)]
+  "warnings": [string (potential issues, gotchas, or things that could go wrong)]${oemData ? ',\n  "oemDataUsed": true,\n  "oemSource": "charm.li"' : ''}
 }
 
 Requirements:
 - Be realistic and conservative for a 1-2 tech independent shop
 - Use laborRate = ${DEFAULT_LABOR_RATE} unless specialty work justifies more
-- Provide detailed parts with realistic costs (whole dollars)
-- laborHours as decimal (e.g., 14.5) - include diagnosis, testing, cleanup time
+- Provide detailed parts with realistic costs (use real pricing data if provided)
+- laborHours as decimal (e.g., 14.5) - include diagnosis, testing, cleanup time${oemData ? ' - reference OEM labor time' : ''}
 - shopSuppliesPercent default to 7%
-- workSteps should be DETAILED with specific actions (not just "remove engine" but "Drain coolant and engine oil, disconnect battery, remove radiator, unbolt motor mounts, etc.")
+- workSteps should be DETAILED with specific actions
 - proTips should include: time-savers, special tools needed, parts to inspect while you're in there, torque specs if critical, common shortcuts
-- warnings should include: common problems (stripped bolts, seized parts), year-specific issues, things that break often, hidden labor traps
+- warnings should include: common problems (stripped bolts, seized parts), year-specific issues, things that break often, hidden labor traps${oemData ? ' - INCLUDE the OEM warnings and known issues' : ''}
 - Be conversational and practical - like talking to another tech
 - Return ONLY valid JSON, no markdown
 
@@ -384,6 +411,8 @@ Vehicle: ${vehicle || 'Not specified'}
 Job description: ${description}
 
 Think like a seasoned tech explaining the job to an apprentice - thorough, practical, and real-world focused.`;
+
+  return basePrompt;
 }
 
 app.post('/api/generate-estimate', async (req, res) => {
@@ -395,10 +424,37 @@ app.post('/api/generate-estimate', async (req, res) => {
     // Validate input
     const parsed = GenerateSchema.parse(req.body);
     const { customer, vehicle, description } = parsed;
+    const { useOemData, vin } = req.body; // Optional: fetch OEM data
 
-    log('info', 'Input validated', { requestId, customer: customer.name, vehicle });
+    log('info', 'Input validated', { requestId, customer: customer.name, vehicle, useOemData });
 
-    const prompt = buildPrompt({ customer, vehicle, description });
+    // Optionally fetch OEM data if VIN provided and useOemData flag set
+    let oemData = null;
+    if (useOemData && vin) {
+      try {
+        // Determine procedure type from description
+        let procedure = 'general-repair';
+        if (description.toLowerCase().includes('engine') || description.toLowerCase().includes('motor')) {
+          procedure = 'engine-replacement';
+        } else if (description.toLowerCase().includes('brake')) {
+          procedure = 'brake-service';
+        } else if (description.toLowerCase().includes('transmission')) {
+          procedure = 'transmission-service';
+        }
+        
+        // Fetch OEM data (internal call)
+        const oemResponse = await fetch(`http://localhost:${PORT}/api/oem-data/${vin}/${procedure}`);
+        if (oemResponse.ok) {
+          oemData = await oemResponse.json();
+          log('info', 'OEM data fetched successfully', { requestId, procedure });
+        }
+      } catch (oemErr) {
+        log('warn', 'OEM data fetch failed, continuing without it', { requestId, error: oemErr.message });
+        // Continue without OEM data - don't fail the estimate
+      }
+    }
+
+    const prompt = buildPrompt({ customer, vehicle, description, oemData });
 
     // Add timeout
     const controller = new AbortController();
