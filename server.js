@@ -25,6 +25,38 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DEFAULT_LABOR_RATE = Number(process.env.DEFAULT_LABOR_RATE || 65);
 
+// Pro access codes (manage manually - replace with real system later)
+const PRO_ACCESS_CODES = {
+  // Format: 'access_code': { tier: 'pro', expires: 'YYYY-MM-DD', customer: 'name' }
+  'DEMO2024': { tier: 'pro', expires: '2099-12-31', customer: 'Demo Account' },
+  'PUNTER613': { tier: 'pro', expires: '2099-12-31', customer: 'Brian Shaffer' },
+  // Add customer codes here as you get them
+  // Example: 'CUSTOMER1_BRIAN': { tier: 'pro', expires: '2025-12-13', customer: 'Customer Name' }
+};
+
+// Validate pro access code
+function validateAccessCode(code) {
+  if (!code) return { valid: false, tier: 'free' };
+  
+  const accessData = PRO_ACCESS_CODES[code.toUpperCase()];
+  if (!accessData) return { valid: false, tier: 'free' };
+  
+  // Check expiration
+  const expires = new Date(accessData.expires);
+  const now = new Date();
+  
+  if (expires < now) {
+    return { valid: false, tier: 'free', expired: true };
+  }
+  
+  return {
+    valid: true,
+    tier: accessData.tier,
+    customer: accessData.customer,
+    expires: accessData.expires
+  };
+}
+
 if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY missing in env');
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE creds missing in env');
 
@@ -75,15 +107,76 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'P613 Estimator Backend (Groq-powered)' });
 });
 
+// Access Code Validation endpoint
+app.post('/api/validate-access', async (req, res) => {
+  const requestId = generateRequestId();
+  
+  try {
+    const { accessCode } = req.body;
+    log('info', 'Access code validation requested', { requestId });
+    
+    if (!accessCode || typeof accessCode !== 'string') {
+      return res.status(400).json({ 
+        valid: false, 
+        error: 'Access code required' 
+      });
+    }
+    
+    const validation = validateAccessCode(accessCode.trim());
+    
+    if (!validation.valid) {
+      log('warn', 'Invalid access code attempt', { requestId, code: accessCode.substring(0, 4) + '...' });
+      
+      if (validation.expired) {
+        return res.json({
+          valid: false,
+          error: 'Access code has expired. Please contact support for renewal.',
+          expired: true
+        });
+      }
+      
+      return res.json({
+        valid: false,
+        error: 'Invalid access code. Please check your code and try again.'
+      });
+    }
+    
+    log('info', 'Valid access code used', { 
+      requestId, 
+      tier: validation.tier, 
+      customer: validation.customer 
+    });
+    
+    res.json({
+      valid: true,
+      tier: validation.tier,
+      customer: validation.customer,
+      expires: validation.expires,
+      message: `Welcome back, ${validation.customer}!`
+    });
+    
+  } catch (err) {
+    log('error', 'Access validation failed', { requestId, error: err.message });
+    res.status(500).json({ 
+      valid: false, 
+      error: 'Validation error. Please try again.' 
+    });
+  }
+});
+
 // VIN Lookup endpoint (FREE NHTSA API)
 app.get('/api/vin-lookup/:vin', async (req, res) => {
+  const requestId = generateRequestId();
+  
   try {
     const { vin } = req.params;
+    log('info', 'VIN lookup requested', { requestId, vin: vin.substring(0, 4) + '...' });
     
     // VIN regex validation: 17 alphanumeric chars, no I, O, or Q
     const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/;
     
     if (!vin || !vinRegex.test(vin.toUpperCase())) {
+      log('warn', 'Invalid VIN format', { requestId, vin });
       return res.status(400).json({ 
         error: 'Invalid VIN format. Must be exactly 17 characters (letters and numbers, no I, O, or Q)' 
       });
@@ -91,12 +184,14 @@ app.get('/api/vin-lookup/:vin', async (req, res) => {
 
     // Add timeout with AbortController
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    // Call NHTSA VIN decoder API (FREE, no API key needed)
-    const response = await fetch(
+    // Call NHTSA with retry logic
+    const response = await fetchWithRetry(
       `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/${vin.toUpperCase()}?format=json`,
-      { signal: controller.signal }
+      { signal: controller.signal },
+      2, // 2 retries
+      1000 // 1 second initial backoff
     );
     
     clearTimeout(timeoutId);
@@ -143,15 +238,17 @@ app.get('/api/vin-lookup/:vin', async (req, res) => {
       vehicleInfo.engine ? `${vehicleInfo.engine}` : null
     ].filter(Boolean).join(' ');
 
+    log('info', 'VIN lookup successful', { requestId, vehicle: displayString });
+    
     res.json({
       ok: true,
       vehicle: vehicleInfo,
       displayString: displayString || 'Unknown Vehicle',
-      raw: data.Results // Include full data for debugging if needed
+      raw: data.Results
     });
 
   } catch (err) {
-    console.error('VIN lookup error', err);
+    log('error', 'VIN lookup failed', { requestId, error: err.message });
     if (err.name === 'AbortError') {
       return res.status(504).json({ error: 'VIN lookup timed out. Please try again.' });
     }
@@ -161,45 +258,55 @@ app.get('/api/vin-lookup/:vin', async (req, res) => {
 
 // Photo Damage Analysis endpoint
 app.post('/api/analyze-photo', async (req, res) => {
+  const requestId = generateRequestId();
+  
   try {
     const { imageData } = req.body;
+    log('info', 'Photo analysis requested', { requestId });
     
     // Validate image data
     if (!imageData || typeof imageData !== 'string') {
+      log('warn', 'Invalid image data', { requestId });
       return res.status(400).json({ error: 'No valid image data provided' });
     }
     
     if (!imageData.startsWith('data:image/')) {
+      log('warn', 'Invalid image format', { requestId });
       return res.status(400).json({ error: 'Invalid image format. Must be base64 encoded image.' });
     }
     
-    // Check image size (prevent huge uploads)
-    const sizeInMB = (imageData.length * 0.75) / (1024 * 1024); // rough base64 to bytes
+    // Check image size
+    const sizeInMB = (imageData.length * 0.75) / (1024 * 1024);
     if (sizeInMB > 10) {
+      log('warn', 'Image too large', { requestId, sizeMB: sizeInMB.toFixed(2) });
       return res.status(400).json({ error: 'Image too large. Please compress to under 10MB.' });
     }
 
+    log('info', 'Image validated', { requestId, sizeMB: sizeInMB.toFixed(2) });
+
     // Add timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-    // Groq Vision API call
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: 'llama-3.2-90b-vision-preview',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: `You are an expert automotive damage assessor. Analyze this vehicle photo and provide a detailed damage assessment as JSON.
+    // Groq Vision API call with retry
+    const response = await fetchWithRetry(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: 'llama-3.2-90b-vision-preview',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: `You are an expert automotive damage assessor. Analyze this vehicle photo and provide a detailed damage assessment as JSON.
 
 Return ONLY valid JSON with this structure:
 {
@@ -212,33 +319,41 @@ Return ONLY valid JSON with this structure:
 }
 
 Be specific and practical. If you see damage, describe exactly what needs repair. If no damage is visible, say so.`
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: imageData
+                },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: imageData
+                  }
                 }
-              }
-            ]
-          }
-        ],
-        max_tokens: 1000,
-        temperature: 0.2
-      })
-    });
+              ]
+            }
+          ],
+          max_tokens: 1000,
+          temperature: 0.2
+        })
+      },
+      2, // 2 retries
+      2000 // 2 second initial backoff
+    );
 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Groq Vision API error:', errorText);
+      log('error', 'Groq Vision API error', { requestId, status: response.status, error: errorText.substring(0, 200) });
       throw new Error(`Vision API error: ${response.status}`);
     }
 
     const data = await response.json();
     const text = data.choices?.[0]?.message?.content;
     
-    if (!text) throw new Error('No response from Vision AI');
+    if (!text) {
+      log('error', 'No content from Vision API', { requestId });
+      throw new Error('No response from Vision AI');
+    }
+
+    log('info', 'Vision API response received', { requestId, length: text.length });
 
     // Clean and parse JSON
     let cleanText = text.trim();
@@ -252,8 +367,9 @@ Be specific and practical. If you see damage, describe exactly what needs repair
     let analysis;
     try {
       analysis = JSON.parse(jsonText);
+      log('info', 'Photo analysis complete', { requestId, damageFound: analysis.damageFound });
     } catch (err) {
-      console.error('JSON parse error. Raw text:', text);
+      log('error', 'JSON parse error in photo analysis', { requestId, rawText: text.substring(0, 200) });
       return res.status(500).json({ error: 'AI returned non-JSON output', raw: text });
     }
 
@@ -301,7 +417,7 @@ Be specific and practical. If you see damage, describe exactly what needs repair
     });
 
   } catch (err) {
-    console.error('Photo analysis error', err);
+    log('error', 'Photo analysis failed', { requestId, error: err.message, stack: err.stack });
     if (err.name === 'AbortError') {
       return res.status(504).json({ error: 'Photo analysis timed out. Please try again with a smaller image.' });
     }
@@ -495,7 +611,7 @@ Include the known issues and warnings in your output.`;
     basePrompt += `
 
 PARTS PRICING DATA: Real-time pricing from PartsGeek:
-${partsPricing.map(p => `- ${p.partName}: $${p.pricing.priceRange.min}-$${p.pricing.priceRange.max} (${p.pricing.options.length} options available)`).join('\n')}
+${partsPricing.map(p => `- ${p.partName}: ${p.pricing.priceRange.min}-${p.pricing.priceRange.max} (${p.pricing.options.length} options available)`).join('\n')}
 
 Use these real prices in your parts list. Choose the mid-range option unless customer specifies budget/premium.`;
   }
@@ -545,42 +661,80 @@ Think like a seasoned tech explaining the job to an apprentice - thorough, pract
 }
 
 app.post('/api/generate-estimate', async (req, res) => {
+  const requestId = generateRequestId();
+  
   try {
+    log('info', 'Estimate generation requested', { requestId });
+    
     // Validate input
     const parsed = GenerateSchema.parse(req.body);
     const { customer, vehicle, description } = parsed;
+    const { useOemData, vin } = req.body; // Optional: fetch OEM data
 
-    const prompt = buildPrompt({ customer, vehicle, description });
+    log('info', 'Input validated', { requestId, customer: customer.name, vehicle, useOemData });
 
-    // Add timeout and retry logic
+    // Optionally fetch OEM data if VIN provided and useOemData flag set
+    let oemData = null;
+    if (useOemData && vin) {
+      try {
+        // Determine procedure type from description
+        let procedure = 'general-repair';
+        if (description.toLowerCase().includes('engine') || description.toLowerCase().includes('motor')) {
+          procedure = 'engine-replacement';
+        } else if (description.toLowerCase().includes('brake')) {
+          procedure = 'brake-service';
+        } else if (description.toLowerCase().includes('transmission')) {
+          procedure = 'transmission-service';
+        }
+        
+        // Fetch OEM data (internal call)
+        const oemResponse = await fetch(`http://localhost:${PORT}/api/oem-data/${vin}/${procedure}`);
+        if (oemResponse.ok) {
+          oemData = await oemResponse.json();
+          log('info', 'OEM data fetched successfully', { requestId, procedure });
+        }
+      } catch (oemErr) {
+        log('warn', 'OEM data fetch failed, continuing without it', { requestId, error: oemErr.message });
+        // Continue without OEM data - don't fail the estimate
+      }
+    }
+
+    const prompt = buildPrompt({ customer, vehicle, description, oemData });
+
+    // Add timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-    // Call Groq API (OpenAI-compatible)
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
+    // Call Groq API with retry logic
+    const response = await fetchWithRetry(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: 'You are a master automotive technician with deep technical knowledge. Provide detailed, practical estimates with insider tips. Always respond with valid JSON only, no markdown formatting.' },
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: 2500,
+          temperature: 0.2
+        })
       },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: 'You are a master automotive technician with deep technical knowledge. Provide detailed, practical estimates with insider tips. Always respond with valid JSON only, no markdown formatting.' },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 2500,
-        temperature: 0.2
-      })
-    });
+      3, // 3 retries for estimate generation (more critical)
+      2000 // 2 second initial backoff
+    );
 
     clearTimeout(timeoutId);
-    console.log('Got API response, status:', response.status);
+    log('info', 'Groq API responded', { requestId, status: response.status });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Groq API error:', errorText);
+      log('error', 'Groq API error', { requestId, status: response.status, error: errorText.substring(0, 200) });
       throw new Error(`Groq API error: ${response.status}`);
     }
 
@@ -602,8 +756,9 @@ app.post('/api/generate-estimate', async (req, res) => {
     let estimate;
     try {
       estimate = JSON.parse(jsonText);
+      log('info', 'Estimate parsed successfully', { requestId, jobType: estimate.jobType });
     } catch (err) {
-      console.error('JSON parse error. Raw text:', text);
+      log('error', 'JSON parse error', { requestId, rawText: text.substring(0, 200) });
       return res.status(500).json({ error: 'AI returned non-JSON output', raw: text });
     }
 
@@ -632,8 +787,14 @@ app.post('/api/generate-estimate', async (req, res) => {
         phone: customer.phone || null,
         email: customer.email || null
       }).select().single();
-      if (insertErr) throw insertErr;
+      if (insertErr) {
+        log('error', 'Customer insert failed', { requestId, error: insertErr.message });
+        throw insertErr;
+      }
       customerRecord = insertedCustomer;
+      log('info', 'New customer created', { requestId, customerId: customerRecord.id });
+    } else {
+      log('info', 'Existing customer found', { requestId, customerId: customerRecord.id });
     }
 
     const jobPayload = {
@@ -658,7 +819,17 @@ app.post('/api/generate-estimate', async (req, res) => {
     };
 
     const { data: savedJob, error: jobErr } = await supabase.from('jobs').insert(jobPayload).select().single();
-    if (jobErr) throw jobErr;
+    if (jobErr) {
+      log('error', 'Job insert failed', { requestId, error: jobErr.message });
+      throw jobErr;
+    }
+
+    log('info', 'Estimate saved successfully', { 
+      requestId, 
+      jobId: savedJob.id, 
+      customerId: customerRecord.id,
+      subtotal 
+    });
 
     res.json({
       ok: true,
@@ -669,7 +840,12 @@ app.post('/api/generate-estimate', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('generate-estimate error', err);
+    log('error', 'Estimate generation failed', { 
+      requestId, 
+      error: err.message, 
+      type: err.constructor.name,
+      stack: err.stack 
+    });
     
     // Handle specific error types
     if (err.name === 'AbortError') {
@@ -693,4 +869,12 @@ app.get('/api/jobs', async (req, res) => {
   res.json({ data });
 });
 
-app.listen(PORT, () => console.log(`P613 estimator backend running on port ${PORT} (Groq-powered)`));
+app.listen(PORT, () => {
+  log('info', `P613 estimator backend started`, { 
+    port: PORT, 
+    mode: process.env.NODE_ENV || 'development',
+    groqConfigured: !!GROQ_API_KEY,
+    supabaseConfigured: !!(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
+  });
+  console.log(`P613 estimator backend running on port ${PORT} (Groq-powered with Access Control)`);
+});
