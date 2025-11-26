@@ -39,39 +39,61 @@ function buildPrompt({customer, vehicle, description}) {
 You are an experienced automotive service writer for a MOBILE MECHANIC or small independent shop (1-2 technicians). 
 Given a customer job description, produce a realistic, itemized ESTIMATE as JSON.
 
-CRITICAL PRICING RULES (Read Carefully):
+CRITICAL PRICING RULES:
 ===========================================
 
 1. LABOR EFFICIENCY - Think in COMPLETE JOBS, not individual parts:
+   - OIL CHANGES: 0.5-0.75 hours MAX (not 1.5 hours!)
    - Brake jobs: Price as COMPLETE AXLE SERVICE (front OR rear), NOT per wheel
    - Example: "Front brake pads and rotors" = 1.5-2 hrs TOTAL (not 1.5 per side)
    - Spark plugs: Price as COMPLETE SET, not per cylinder
    - Example: "Replace 8 spark plugs V8" = 1.0-1.5 hrs TOTAL (not 0.2 hrs × 8)
-   - Oil changes with other work: Don't charge separate "setup" - you're already under the car
 
-2. SETUP TIME ONLY COUNTS ONCE:
+2. COMMON JOB LABOR TIMES (FOLLOW THESE):
+   - Oil change (basic): 0.5-0.75 hrs
+   - Oil change + tire rotation: 0.75-1.0 hrs
+   - Front brake pads only: 1.0-1.5 hrs
+   - Front pads + rotors: 1.5-2.0 hrs
+   - Battery replacement: 0.25-0.5 hrs
+   - Alternator: 1.5-3.0 hrs (depends on accessibility)
+   - Starter: 1.5-3.0 hrs (depends on location)
+   - Spark plugs (4-cyl): 0.75-1.0 hrs
+   - Spark plugs (V6/V8): 1.0-1.5 hrs
+
+3. SETUP TIME ONLY COUNTS ONCE:
    - Lifting vehicle, removing wheels = counted once, not per corner
    - Accessing engine bay = one time, applies to all work in that area
    - If doing multiple related tasks, overlap setup time
 
-3. REALISTIC MOBILE MECHANIC PRICING:
-   - Small jobs (oil change, brakes): 1-3 hours max
-   - Medium jobs (alternator, starter): 2-5 hours
-   - Large jobs (engine work, transmission): 6-16 hours
+4. REALISTIC MOBILE MECHANIC PRICING:
+   - Small jobs (oil, battery): 0.5-1.5 hours max
+   - Medium jobs (brakes, alternator): 1.5-3 hours
+   - Large jobs (engine work): 4-16 hours
    - AVOID: Inflated hours that would price out mobile customers
 
-4. PART PRICING - Realistic aftermarket/OEM blend:
+5. PART PRICING - Realistic aftermarket/OEM blend:
    - Use TOTAL part cost, not per-unit × quantity
    - Example: "4 brake rotors" = $200 total (not $50 each listed 4 times)
    - Mobile shops use affordable parts, not dealer premium
 
 ===========================================
 
-REAL-WORLD EXAMPLES (Follow These Patterns):
+REAL-WORLD EXAMPLES (FOLLOW THESE PATTERNS):
 ===========================================
 
-Example 1: "Replace front brake pads and rotors"
-✅ CORRECT:
+Example 1: "Oil change with full synthetic"
+CORRECT:
+{
+  "laborHours": 0.5,
+  "parts": [
+    {"name": "Full Synthetic Oil (5qt)", "cost": 35},
+    {"name": "Oil Filter", "cost": 12}
+  ]
+}
+WRONG: 1.5 hours labor (way too much!)
+
+Example 2: "Replace front brake pads and rotors"
+CORRECT:
 {
   "laborHours": 1.5,
   "parts": [
@@ -79,38 +101,27 @@ Example 1: "Replace front brake pads and rotors"
     {"name": "Front Rotor Set (2)", "cost": 140}
   ]
 }
-❌ WRONG: 3.0 hours (charging per side separately)
-
-Example 2: "Oil change and rotate tires"
-✅ CORRECT:
-{
-  "laborHours": 1.0,
-  "parts": [
-    {"name": "Full Synthetic Oil (5qt)", "cost": 35},
-    {"name": "Oil Filter", "cost": 12}
-  ]
-}
-❌ WRONG: 1.5 hours (0.5 for oil + 1.0 for rotation = inefficient)
+WRONG: 3.0 hours (charging per side separately)
 
 Example 3: "Replace all 8 spark plugs on V8"
-✅ CORRECT:
+CORRECT:
 {
   "laborHours": 1.2,
   "parts": [
     {"name": "Spark Plug Set (8)", "cost": 60}
   ]
 }
-❌ WRONG: 2.4 hours or listing each plug individually
+WRONG: 2.4 hours or listing each plug individually
 
-Example 4: "Alternator replacement"
-✅ CORRECT:
+Example 4: "Battery replacement"
+CORRECT:
 {
-  "laborHours": 2.5,
+  "laborHours": 0.3,
   "parts": [
-    {"name": "Alternator (Reman)", "cost": 180},
-    {"name": "Serpentine Belt", "cost": 35}
+    {"name": "Battery (Group 65)", "cost": 150}
   ]
 }
+WRONG: 1.0 hour (way too much for simple battery swap)
 
 ===========================================
 
@@ -124,8 +135,14 @@ JSON STRUCTURE REQUIRED:
   "parts": [{"name":string,"cost":number}],
   "shopSuppliesPercent": number,
   "timeline": string,
-  "notes": string
+  "notes": string,
+  "tips": [string],
+  "warnings": [string]
 }
+
+ADDITIONAL FIELDS:
+- tips: Array of helpful tips for the mechanic (e.g., "Use a torque wrench for lug nuts")
+- warnings: Array of things to watch out for (e.g., "Check for brake line corrosion on older vehicles")
 
 REQUIREMENTS:
 - Use laborRate = ${DEFAULT_LABOR_RATE} unless job clearly justifies different rate
@@ -134,6 +151,7 @@ REQUIREMENTS:
 - shortDescription = one-line summary
 - timeline = realistic for mobile/small shop ("Same day", "2-3 hours", "1-2 days")
 - notes = any warnings, assumptions, or upsell opportunities
+- workSteps = use plain bullet points (no special characters)
 - Return ONLY valid JSON, no markdown or explanations
 
 ===========================================
@@ -152,7 +170,7 @@ app.get('/', (req, res) => {
   res.json({
     status: 'ok',
     service: 'SKSK AutoPro Backend - AI Estimator & Parts Integration',
-    version: '1.0.0'
+    version: '1.1.0'
   });
 });
 
@@ -170,10 +188,10 @@ app.post('/api/generate-estimate', async (req, res) => {
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: 'You are an expert automotive estimator for mobile mechanics and small shops. Provide realistic, competitive pricing that helps close deals while maintaining profitability.' },
+        { role: 'system', content: 'You are an expert automotive estimator for mobile mechanics and small shops. Provide realistic, competitive pricing that helps close deals while maintaining profitability. Always return valid JSON only.' },
         { role: 'user', content: prompt }
       ],
-      max_tokens: 1200,
+      max_tokens: 1500,
       temperature: 0.1
     });
 
@@ -192,7 +210,7 @@ app.post('/api/generate-estimate', async (req, res) => {
       return res.status(500).json({ 
         error: 'AI returned invalid JSON', 
         raw: text,
-        hint: 'Try rephrasing the job description or contact support'
+        hint: 'Try rephrasing the job description'
       });
     }
 
@@ -204,12 +222,19 @@ app.post('/api/generate-estimate', async (req, res) => {
       name: p.name, 
       cost: Math.round(Number(p.cost || 0)) 
     }));
+    estimate.tips = estimate.tips || [];
+    estimate.warnings = estimate.warnings || [];
 
     // Calculate totals
     const laborCost = Number((estimate.laborHours * estimate.laborRate).toFixed(2));
     const partsCost = estimate.parts.reduce((sum, p) => sum + Number(p.cost || 0), 0);
     const shopSupplies = Number((partsCost * (estimate.shopSuppliesPercent / 100)).toFixed(2));
     const subtotal = Number((laborCost + partsCost + shopSupplies).toFixed(2));
+
+    // Calculate tax setaside (28% default for self-employed)
+    const taxRate = 28;
+    const recommendedTaxSetaside = Number((subtotal * (taxRate / 100)).toFixed(2));
+    const netAfterTax = Number((subtotal - recommendedTaxSetaside).toFixed(2));
 
     // SANITY CHECK: Flag potentially inflated estimates
     const warnings = [];
@@ -218,6 +243,9 @@ app.post('/api/generate-estimate', async (req, res) => {
     }
     if (laborCost > 500 && description.toLowerCase().includes('oil change')) {
       warnings.push('Labor cost unusually high for oil change - check if other work is included');
+    }
+    if (laborCost > 100 && description.toLowerCase().match(/oil.*change/i) && !description.toLowerCase().includes('rotate')) {
+      warnings.push('Labor seems high for basic oil change - should be 0.5-0.75 hours');
     }
     if (estimate.laborHours > 20) {
       warnings.push('Job exceeds 20 hours - may be too complex for mobile service');
@@ -256,11 +284,6 @@ app.post('/api/generate-estimate', async (req, res) => {
       customerRecord = insertedCustomer;
     }
 
-    // Calculate tax setaside (28% default for self-employed)
-    const taxRate = 28; // Can be customized per user later
-    const recommendedTaxSetaside = Number((subtotal * (taxRate / 100)).toFixed(2));
-    const netAfterTax = Number((subtotal - recommendedTaxSetaside).toFixed(2));
-
     // Save job to database
     const jobPayload = {
       customer_id: customerRecord.id,
@@ -291,7 +314,7 @@ app.post('/api/generate-estimate', async (req, res) => {
       .single();
     if (jobErr) throw jobErr;
 
-    // Return response with warnings if any
+    // Return response with tax info and warnings
     res.json({
       ok: true,
       estimate: { 
@@ -442,4 +465,5 @@ app.get('/api/tax-settings/:userId', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🔥 SKSK AutoPro Backend running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/`);
+  console.log(`💰 Tax tracking enabled - 28% default set-aside`);
 });
