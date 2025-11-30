@@ -255,7 +255,7 @@
       font-weight: 500;
     }
 
-    input, textarea {
+    input, textarea, select {
       width: 100%;
       padding: 0.75rem 1rem;
       background: #000;
@@ -266,7 +266,7 @@
       font-family: inherit;
     }
 
-    input:focus, textarea:focus {
+    input:focus, textarea:focus, select:focus {
       outline: none;
       border-color: #b91c1c;
     }
@@ -299,6 +299,15 @@
       background: #374151;
       border-color: #374151;
       cursor: not-allowed;
+    }
+
+    .button-secondary {
+      background: #22c55e;
+      border-color: #16a34a;
+    }
+
+    .button-secondary:hover {
+      background: #16a34a;
     }
 
     .spinner {
@@ -499,6 +508,126 @@
       margin-bottom: 1rem;
       opacity: 0.5;
     }
+
+    .oem-data-box {
+      background: rgba(34, 197, 94, 0.1);
+      border: 2px solid #22c55e;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 1rem;
+    }
+
+    .oem-data-box h4 {
+      color: #22c55e;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .oem-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .oem-item {
+      font-size: 0.875rem;
+      color: #bbf7d0;
+    }
+
+    .oem-item strong {
+      color: #86efac;
+    }
+
+    .torque-table {
+      width: 100%;
+      font-size: 0.875rem;
+      margin-top: 0.5rem;
+    }
+
+    .torque-table th {
+      text-align: left;
+      color: #86efac;
+      padding: 0.25rem;
+      border-bottom: 1px solid #22c55e;
+    }
+
+    .torque-table td {
+      color: #bbf7d0;
+      padding: 0.25rem;
+    }
+
+    .dtc-section {
+      background: rgba(59, 130, 246, 0.1);
+      border: 2px solid #3b82f6;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .dtc-input-group {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .dtc-results {
+      margin-top: 1rem;
+    }
+
+    .code-box {
+      background: #000;
+      border: 1px solid #3b82f6;
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.875rem;
+    }
+
+    .code-box strong {
+      color: #60a5fa;
+    }
+
+    .correlation-box {
+      background: rgba(251, 191, 36, 0.1);
+      border: 2px solid #fbbf24;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 1rem;
+    }
+
+    .root-cause {
+      background: rgba(220, 38, 38, 0.1);
+      border: 1px solid #dc2626;
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .quick-buttons {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+
+    .quick-button {
+      padding: 0.5rem;
+      background: #374151;
+      border: 1px solid #4b5563;
+      border-radius: 6px;
+      color: #9ca3af;
+      font-size: 0.75rem;
+      cursor: pointer;
+      text-align: center;
+    }
+
+    .quick-button:hover {
+      background: #4b5563;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
@@ -554,75 +683,6 @@
             Job Details
           </h2>
 
-          <form id="estimateForm">
-            <div class="form-group">
-              <label for="customerName">Customer Name *</label>
-              <input type="text" id="customerName" placeholder="John Smith" required>
-            </div>
-
-            <div class="form-group">
-              <label for="customerPhone">Phone Number</label>
-              <input type="tel" id="customerPhone" placeholder="330-555-1212">
-            </div>
-
-            <div class="form-group">
-              <label for="customerEmail">Email Address</label>
-              <input type="email" id="customerEmail" placeholder="john@example.com">
-            </div>
-
-            <div class="form-group">
-              <label for="vin">VIN Lookup (Auto-fill Vehicle Info)</label>
-              <div style="display: flex; gap: 0.5rem;">
-                <input type="text" id="vin" placeholder="Enter 17-digit VIN" maxlength="17" style="flex: 1;">
-                <button type="button" id="vinLookupBtn" style="width: auto; padding: 0.75rem 1.5rem; background: #22c55e; border-color: #16a34a;">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </button>
-              </div>
-              <small id="vinStatus" style="color: #9ca3af; font-size: 0.75rem; margin-top: 0.25rem; display: block;"></small>
-            </div>
-
-            <div class="form-group">
-              <label for="vehicle">Vehicle</label>
-              <input type="text" id="vehicle" placeholder="2008 Ford F-150 5.4L V8">
-            </div>
-
-            <div class="form-group" style="background: rgba(34, 197, 94, 0.1); border: 2px solid #22c55e; border-radius: 8px; padding: 1rem;">
-              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin: 0;">
-                <input type="checkbox" id="useOemData" style="width: auto; margin: 0;">
-                <span style="color: #22c55e; font-weight: 600;">🔧 Use Factory OEM Data (charm.li)</span>
-              </label>
-              <p style="font-size: 0.75rem; color: #86efac; margin-top: 0.5rem; margin-left: 1.5rem;">
-                Includes factory labor times, torque specs, known issues, and step-by-step procedures
-              </p>
-            </div>
-
-            <div class="form-group">
-              <label for="description">Job Description *</label>
-              <textarea id="description" rows="4" placeholder="Example: Oil change with full synthetic" required></textarea>
-            </div>
-
-            <div id="errorBox" style="display: none;" class="error"></div>
-            <div id="successBox" style="display: none;" class="success"></div>
-
-            <button type="submit" id="submitBtn">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
-              </svg>
-              Generate Estimate
-            </button>
-          </form>
-        </div>
-
-        <div class="card">
-          <h2 class="card-title">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Estimate
-          </h2>
-
           <div id="estimateDisplay">
             <div class="empty-state">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -658,6 +718,19 @@
     const vinLookupBtn = document.getElementById('vinLookupBtn');
     const vinStatus = document.getElementById('vinStatus');
     const vehicleInput = document.getElementById('vehicle');
+    const customerSelect = document.getElementById('customerSelect');
+    const dtcInput = document.getElementById('dtcCodes');
+    const analyzeDtcBtn = document.getElementById('analyzeDtcBtn');
+    const dtcResults = document.getElementById('dtcResults');
+
+    let customers = [];
+    let currentOemData = null;
+
+    // Quick labor rate setter
+    function setLaborRate(rate) {
+      document.getElementById('laborRate').value = rate;
+    }
+    window.setLaborRate = setLaborRate;
 
     // Check for existing access on page load
     window.addEventListener('DOMContentLoaded', () => {
@@ -686,7 +759,6 @@
       accessSubmit.innerHTML = '<div class="spinner"></div> Validating...';
 
       try {
-        // REAL backend validation
         const response = await fetch(`${BACKEND_URL}/api/validate-access`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -720,7 +792,7 @@
       }
     });
 
-    function unlockApp(access) {
+    async function unlockApp(access) {
       accessGate.classList.add('hidden');
       mainApp.classList.add('visible');
       
@@ -728,11 +800,175 @@
         ✅ Logged in as: <strong>${access.customer}</strong> (${access.tier})
         <button class="logout-button" onclick="logout()">Logout</button>
       `;
+
+      // FEATURE C: Load customers
+      await loadCustomers();
     }
 
     function logout() {
       localStorage.removeItem('sksk_autopro_access');
       location.reload();
+    }
+    window.logout = logout;
+
+    // FEATURE C: Load Customers
+    async function loadCustomers() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/customers`);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        if (data.ok && data.customers) {
+          customers = data.customers;
+          
+          // Populate dropdown
+          customerSelect.innerHTML = '<option value="">+ New Customer</option>';
+          customers.forEach(customer => {
+            const option = document.createElement('option');
+            option.value = customer.id;
+            option.textContent = `${customer.name} (${customer.phone || customer.email || 'no contact'})`;
+            customerSelect.appendChild(option);
+          });
+        }
+      } catch (err) {
+        console.error('Failed to load customers:', err);
+      }
+    }
+
+    // FEATURE C: Customer selection handler
+    customerSelect.addEventListener('change', (e) => {
+      const customerId = e.target.value;
+      if (!customerId) {
+        // New customer - clear fields
+        document.getElementById('customerName').value = '';
+        document.getElementById('customerPhone').value = '';
+        document.getElementById('customerEmail').value = '';
+        return;
+      }
+
+      // Load selected customer
+      const customer = customers.find(c => c.id === customerId);
+      if (customer) {
+        document.getElementById('customerName').value = customer.name;
+        document.getElementById('customerPhone').value = customer.phone || '';
+        document.getElementById('customerEmail').value = customer.email || '';
+      }
+    });
+
+    // FEATURE A: DTC Code Analyzer
+    analyzeDtcBtn.addEventListener('click', async () => {
+      const codes = dtcInput.value.trim();
+      if (!codes) {
+        showError('Please enter at least one diagnostic code');
+        return;
+      }
+
+      const codeArray = codes.split(',').map(c => c.trim().toUpperCase()).filter(c => c);
+      if (codeArray.length === 0) {
+        showError('Please enter valid diagnostic codes');
+        return;
+      }
+
+      analyzeDtcBtn.disabled = true;
+      analyzeDtcBtn.innerHTML = '<div class="spinner"></div> Analyzing...';
+      dtcResults.innerHTML = '<div style="text-align: center; padding: 1rem; color: #93c5fd;"><div class="spinner" style="margin: 0 auto;"></div><p style="margin-top: 0.5rem;">AI analyzing codes...</p></div>';
+
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/analyze-codes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            codes: codeArray,
+            vehicle: vehicleInput.value || 'Not specified'
+          })
+        });
+
+        if (!response.ok) throw new Error('DTC analysis failed');
+
+        const data = await response.json();
+        if (!data.ok || !data.analysis) throw new Error('Invalid response');
+
+        displayDtcResults(data.analysis);
+      } catch (err) {
+        console.error('DTC analysis error:', err);
+        dtcResults.innerHTML = `<div class="error">${err.message}</div>`;
+      } finally {
+        analyzeDtcBtn.disabled = false;
+        analyzeDtcBtn.innerHTML = 'Analyze';
+      }
+    });
+
+    function displayDtcResults(analysis) {
+      let html = '<div style="margin-top: 1rem;">';
+
+      // Individual codes
+      if (analysis.individualCodes && analysis.individualCodes.length > 0) {
+        html += '<h4 style="color: #60a5fa; margin-bottom: 0.5rem;">Individual Codes:</h4>';
+        analysis.individualCodes.forEach(code => {
+          html += `
+            <div class="code-box">
+              <strong>${code.code}</strong>: ${code.definition}<br>
+              <span style="color: #fbbf24;">Severity: ${code.severity}</span>
+            </div>
+          `;
+        });
+      }
+
+      // Correlation analysis
+      if (analysis.correlationAnalysis) {
+        const corr = analysis.correlationAnalysis;
+        html += `
+          <div class="correlation-box">
+            <h4 style="color: #fde047; margin-bottom: 0.5rem;">
+              ${corr.hasCorrelation ? '✓ Root Cause Found' : 'ℹ️ Analysis'}
+            </h4>
+            <p style="color: #fef08a; font-size: 0.875rem; margin-bottom: 0.5rem;">
+              ${corr.rootCauseSummary}
+            </p>
+            <p style="color: #fef08a; font-size: 0.75rem;">
+              <strong>Confidence:</strong> ${corr.confidence} | 
+              <strong>Systems:</strong> ${(corr.affectedSystems || []).join(', ')}
+            </p>
+          </div>
+        `;
+      }
+
+      // Root causes
+      if (analysis.likelyRootCauses && analysis.likelyRootCauses.length > 0) {
+        html += '<h4 style="color: #fca5a5; margin-top: 1rem; margin-bottom: 0.5rem;">Likely Root Causes:</h4>';
+        analysis.likelyRootCauses.forEach(cause => {
+          html += `
+            <div class="root-cause">
+              <strong style="color: #dc2626;">${cause.cause}</strong> (${cause.likelihood} likelihood)<br>
+              <span style="font-size: 0.875rem; color: #fecaca;">${cause.explanation}</span><br>
+              <span style="font-size: 0.75rem; color: #9ca3af;">Est. Cost: ${cause.estimatedCost}</span>
+            </div>
+          `;
+        });
+      }
+
+      // Do not replace
+      if (analysis.doNotReplace && analysis.doNotReplace.length > 0) {
+        html += `
+          <div style="background: rgba(220, 38, 38, 0.1); border: 1px solid #dc2626; border-radius: 6px; padding: 0.75rem; margin-top: 0.5rem;">
+            <strong style="color: #fca5a5;">⚠️ Do NOT Replace:</strong><br>
+            <span style="font-size: 0.875rem; color: #fecaca;">${analysis.doNotReplace.join(', ')}</span>
+          </div>
+        `;
+      }
+
+      // Diagnostic priority
+      if (analysis.diagnosticPriority && analysis.diagnosticPriority.length > 0) {
+        html += '<h4 style="color: #86efac; margin-top: 1rem; margin-bottom: 0.5rem;">Diagnostic Priority:</h4>';
+        html += '<ol style="margin-left: 1.5rem; color: #bbf7d0; font-size: 0.875rem;">';
+        analysis.diagnosticPriority.forEach(step => {
+          html += `<li style="margin-bottom: 0.25rem;">${step}</li>`;
+        });
+        html += '</ol>';
+      }
+
+      html += '</div>';
+      dtcResults.innerHTML = html;
     }
 
     function showError(message) {
@@ -908,6 +1144,58 @@
         </div>
       ` : '';
 
+      // FEATURE B: OEM Data Display
+      let oemDataHTML = '';
+      if (currentOemData && currentOemData.found) {
+        const oem = currentOemData.data;
+        oemDataHTML = `
+          <div class="oem-data-box">
+            <h4>
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Factory OEM Data (charm.li)
+            </h4>
+            <div class="oem-grid">
+              <div class="oem-item">
+                <strong>Factory Labor:</strong> ${oem.laborHours} hrs
+              </div>
+              <div class="oem-item">
+                <strong>Your Labor:</strong> ${estimate.laborHours} hrs
+              </div>
+            </div>
+            ${oem.torqueSpecs && oem.torqueSpecs.length > 0 ? `
+              <h5 style="color: #86efac; font-size: 0.875rem; margin-top: 0.75rem; margin-bottom: 0.25rem;">Torque Specifications:</h5>
+              <table class="torque-table">
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Torque</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${oem.torqueSpecs.map(spec => `
+                    <tr>
+                      <td>${spec.component}</td>
+                      <td>${spec.value}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            ` : ''}
+            ${oem.knownIssues && oem.knownIssues.length > 0 ? `
+              <h5 style="color: #fde047; font-size: 0.875rem; margin-top: 0.75rem; margin-bottom: 0.25rem;">Known Issues:</h5>
+              <ul style="margin-left: 1.25rem; color: #fef08a; font-size: 0.875rem;">
+                ${oem.knownIssues.map(issue => `<li>${issue}</li>`).join('')}
+              </ul>
+            ` : ''}
+            <p style="font-size: 0.75rem; color: #86efac; margin-top: 0.75rem;">
+              Source: ${currentOemData.source} | Confidence: ${currentOemData.confidence}
+            </p>
+          </div>
+        `;
+      }
+
       const taxSetAside = estimate.subtotal * 0.28;
       const takeHome = estimate.subtotal - taxSetAside;
 
@@ -916,8 +1204,10 @@
           <div class="info-box">
             <h3>${estimate.jobType}</h3>
             <p style="color: #d1d5db; font-size: 0.875rem;">${estimate.shortDescription}</p>
-            ${estimate.oemDataUsed ? '<p style="color: #22c55e; font-size: 0.875rem; margin-top: 0.5rem;">✓ Factory OEM Data Used (charm.li)</p>' : ''}
+            ${estimate.oemDataUsed ? '<p style="color: #22c55e; font-size: 0.875rem; margin-top: 0.5rem;">✓ Factory OEM Data Used</p>' : ''}
           </div>
+
+          ${oemDataHTML}
 
           <div style="display: flex; align-items: center; gap: 0.75rem; color: #d1d5db;">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color: #dc2626;">
@@ -984,6 +1274,7 @@
       const description = document.getElementById('description').value.trim();
       const useOemData = document.getElementById('useOemData').checked;
       const vin = document.getElementById('vin').value.trim();
+      const laborRate = parseFloat(document.getElementById('laborRate').value) || 65;
 
       if (!customerName || !description) {
         showError('Customer name and job description are required');
@@ -991,6 +1282,7 @@
       }
 
       showLoading();
+      currentOemData = null;
 
       try {
         const requestBody = {
@@ -1000,7 +1292,8 @@
             email: customerEmail
           },
           vehicle: vehicle,
-          description: description
+          description: description,
+          laborRate: laborRate
         };
 
         if (useOemData && vin) {
@@ -1027,8 +1320,16 @@
           throw new Error(data.error || 'Failed to generate estimate');
         }
 
+        // Store OEM data if present
+        if (data.oemData) {
+          currentOemData = data.oemData;
+        }
+
         displayEstimate(data.estimate);
         showSuccess('✅ Estimate generated successfully!');
+        
+        // Reload customers (in case new one was added)
+        await loadCustomers();
         
         // Scroll to estimate
         setTimeout(() => {
@@ -1052,4 +1353,120 @@
     });
   </script>
 </body>
-</html>
+</html><form id="estimateForm">
+            <!-- FEATURE C: Customer Selector -->
+            <div class="form-group">
+              <label for="customerSelect">Customer</label>
+              <select id="customerSelect">
+                <option value="">+ New Customer</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="customerName">Customer Name *</label>
+              <input type="text" id="customerName" placeholder="John Smith" required>
+            </div>
+
+            <div class="form-group">
+              <label for="customerPhone">Phone Number</label>
+              <input type="tel" id="customerPhone" placeholder="330-555-1212">
+            </div>
+
+            <div class="form-group">
+              <label for="customerEmail">Email Address</label>
+              <input type="email" id="customerEmail" placeholder="john@example.com">
+            </div>
+
+            <!-- FEATURE A: DTC Code Analyzer -->
+            <div class="form-group">
+              <div class="dtc-section">
+                <label style="color: #60a5fa; margin-bottom: 0.5rem;">🔍 Diagnostic Trouble Codes (Optional)</label>
+                <div class="dtc-input-group">
+                  <input type="text" id="dtcCodes" placeholder="P0171, P0174, P0300" style="flex: 1; border-color: #3b82f6;">
+                  <button type="button" id="analyzeDtcBtn" class="button-secondary" style="width: auto; padding: 0.75rem 1rem; background: #3b82f6; border-color: #2563eb;">
+                    Analyze
+                  </button>
+                </div>
+                <p style="font-size: 0.75rem; color: #93c5fd;">Enter codes separated by commas. AI will find root cause correlation.</p>
+                <div id="dtcResults"></div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="vin">VIN Lookup (Auto-fill Vehicle Info)</label>
+              <div style="display: flex; gap: 0.5rem;">
+                <input type="text" id="vin" placeholder="Enter 17-digit VIN" maxlength="17" style="flex: 1;">
+                <button type="button" id="vinLookupBtn" style="width: auto; padding: 0.75rem 1.5rem; background: #22c55e; border-color: #16a34a;">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </button>
+              </div>
+              <small id="vinStatus" style="color: #9ca3af; font-size: 0.75rem; margin-top: 0.25rem; display: block;"></small>
+            </div>
+
+            <div class="form-group">
+              <label for="vehicle">Vehicle</label>
+              <input type="text" id="vehicle" placeholder="2008 Ford F-150 5.4L V8">
+            </div>
+
+            <div class="form-group" style="background: rgba(34, 197, 94, 0.1); border: 2px solid #22c55e; border-radius: 8px; padding: 1rem;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin: 0;">
+                <input type="checkbox" id="useOemData" style="width: auto; margin: 0;">
+                <span style="color: #22c55e; font-weight: 600;">🔧 Use Factory OEM Data (charm.li)</span>
+              </label>
+              <p style="font-size: 0.75rem; color: #86efac; margin-top: 0.5rem; margin-left: 1.5rem;">
+                Includes factory labor times, torque specs, known issues, and step-by-step procedures
+              </p>
+            </div>
+
+            <!-- ADJUSTABLE LABOR RATE -->
+            <div class="form-group">
+              <label for="laborRate">Your Labor Rate ($/hour)</label>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="color: #22c55e; font-size: 1.5rem;">$</span>
+                <input 
+                  type="number" 
+                  id="laborRate" 
+                  value="65" 
+                  min="0" 
+                  max="200"
+                  step="5"
+                  style="width: 100px;"
+                >
+                <span style="color: #9ca3af;">/hr</span>
+              </div>
+              <div class="quick-buttons">
+                <button type="button" class="quick-button" onclick="setLaborRate(40)">Friends $40</button>
+                <button type="button" class="quick-button" onclick="setLaborRate(65)">Standard $65</button>
+                <button type="button" class="quick-button" onclick="setLaborRate(90)">Premium $90</button>
+              </div>
+              <p style="font-size: 0.75rem; color: #9ca3af; margin-top: 0.5rem;">
+                💡 Adjust per customer: Friends/Family ($30-50) | Standard ($50-75) | Premium ($75-100)
+              </p>
+            </div>
+
+            <div class="form-group">
+              <label for="description">Job Description *</label>
+              <textarea id="description" rows="4" placeholder="Example: Oil change with full synthetic" required></textarea>
+            </div>
+
+            <div id="errorBox" style="display: none;" class="error"></div>
+            <div id="successBox" style="display: none;" class="success"></div>
+
+            <button type="submit" id="submitBtn">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
+              </svg>
+              Generate Estimate
+            </button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Estimate
+        </h2>
