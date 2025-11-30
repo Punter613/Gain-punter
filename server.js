@@ -947,6 +947,226 @@ app.get('/api/jobs', async (req, res) => {
   res.json({ data });
 });
 
+// PHASE 2 ENDPOINTS - Customer & Estimate Management
+
+// Create or update customer
+app.post('/api/customers', async (req, res) => {
+  const requestId = generateRequestId();
+  
+  try {
+    const { name, phone, email } = req.body;
+    log('info', 'Customer creation requested', { requestId, name });
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Customer name required' });
+    }
+    
+    const { data, error } = await supabase
+      .from('customers')
+      .insert({ name, phone, email })
+      .select()
+      .single();
+      
+    if (error) {
+      log('error', 'Customer creation failed', { requestId, error: error.message });
+      return res.status(400).json({ error: error.message });
+    }
+    
+    log('info', 'Customer created', { requestId, customerId: data.id });
+    res.json({ ok: true, customer: data });
+    
+  } catch (err) {
+    log('error', 'Customer creation error', { requestId, error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all customers
+app.get('/api/customers', async (req, res) => {
+  const { data, error } = await supabase
+    .from('customers')
+    .select('*')
+    .order('created_at', { ascending: false });
+    
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, customers: data });
+});
+
+// Get single customer
+app.get('/api/customers/:id', async (req, res) => {
+  const { id } = req.params;
+  const { data, error } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('id', id)
+    .single();
+    
+  if (error) return res.status(404).json({ error: 'Customer not found' });
+  res.json({ ok: true, customer: data });
+});
+
+// Save estimate to database
+app.post('/api/save-estimate', async (req, res) => {
+  const requestId = generateRequestId();
+  
+  try {
+    const { customerId, vehicle, description, estimate } = req.body;
+    log('info', 'Saving estimate', { requestId, customerId });
+    
+    if (!customerId || !estimate) {
+      return res.status(400).json({ error: 'Customer ID and estimate required' });
+    }
+    
+    const { data, error } = await supabase
+      .from('estimates')
+      .insert({ 
+        customer_id: customerId, 
+        vehicle, 
+        description, 
+        estimate 
+      })
+      .select()
+      .single();
+      
+    if (error) {
+      log('error', 'Estimate save failed', { requestId, error: error.message });
+      return res.status(400).json({ error: error.message });
+    }
+    
+    log('info', 'Estimate saved', { requestId, estimateId: data.id });
+    res.json({ ok: true, estimateId: data.id, estimate: data });
+    
+  } catch (err) {
+    log('error', 'Save estimate error', { requestId, error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all estimates
+app.get('/api/estimates', async (req, res) => {
+  const { data, error } = await supabase
+    .from('estimates')
+    .select(`
+      *,
+      customers (
+        id,
+        name,
+        phone,
+        email
+      )
+    `)
+    .order('created_at', { ascending: false })
+    .limit(100);
+    
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, estimates: data });
+});
+
+// Get single estimate
+app.get('/api/estimates/:id', async (req, res) => {
+  const { id } = req.params;
+  const { data, error } = await supabase
+    .from('estimates')
+    .select(`
+      *,
+      customers (
+        id,
+        name,
+        phone,
+        email
+      )
+    `)
+    .eq('id', id)
+    .single();
+    
+  if (error) return res.status(404).json({ error: 'Estimate not found' });
+  res.json({ ok: true, estimate: data });
+});
+
+// Create invoice from estimate
+app.post('/api/create-invoice', async (req, res) => {
+  const requestId = generateRequestId();
+  
+  try {
+    const { estimateId } = req.body;
+    log('info', 'Creating invoice', { requestId, estimateId });
+    
+    if (!estimateId) {
+      return res.status(400).json({ error: 'Estimate ID required' });
+    }
+    
+    // Get the estimate
+    const { data: estimate, error: estimateError } = await supabase
+      .from('estimates')
+      .select('*')
+      .eq('id', estimateId)
+      .single();
+      
+    if (estimateError) {
+      return res.status(404).json({ error: 'Estimate not found' });
+    }
+    
+    // Generate invoice number
+    const invoiceNumber = `INV-${Date.now()}`;
+    const total = estimate.estimate.subtotal || 0;
+    
+    // Create invoice
+    const { data, error } = await supabase
+      .from('invoices')
+      .insert({
+        estimate_id: estimateId,
+        invoice_number: invoiceNumber,
+        total,
+        status: 'draft'
+      })
+      .select()
+      .single();
+      
+    if (error) {
+      log('error', 'Invoice creation failed', { requestId, error: error.message });
+      return res.status(400).json({ error: error.message });
+    }
+    
+    // Update estimate status
+    await supabase
+      .from('estimates')
+      .update({ status: 'invoiced' })
+      .eq('id', estimateId);
+    
+    log('info', 'Invoice created', { requestId, invoiceId: data.id, invoiceNumber });
+    res.json({ ok: true, invoice: data });
+    
+  } catch (err) {
+    log('error', 'Create invoice error', { requestId, error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all invoices
+app.get('/api/invoices', async (req, res) => {
+  const { data, error } = await supabase
+    .from('invoices')
+    .select(`
+      *,
+      estimates (
+        id,
+        vehicle,
+        description,
+        estimate,
+        customers (
+          id,
+          name,
+          phone,
+          email
+        )
+      )
+    `)
+    .order('created_at', { ascending: false });
+    
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, invoices: data });
+});
+
 // Serve static frontend from /public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
