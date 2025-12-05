@@ -3,20 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="SKSK ProTech">
-  <meta name="theme-color" content="#000000">
-  <title>SKSK ProTech - AI Auto Estimator</title>
+  <title>SKSK ProTech – AI Auto Estimator</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #000;
       color: #fff;
       min-height: 100vh;
@@ -28,19 +20,16 @@
       margin: 0 auto;
     }
 
-    /* Access Gate Styles */
+    /* Access Gate */
     #accessGate {
       position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
+      inset: 0;
       background: #000;
-      z-index: 9999;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 1rem;
+      z-index: 9999;
     }
 
     #accessGate.hidden {
@@ -48,37 +37,25 @@
     }
 
     .access-card {
-      background: #18181b;
+      background: #111827;
       border: 2px solid #dc2626;
       border-radius: 12px;
       padding: 2rem;
-      max-width: 400px;
+      max-width: 420px;
       width: 100%;
       text-align: center;
     }
 
-    .access-logo {
-      width: 80px;
-      height: 80px;
-      margin: 0 auto 1rem;
-      border: 2px solid #dc2626;
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #000;
-    }
-
-    .access-card h1 {
+    .access-title {
       font-size: 2rem;
+      font-weight: 700;
       margin-bottom: 0.5rem;
     }
 
-    .access-card .subtitle {
+    .access-subtitle {
       color: #dc2626;
-      font-size: 1rem;
-      font-weight: 600;
-      margin-bottom: 2rem;
+      font-size: 0.95rem;
+      margin-bottom: 1.5rem;
     }
 
     .access-input {
@@ -90,60 +67,78 @@
       color: #fff;
       font-size: 1rem;
       text-align: center;
-      text-transform: uppercase;
       letter-spacing: 2px;
+      text-transform: uppercase;
       margin-bottom: 1rem;
     }
 
-    .access-button {
+    .access-button,
+    .free-button {
       width: 100%;
-      padding: 0.75rem 1.5rem;
-      background: #dc2626;
-      border: 2px solid #b91c1c;
+      padding: 0.75rem 1rem;
       border-radius: 8px;
-      color: #fff;
-      font-size: 1rem;
-      font-weight: bold;
+      border: 2px solid transparent;
+      font-size: 0.95rem;
+      font-weight: 600;
       cursor: pointer;
+      margin-bottom: 0.5rem;
+    }
+
+    .access-button {
+      background: #dc2626;
+      border-color: #b91c1c;
+      color: #fff;
+    }
+
+    .free-button {
+      background: #111827;
+      border-color: #4b5563;
+      color: #e5e7eb;
+    }
+
+    .free-button span {
+      display: block;
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin-top: 0.1rem;
     }
 
     .access-button:disabled {
-      background: #374151;
-      border-color: #374151;
+      background: #4b5563;
+      border-color: #4b5563;
       cursor: not-allowed;
     }
 
-    .access-error {
-      background: rgba(220, 38, 38, 0.2);
-      border: 2px solid #dc2626;
-      border-radius: 8px;
-      padding: 0.75rem;
-      margin-top: 1rem;
+    .access-msg {
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      display: none;
+    }
+
+    #accessError {
       color: #fca5a5;
-      font-size: 0.875rem;
-      display: none;
     }
 
-    .access-error.show {
-      display: block;
+    #accessWelcome {
+      color: #bbf7d0;
     }
 
-    .access-welcome {
-      background: rgba(34, 197, 94, 0.2);
-      border: 2px solid #22c55e;
-      border-radius: 8px;
-      padding: 0.75rem;
-      margin-top: 1rem;
-      color: #86efac;
-      font-size: 0.875rem;
-      display: none;
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 999px;
+      display: inline-block;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
     }
 
-    .access-welcome.show {
-      display: block;
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
 
-    /* Main App Styles */
+    /* Main App */
     #mainApp {
       display: none;
     }
@@ -154,508 +149,397 @@
 
     .header {
       text-align: center;
-      padding: 2rem 0;
+      padding: 1.5rem 0;
     }
 
-    .logo {
-      width: 80px;
-      height: 80px;
-      margin: 0 auto 1rem;
+    .logo-mark {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 0.75rem;
+      border-radius: 12px;
       border: 2px solid #dc2626;
-      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #000;
+      background: #020617;
     }
 
-    .logo svg {
-      width: 48px;
-      height: 48px;
+    .logo-mark span {
+      font-weight: 800;
+      font-size: 1.25rem;
+      letter-spacing: 0.05em;
       color: #dc2626;
     }
 
     h1 {
-      font-size: 3rem;
-      margin-bottom: 0.5rem;
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: 0.03em;
     }
 
     .subtitle {
       color: #dc2626;
-      font-size: 1.25rem;
       font-weight: 600;
-      margin-bottom: 0.5rem;
+      margin-top: 0.25rem;
     }
 
     .tagline {
       color: #9ca3af;
-      font-style: italic;
+      font-size: 0.9rem;
+      margin-top: 0.4rem;
     }
 
     .user-info {
+      margin-top: 1rem;
       background: rgba(34, 197, 94, 0.1);
-      border: 2px solid #22c55e;
+      border: 1px solid #22c55e;
       border-radius: 8px;
-      padding: 0.75rem;
-      margin-bottom: 1rem;
+      padding: 0.6rem 0.75rem;
+      font-size: 0.85rem;
       text-align: center;
-      color: #86efac;
-      font-size: 0.875rem;
+      color: #bbf7d0;
     }
 
-    .logout-button {
-      background: transparent;
-      border: 1px solid #dc2626;
-      color: #dc2626;
-      padding: 0.25rem 0.75rem;
-      border-radius: 4px;
+    .user-info button {
+      margin-left: 0.75rem;
+      padding: 0.2rem 0.6rem;
       font-size: 0.75rem;
+      border-radius: 4px;
+      border: 1px solid #dc2626;
+      background: transparent;
+      color: #fecaca;
       cursor: pointer;
-      margin-left: 0.5rem;
     }
 
     .grid {
       display: grid;
       grid-template-columns: 1fr;
-      gap: 1.5rem;
-      margin-top: 2rem;
+      gap: 1.25rem;
+      margin-top: 1.25rem;
     }
 
     @media (min-width: 768px) {
       .grid {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1.05fr 0.95fr;
       }
     }
 
     .card {
-      background: #18181b;
-      border: 2px solid #dc2626;
+      background: #111827;
       border-radius: 12px;
-      padding: 1.5rem;
+      border: 1px solid #27272a;
+      padding: 1.25rem;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
     }
 
-    .card-title {
-      font-size: 1.5rem;
-      font-weight: bold;
-      margin-bottom: 1.5rem;
+    .card h2 {
+      font-size: 1.2rem;
+      margin-bottom: 1rem;
       display: flex;
+      justify-content: space-between;
       align-items: center;
       gap: 0.5rem;
     }
 
+    .pill {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.15);
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      color: #e5e7eb;
+    }
+
+    .pill.pro-pill {
+      background: rgba(37, 99, 235, 0.15);
+      border-color: rgba(59, 130, 246, 0.7);
+      color: #bfdbfe;
+    }
+
     .form-group {
-      margin-bottom: 1rem;
+      margin-bottom: 0.85rem;
+      font-size: 0.9rem;
     }
 
     label {
       display: block;
-      font-size: 0.875rem;
-      color: #d1d5db;
-      margin-bottom: 0.5rem;
+      color: #e5e7eb;
+      margin-bottom: 0.3rem;
+      font-size: 0.8rem;
       font-weight: 500;
     }
 
     input, textarea, select {
       width: 100%;
-      padding: 0.75rem 1rem;
-      background: #000;
-      border: 2px solid #dc2626;
+      padding: 0.6rem 0.8rem;
+      background: #020617;
       border-radius: 8px;
-      color: #fff;
-      font-size: 1rem;
+      border: 1px solid #27272a;
+      color: #f9fafb;
+      font-size: 0.9rem;
       font-family: inherit;
     }
 
     input:focus, textarea:focus, select:focus {
       outline: none;
-      border-color: #b91c1c;
+      border-color: #dc2626;
     }
 
     textarea {
-      resize: none;
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    small {
+      font-size: 0.75rem;
+      color: #9ca3af;
     }
 
     button {
+      font-family: inherit;
+    }
+
+    #submitBtn {
       width: 100%;
-      padding: 0.75rem 1.5rem;
-      background: #dc2626;
-      border: 2px solid #b91c1c;
+      margin-top: 0.5rem;
+      padding: 0.7rem 1rem;
       border-radius: 8px;
+      border: 0;
+      background: #dc2626;
+      border: 1px solid #b91c1c;
       color: #fff;
-      font-size: 1rem;
-      font-weight: bold;
+      font-weight: 600;
+      font-size: 0.95rem;
       cursor: pointer;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 0.5rem;
+      gap: 0.4rem;
     }
 
-    button:hover {
-      background: #b91c1c;
-    }
-
-    button:disabled {
+    #submitBtn:disabled {
       background: #374151;
       border-color: #374151;
       cursor: not-allowed;
     }
 
-    .button-secondary {
-      background: #22c55e;
-      border-color: #16a34a;
-    }
-
-    .button-secondary:hover {
-      background: #16a34a;
-    }
-
-    .spinner {
-      width: 20px;
-      height: 20px;
-      border: 2px solid #fff;
-      border-top-color: transparent;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    .error, .success {
+      margin-bottom: 0.7rem;
+      padding: 0.6rem 0.7rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
     }
 
     .error {
-      background: rgba(220, 38, 38, 0.2);
-      border: 2px solid #dc2626;
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1rem;
-      font-size: 0.875rem;
-      color: #fca5a5;
+      background: rgba(220, 38, 38, 0.16);
+      border: 1px solid #dc2626;
+      color: #fecaca;
     }
 
     .success {
-      background: rgba(34, 197, 94, 0.2);
-      border: 2px solid #22c55e;
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1rem;
-      font-size: 0.875rem;
-      color: #86efac;
-    }
-
-    .estimate-content {
-      display: flex;
-      flex-direction: column;
-      gap: 1.5rem;
-    }
-
-    .info-box {
-      background: #000;
-      border: 2px solid #dc2626;
-      border-radius: 8px;
-      padding: 1rem;
-    }
-
-    .info-box h3 {
-      font-size: 1rem;
-      margin-bottom: 0.5rem;
-    }
-
-    .parts-list {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      font-size: 0.875rem;
-    }
-
-    .part-item {
-      display: flex;
-      justify-content: space-between;
-      color: #d1d5db;
-    }
-
-    .part-total {
-      border-top: 2px solid #dc2626;
-      margin-top: 0.5rem;
-      padding-top: 0.5rem;
-      font-weight: 600;
-      color: #fff;
-    }
-
-    .total-box {
-      background: linear-gradient(to right, #dc2626, #b91c1c);
-      border: 2px solid #b91c1c;
-      border-radius: 8px;
-      padding: 1rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .total-box .label {
-      font-size: 1.125rem;
-      font-weight: bold;
-    }
-
-    .total-box .amount {
-      font-size: 1.5rem;
-      font-weight: bold;
-    }
-
-    .tax-box {
-      background: rgba(251, 191, 36, 0.1);
-      border: 2px solid #fbbf24;
-      border-radius: 8px;
-      padding: 1rem;
-    }
-
-    .tax-box h4 {
-      color: #fde047;
-      margin-bottom: 0.5rem;
-      font-size: 0.875rem;
-    }
-
-    .tax-item {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 0.5rem;
-      font-size: 0.875rem;
-      color: #fef08a;
-    }
-
-    .tax-takehome {
-      border-top: 2px solid #fbbf24;
-      padding-top: 0.5rem;
-      margin-top: 0.5rem;
-      font-weight: bold;
-      font-size: 1rem;
-    }
-
-    .tips-box {
-      background: rgba(34, 197, 94, 0.1);
-      border: 2px solid #22c55e;
-      border-radius: 8px;
-      padding: 1rem;
-    }
-
-    .tips-box h4 {
-      color: #86efac;
-      margin-bottom: 0.5rem;
-    }
-
-    .tips-list {
-      list-style: none;
-      padding: 0;
-    }
-
-    .tips-list li {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
-      font-size: 0.875rem;
+      background: rgba(34, 197, 94, 0.16);
+      border: 1px solid #22c55e;
       color: #bbf7d0;
-    }
-
-    .warnings-box {
-      background: rgba(251, 191, 36, 0.1);
-      border: 2px solid #fbbf24;
-      border-radius: 8px;
-      padding: 1rem;
-    }
-
-    .warnings-box h4 {
-      color: #fde047;
-      margin-bottom: 0.5rem;
-    }
-
-    .warnings-list {
-      list-style: none;
-      padding: 0;
-    }
-
-    .warnings-list li {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
-      font-size: 0.875rem;
-      color: #fef08a;
-    }
-
-    .work-steps {
-      list-style: none;
-    }
-
-    .work-steps li {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
-      font-size: 0.875rem;
-      color: #d1d5db;
     }
 
     .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 300px;
+      text-align: center;
+      padding: 2.2rem 1rem;
       color: #6b7280;
+      font-size: 0.9rem;
     }
 
-    .empty-state svg {
-      width: 64px;
-      height: 64px;
-      margin-bottom: 1rem;
-      opacity: 0.5;
+    .empty-state strong {
+      display: block;
+      color: #e5e7eb;
+      margin-bottom: 0.3rem;
     }
 
-    .oem-data-box {
-      background: rgba(34, 197, 94, 0.1);
-      border: 2px solid #22c55e;
+    .info-box {
+      background: #020617;
       border-radius: 8px;
-      padding: 1rem;
-      margin-top: 1rem;
+      border: 1px solid #27272a;
+      padding: 0.75rem 0.9rem;
+      margin-bottom: 0.5rem;
     }
 
-    .oem-data-box h4 {
-      color: #22c55e;
-      margin-bottom: 0.75rem;
+    .info-box h3 {
+      font-size: 0.95rem;
+      margin-bottom: 0.2rem;
+    }
+
+    .info-box p {
+      font-size: 0.8rem;
+      color: #9ca3af;
+    }
+
+    .part-row {
       display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      margin: 0.2rem 0;
+      color: #d1d5db;
+    }
+
+    .part-row.total {
+      border-top: 1px solid #374151;
+      padding-top: 0.35rem;
+      margin-top: 0.4rem;
+      font-weight: 600;
+      color: #e5e7eb;
+    }
+
+    .total-box {
+      margin-top: 0.75rem;
+      margin-bottom: 0.75rem;
+      padding: 0.8rem 0.9rem;
+      border-radius: 10px;
+      background: linear-gradient(90deg, #dc2626, #b91c1c);
+      display: flex;
+      justify-content: space-between;
       align-items: center;
-      gap: 0.5rem;
+      font-size: 0.95rem;
+      font-weight: 700;
     }
 
-    .oem-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.75rem;
-      margin-bottom: 0.75rem;
+    .total-box span:last-child {
+      font-size: 1.1rem;
     }
 
-    .oem-item {
-      font-size: 0.875rem;
-      color: #bbf7d0;
-    }
-
-    .oem-item strong {
-      color: #86efac;
-    }
-
-    .torque-table {
-      width: 100%;
-      font-size: 0.875rem;
-      margin-top: 0.5rem;
-    }
-
-    .torque-table th {
-      text-align: left;
-      color: #86efac;
-      padding: 0.25rem;
-      border-bottom: 1px solid #22c55e;
-    }
-
-    .torque-table td {
-      color: #bbf7d0;
-      padding: 0.25rem;
-    }
-
-    .dtc-section {
-      background: rgba(59, 130, 246, 0.1);
-      border: 2px solid #3b82f6;
+    .tax-box {
+      background: rgba(251, 191, 36, 0.08);
       border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1rem;
+      border: 1px solid #fbbf24;
+      padding: 0.7rem 0.9rem;
+      font-size: 0.8rem;
+      margin-bottom: 0.5rem;
     }
 
-    .dtc-input-group {
+    .tax-row {
       display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
+      justify-content: space-between;
+      margin-bottom: 0.15rem;
+      color: #fef08a;
     }
 
-    .dtc-results {
-      margin-top: 1rem;
+    .tax-row.takehome {
+      margin-top: 0.35rem;
+      padding-top: 0.3rem;
+      border-top: 1px solid #fbbf24;
+      color: #fefce8;
+      font-weight: 600;
     }
 
-    .code-box {
-      background: #000;
-      border: 1px solid #3b82f6;
-      border-radius: 6px;
-      padding: 0.75rem;
-      margin-bottom: 0.5rem;
-      font-size: 0.875rem;
+    .tax-note {
+      font-size: 0.7rem;
+      color: #fef08a;
+      margin-top: 0.25rem;
     }
 
-    .code-box strong {
-      color: #60a5fa;
-    }
-
-    .correlation-box {
-      background: rgba(251, 191, 36, 0.1);
-      border: 2px solid #fbbf24;
+    .pro-section {
       border-radius: 8px;
-      padding: 1rem;
-      margin-top: 1rem;
+      border: 1px dashed #1f2937;
+      padding: 0.7rem 0.7rem 0.6rem;
+      margin-bottom: 0.8rem;
+      background: radial-gradient(circle at top left, rgba(31,41,55,0.7), transparent 55%);
     }
 
-    .root-cause {
-      background: rgba(220, 38, 38, 0.1);
-      border: 1px solid #dc2626;
+    .pro-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .pro-label {
+      color: #bfdbfe;
+      font-weight: 600;
+      font-size: 0.75rem;
+    }
+
+    .pro-hint {
+      font-size: 0.7rem;
+      color: #9ca3af;
+    }
+
+    .pro-disabled {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+
+    .pro-tag {
+      display: inline-block;
+      padding: 0.05rem 0.45rem;
+      border-radius: 999px;
+      border: 1px solid rgba(59,130,246,0.7);
+      color: #bfdbfe;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .flex-row {
+      display: flex;
+      gap: 0.45rem;
+      align-items: center;
+    }
+
+    .quick-rate-row {
+      display: flex;
+      gap: 0.35rem;
+      margin-top: 0.35rem;
+    }
+
+    .quick-btn {
+      flex: 1;
       border-radius: 6px;
-      padding: 0.75rem;
-      margin-bottom: 0.5rem;
-    }
-
-    .quick-buttons {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 0.5rem;
-      margin-top: 0.5rem;
-    }
-
-    .quick-button {
-      padding: 0.5rem;
-      background: #374151;
-      border: 1px solid #4b5563;
-      border-radius: 6px;
+      border: 1px solid #374151;
+      background: #020617;
       color: #9ca3af;
       font-size: 0.75rem;
+      padding: 0.25rem 0.3rem;
       cursor: pointer;
-      text-align: center;
     }
 
-    .quick-button:hover {
-      background: #4b5563;
-      color: #fff;
+    .quick-btn:hover {
+      border-color: #dc2626;
+      color: #f9fafb;
     }
   </style>
 </head>
 <body>
+
   <!-- ACCESS GATE -->
   <div id="accessGate">
     <div class="access-card">
-      <div class="access-logo">
-        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-        </svg>
-      </div>
-      <h1>SKSK ProTech</h1>
-      <div class="subtitle">Enter Access Code</div>
-      <form id="accessForm">
-        <input 
-          type="text" 
-          id="accessCodeInput" 
-          class="access-input" 
-          placeholder="ENTER CODE" 
-          maxlength="20"
-          required
+      <div class="access-title">SKSK ProTech</div>
+      <div class="access-subtitle">AI-Powered Auto Estimator</div>
+
+      <p style="font-size:0.8rem; color:#9ca3af; margin-bottom:0.75rem;">
+        Unlock full Pro mode with an access code, or jump in on the free limited version.
+      </p>
+
+      <form id="accessForm" style="margin-bottom:0.5rem;">
+        <input
+          type="text"
+          id="accessCodeInput"
+          class="access-input"
+          placeholder="ENTER PRO ACCESS CODE"
+          maxlength="24"
         >
-        <button type="submit" class="access-button" id="accessSubmit">
-          Unlock Access
+        <button type="submit" id="accessSubmit" class="access-button">
+          Unlock Pro
         </button>
       </form>
-      <div id="accessError" class="access-error"></div>
-      <div id="accessWelcome" class="access-welcome"></div>
+
+      <button type="button" id="freeAccessBtn" class="free-button">
+        Start Free – Limited Features
+        <span>Core AI estimate only • Pro tools locked</span>
+      </button>
+
+      <div id="accessError" class="access-msg"></div>
+      <div id="accessWelcome" class="access-msg"></div>
     </div>
   </div>
 
@@ -663,32 +547,135 @@
   <div id="mainApp">
     <div class="container">
       <div class="header">
-        <div class="logo">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
-          </svg>
+        <div class="logo-mark">
+          <span>SKSK</span>
         </div>
         <h1>SKSK ProTech</h1>
-        <div class="subtitle">AI-Powered Auto Estimator</div>
-        <div class="tagline">Professional tools. Instant parts. Powered by AI.</div>
+        <div class="subtitle">Your new shop sidekick.</div>
+        <div class="tagline">
+          You're good at what you do. Now let's make it easier, faster, more accurate, and automatic.
+        </div>
         <div id="userInfo" class="user-info"></div>
       </div>
 
       <div class="grid">
+        <!-- LEFT: FORM -->
         <div class="card">
-          <h2 class="card-title">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
+          <h2>
             Job Details
+            <span class="pill">Estimator</span>
           </h2>
 
+          <form id="estimateForm">
+            <!-- Customer basics -->
+            <div class="form-group">
+              <label for="customerName">Customer Name *</label>
+              <input id="customerName" type="text" placeholder="John Smith" required>
+            </div>
+
+            <div class="form-group">
+              <label for="customerPhone">Phone</label>
+              <input id="customerPhone" type="tel" placeholder="330-555-1212">
+            </div>
+
+            <div class="form-group">
+              <label for="customerEmail">Email</label>
+              <input id="customerEmail" type="email" placeholder="customer@example.com">
+            </div>
+
+            <!-- PRO SECTION -->
+            <div class="pro-section">
+              <div class="pro-header">
+                <span class="pro-label">Pro Shop Tools</span>
+                <span class="pro-tag">Pro</span>
+              </div>
+              <p class="pro-hint" id="proHintText">
+                Free mode: these stay visible but locked so you can see what's coming when you upgrade.
+              </p>
+
+              <div class="form-group pro-feature">
+                <label for="customerSelect">Saved Customers</label>
+                <select id="customerSelect">
+                  <option value="">+ New Customer</option>
+                </select>
+              </div>
+
+              <div class="form-group pro-feature">
+                <label for="vin">VIN Lookup (auto-fill vehicle)</label>
+                <div class="flex-row">
+                  <input id="vin" type="text" maxlength="17" placeholder="17-digit VIN" style="flex:1;">
+                  <button type="button" id="vinLookupBtn" style="white-space:nowrap; padding:0.5rem 0.7rem; font-size:0.75rem;">
+                    Lookup
+                  </button>
+                </div>
+                <small id="vinStatus"></small>
+              </div>
+
+              <div class="form-group pro-feature">
+                <label for="useOemData" style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                  <input type="checkbox" id="useOemData" style="width:auto;">
+                  <span>Use OEM data (factory labor & notes)</span>
+                </label>
+                <small>Requires VIN and Pro access.</small>
+              </div>
+            </div>
+
+            <!-- Always-on fields -->
+            <div class="form-group">
+              <label for="vehicle">Vehicle</label>
+              <input id="vehicle" type="text" placeholder="2008 Ford F-150 5.4L V8">
+            </div>
+
+            <div class="form-group">
+              <label for="laborRate">Your Labor Rate ($/hr)</label>
+              <div class="flex-row">
+                <span style="color:#22c55e; font-size:1.2rem;">$</span>
+                <input
+                  id="laborRate"
+                  type="number"
+                  value="65"
+                  min="0"
+                  max="200"
+                  step="5"
+                  style="max-width:120px;"
+                >
+                <span style="font-size:0.8rem; color:#9ca3af;">/hr</span>
+              </div>
+              <div class="quick-rate-row">
+                <button type="button" class="quick-btn" data-rate="45">Friends $45</button>
+                <button type="button" class="quick-btn" data-rate="65">Standard $65</button>
+                <button type="button" class="quick-btn" data-rate="90">Premium $90</button>
+              </div>
+              <small>
+                Adjust per job: Friends/Family (40–50) • Standard (50–75) • Premium (75–100).
+              </small>
+            </div>
+
+            <div class="form-group">
+              <label for="description">Job Description *</label>
+              <textarea id="description" rows="4" placeholder="Example: Front brake pads & rotors, inspect calipers" required></textarea>
+            </div>
+
+            <div id="errorBox" class="error" style="display:none;"></div>
+            <div id="successBox" class="success" style="display:none;"></div>
+
+            <button type="submit" id="submitBtn">
+              <span>⚡</span>
+              <span>Generate Estimate</span>
+            </button>
+          </form>
+        </div>
+
+        <!-- RIGHT: ESTIMATE -->
+        <div class="card">
+          <h2>
+            Estimate
+            <span class="pill pro-pill">AI-Powered</span>
+          </h2>
           <div id="estimateDisplay">
             <div class="empty-state">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <p>Fill in form and generate</p>
+              <strong>Nothing generated yet.</strong>
+              Fill out the job details and hit <em>Generate Estimate</em> to see the breakdown.
             </div>
           </div>
         </div>
@@ -696,777 +683,229 @@
     </div>
   </div>
 
-  <script>
-    // Dynamic backend URL - works locally AND on Render
-    const BACKEND_URL = window.location.hostname === 'localhost' ? '' : 'https://p613-backend.onrender.com';
+<script>
+  const BACKEND_URL = window.location.hostname === "localhost"
+    ? "http://localhost:4000"
+    : "https://p613-backend.onrender.com";
 
-    const accessGate = document.getElementById('accessGate');
-    const accessForm = document.getElementById('accessForm');
-    const accessCodeInput = document.getElementById('accessCodeInput');
-    const accessSubmit = document.getElementById('accessSubmit');
-    const accessError = document.getElementById('accessError');
-    const accessWelcome = document.getElementById('accessWelcome');
-    const mainApp = document.getElementById('mainApp');
-    const userInfo = document.getElementById('userInfo');
+  // Access gate elements
+  const accessGate = document.getElementById("accessGate");
+  const accessForm = document.getElementById("accessForm");
+  const accessCodeInput = document.getElementById("accessCodeInput");
+  const accessSubmit = document.getElementById("accessSubmit");
+  const freeAccessBtn = document.getElementById("freeAccessBtn");
+  const accessError = document.getElementById("accessError");
+  const accessWelcome = document.getElementById("accessWelcome");
 
-    const form = document.getElementById('estimateForm');
-    const submitBtn = document.getElementById('submitBtn');
-    const errorBox = document.getElementById('errorBox');
-    const successBox = document.getElementById('successBox');
-    const estimateDisplay = document.getElementById('estimateDisplay');
-    const vinInput = document.getElementById('vin');
-    const vinLookupBtn = document.getElementById('vinLookupBtn');
-    const vinStatus = document.getElementById('vinStatus');
-    const vehicleInput = document.getElementById('vehicle');
-    const customerSelect = document.getElementById('customerSelect');
-    const dtcInput = document.getElementById('dtcCodes');
-    const analyzeDtcBtn = document.getElementById('analyzeDtcBtn');
-    const dtcResults = document.getElementById('dtcResults');
+  // Main app elements
+  const mainApp = document.getElementById("mainApp");
+  const userInfo = document.getElementById("userInfo");
 
-    let customers = [];
-    let currentOemData = null;
+  const estimateForm = document.getElementById("estimateForm");
+  const submitBtn = document.getElementById("submitBtn");
+  const errorBox = document.getElementById("errorBox");
+  const successBox = document.getElementById("successBox");
+  const estimateDisplay = document.getElementById("estimateDisplay");
 
-    // Quick labor rate setter
-    function setLaborRate(rate) {
-      document.getElementById('laborRate').value = rate;
-    }
-    window.setLaborRate = setLaborRate;
+  const customerSelect = document.getElementById("customerSelect");
+  const customerNameInput = document.getElementById("customerName");
+  const customerPhoneInput = document.getElementById("customerPhone");
+  const customerEmailInput = document.getElementById("customerEmail");
+  const vehicleInput = document.getElementById("vehicle");
+  const laborRateInput = document.getElementById("laborRate");
+  const descriptionInput = document.getElementById("description");
 
-    // Check for existing access on page load
-    window.addEventListener('DOMContentLoaded', () => {
-      const stored = localStorage.getItem('sksk_autopro_access');
-      if (stored) {
-        try {
-          const access = JSON.parse(stored);
-          unlockApp(access);
-        } catch (err) {
-          console.error('Invalid stored access:', err);
-          localStorage.removeItem('sksk_autopro_access');
+  const vinInput = document.getElementById("vin");
+  const vinLookupBtn = document.getElementById("vinLookupBtn");
+  const vinStatus = document.getElementById("vinStatus");
+  const useOemData = document.getElementById("useOemData");
+  const proHintText = document.getElementById("proHintText");
+
+  let customers = [];
+  let currentTier = "free";
+
+  function setTierUI(tier) {
+    currentTier = tier;
+    const proFeatures = document.querySelectorAll(".pro-feature, #useOemData, #vinLookupBtn, #vin");
+
+    if (tier === "free") {
+      proFeatures.forEach(el => {
+        el.classList.add("pro-disabled");
+        if (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "BUTTON") {
+          el.disabled = true;
         }
-      }
-    });
-
-    // Access form submission
-    accessForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      
-      const code = accessCodeInput.value.trim().toUpperCase();
-      if (!code) return;
-
-      accessError.classList.remove('show');
-      accessWelcome.classList.remove('show');
-      accessSubmit.disabled = true;
-      accessSubmit.innerHTML = '<div class="spinner"></div> Validating...';
-
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/validate-access`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accessCode: code })
-        });
-
-        const data = await response.json();
-
-        if (data.valid) {
-          const accessData = {
-            tier: data.tier,
-            customer: data.customer,
-            expires: data.expires
-          };
-          localStorage.setItem('sksk_autopro_access', JSON.stringify(accessData));
-          accessWelcome.textContent = data.message;
-          accessWelcome.classList.add('show');
-          setTimeout(() => unlockApp(accessData), 1500);
-        } else {
-          accessError.textContent = data.error || 'Invalid access code';
-          accessError.classList.add('show');
-          accessCodeInput.value = '';
+      });
+      proHintText.textContent = "Free mode: Pro shop tools are shown but locked.";
+    } else {
+      proFeatures.forEach(el => {
+        el.classList.remove("pro-disabled");
+        if (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "BUTTON") {
+          el.disabled = false;
         }
-      } catch (err) {
-        console.error('Access validation error:', err);
-        accessError.textContent = 'Connection error. Please try again.';
-        accessError.classList.add('show');
-      } finally {
-        accessSubmit.disabled = false;
-        accessSubmit.textContent = 'Unlock Access';
-      }
-    });
-
-    async function unlockApp(access) {
-      accessGate.classList.add('hidden');
-      mainApp.classList.add('visible');
-      
-      userInfo.innerHTML = `
-        ✅ Logged in as: <strong>${access.customer}</strong> (${access.tier})
-        <button class="logout-button" onclick="logout()">Logout</button>
-      `;
-
-      // FEATURE C: Load customers
-      await loadCustomers();
+      });
+      proHintText.textContent = "Pro: Saved customers, VIN lookup, and OEM integration are live.";
     }
+  }
 
-    function logout() {
-      localStorage.removeItem('sksk_autopro_access');
-      location.reload();
-    }
-    window.logout = logout;
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.style.display = "block";
+    successBox.style.display = "none";
+  }
 
-    // FEATURE C: Load Customers
-    async function loadCustomers() {
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/customers`);
-        if (!response.ok) return;
-        
-        const data = await response.json();
-        if (data.ok && data.customers) {
-          customers = data.customers;
-          
-          // Populate dropdown
-          customerSelect.innerHTML = '<option value="">+ New Customer</option>';
-          customers.forEach(customer => {
-            const option = document.createElement('option');
-            option.value = customer.id;
-            option.textContent = `${customer.name} (${customer.phone || customer.email || 'no contact'})`;
-            customerSelect.appendChild(option);
-          });
-        }
-      } catch (err) {
-        console.error('Failed to load customers:', err);
-      }
-    }
+  function showSuccess(msg) {
+    successBox.textContent = msg;
+    successBox.style.display = "block";
+    errorBox.style.display = "none";
+  }
 
-    // FEATURE C: Customer selection handler
-    customerSelect.addEventListener('change', (e) => {
-      const customerId = e.target.value;
-      if (!customerId) {
-        // New customer - clear fields
-        document.getElementById('customerName').value = '';
-        document.getElementById('customerPhone').value = '';
-        document.getElementById('customerEmail').value = '';
-        return;
-      }
+  function hideMessages() {
+    errorBox.style.display = "none";
+    successBox.style.display = "none";
+  }
 
-      // Load selected customer
-      const customer = customers.find(c => c.id === customerId);
-      if (customer) {
-        document.getElementById('customerName').value = customer.name;
-        document.getElementById('customerPhone').value = customer.phone || '';
-        document.getElementById('customerEmail').value = customer.email || '';
-      }
-    });
+  function formatCurrency(amount) {
+    const safe = Number.isFinite(amount) ? amount : 0;
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+    }).format(safe);
+  }
 
-    // FEATURE A: DTC Code Analyzer
-    analyzeDtcBtn.addEventListener('click', async () => {
-      const codes = dtcInput.value.trim();
-      if (!codes) {
-        showError('Please enter at least one diagnostic code');
-        return;
-      }
+  function setLoadingEstimate() {
+    estimateDisplay.innerHTML = `
+      <div class="empty-state">
+        <div class="spinner" style="width:40px;height:40px;border-width:3px;margin-bottom:0.75rem;"></div>
+        <strong>AI is building your estimate...</strong>
+        <span style="display:block;margin-top:0.25rem;color:#9ca3af;font-size:0.8rem;">
+          Breaking it down into labor, parts, shop supplies, and your take-home.
+        </span>
+      </div>
+    `;
+  }
 
-      const codeArray = codes.split(',').map(c => c.trim().toUpperCase()).filter(c => c);
-      if (codeArray.length === 0) {
-        showError('Please enter valid diagnostic codes');
-        return;
-      }
+  function resetEstimatePlaceholder() {
+    estimateDisplay.innerHTML = `
+      <div class="empty-state">
+        <strong>Nothing generated yet.</strong>
+        Fill out the job details and hit <em>Generate Estimate</em>.
+      </div>
+    `;
+  }
 
-      analyzeDtcBtn.disabled = true;
-      analyzeDtcBtn.innerHTML = '<div class="spinner"></div> Analyzing...';
-      dtcResults.innerHTML = '<div style="text-align: center; padding: 1rem; color: #93c5fd;"><div class="spinner" style="margin: 0 auto;"></div><p style="margin-top: 0.5rem;">AI analyzing codes...</p></div>';
+  function displayEstimate(est) {
+    const laborRate = est.laborRate || Number(laborRateInput.value) || 65;
+    const laborHours = est.laborHours || 0;
+    const laborCost = est.laborCost ?? (laborHours * laborRate);
+    const partsCost = est.partsCost || 0;
+    const suppliesPercent = est.shopSuppliesPercent ?? 7;
+    const shopSupplies = est.shopSupplies ?? ( (laborCost + partsCost) * (suppliesPercent / 100) );
+    const subtotal = est.subtotal ?? (laborCost + partsCost + shopSupplies);
+    const taxSetAside = subtotal * 0.28;
+    const takeHome = subtotal - taxSetAside;
 
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/analyze-codes`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            codes: codeArray,
-            vehicle: vehicleInput.value || 'Not specified'
-          })
-        });
-
-        if (!response.ok) throw new Error('DTC analysis failed');
-
-        const data = await response.json();
-        if (!data.ok || !data.analysis) throw new Error('Invalid response');
-
-        displayDtcResults(data.analysis);
-      } catch (err) {
-        console.error('DTC analysis error:', err);
-        dtcResults.innerHTML = `<div class="error">${err.message}</div>`;
-      } finally {
-        analyzeDtcBtn.disabled = false;
-        analyzeDtcBtn.innerHTML = 'Analyze';
-      }
-    });
-
-    function displayDtcResults(analysis) {
-      let html = '<div style="margin-top: 1rem;">';
-
-      // Individual codes
-      if (analysis.individualCodes && analysis.individualCodes.length > 0) {
-        html += '<h4 style="color: #60a5fa; margin-bottom: 0.5rem;">Individual Codes:</h4>';
-        analysis.individualCodes.forEach(code => {
-          html += `
-            <div class="code-box">
-              <strong>${code.code}</strong>: ${code.definition}<br>
-              <span style="color: #fbbf24;">Severity: ${code.severity}</span>
-            </div>
-          `;
-        });
-      }
-
-      // Correlation analysis
-      if (analysis.correlationAnalysis) {
-        const corr = analysis.correlationAnalysis;
-        html += `
-          <div class="correlation-box">
-            <h4 style="color: #fde047; margin-bottom: 0.5rem;">
-              ${corr.hasCorrelation ? '✓ Root Cause Found' : 'ℹ️ Analysis'}
-            </h4>
-            <p style="color: #fef08a; font-size: 0.875rem; margin-bottom: 0.5rem;">
-              ${corr.rootCauseSummary}
-            </p>
-            <p style="color: #fef08a; font-size: 0.75rem;">
-              <strong>Confidence:</strong> ${corr.confidence} | 
-              <strong>Systems:</strong> ${(corr.affectedSystems || []).join(', ')}
-            </p>
-          </div>
-        `;
-      }
-
-      // Root causes
-      if (analysis.likelyRootCauses && analysis.likelyRootCauses.length > 0) {
-        html += '<h4 style="color: #fca5a5; margin-top: 1rem; margin-bottom: 0.5rem;">Likely Root Causes:</h4>';
-        analysis.likelyRootCauses.forEach(cause => {
-          html += `
-            <div class="root-cause">
-              <strong style="color: #dc2626;">${cause.cause}</strong> (${cause.likelihood} likelihood)<br>
-              <span style="font-size: 0.875rem; color: #fecaca;">${cause.explanation}</span><br>
-              <span style="font-size: 0.75rem; color: #9ca3af;">Est. Cost: ${cause.estimatedCost}</span>
-            </div>
-          `;
-        });
-      }
-
-      // Do not replace
-      if (analysis.doNotReplace && analysis.doNotReplace.length > 0) {
-        html += `
-          <div style="background: rgba(220, 38, 38, 0.1); border: 1px solid #dc2626; border-radius: 6px; padding: 0.75rem; margin-top: 0.5rem;">
-            <strong style="color: #fca5a5;">⚠️ Do NOT Replace:</strong><br>
-            <span style="font-size: 0.875rem; color: #fecaca;">${analysis.doNotReplace.join(', ')}</span>
-          </div>
-        `;
-      }
-
-      // Diagnostic priority
-      if (analysis.diagnosticPriority && analysis.diagnosticPriority.length > 0) {
-        html += '<h4 style="color: #86efac; margin-top: 1rem; margin-bottom: 0.5rem;">Diagnostic Priority:</h4>';
-        html += '<ol style="margin-left: 1.5rem; color: #bbf7d0; font-size: 0.875rem;">';
-        analysis.diagnosticPriority.forEach(step => {
-          html += `<li style="margin-bottom: 0.25rem;">${step}</li>`;
-        });
-        html += '</ol>';
-      }
-
-      html += '</div>';
-      dtcResults.innerHTML = html;
-    }
-
-    function showError(message) {
-      errorBox.textContent = message;
-      errorBox.style.display = 'block';
-      successBox.style.display = 'none';
-    }
-
-    function showSuccess(message) {
-      successBox.textContent = message;
-      successBox.style.display = 'block';
-      errorBox.style.display = 'none';
-    }
-
-    function hideMessages() {
-      errorBox.style.display = 'none';
-      successBox.style.display = 'none';
-    }
-
-    function formatCurrency(amount) {
-      return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD'
-      }).format(amount);
-    }
-
-    // VIN Lookup
-    vinLookupBtn.addEventListener('click', async () => {
-      const vin = vinInput.value.trim().toUpperCase();
-
-      if (!vin) {
-        vinStatus.textContent = 'Please enter a VIN';
-        vinStatus.style.color = '#ef4444';
-        return;
-      }
-
-      if (vin.length !== 17) {
-        vinStatus.textContent = 'VIN must be exactly 17 characters';
-        vinStatus.style.color = '#ef4444';
-        return;
-      }
-
-      vinLookupBtn.disabled = true;
-      vinLookupBtn.innerHTML = '<div class="spinner"></div>';
-      vinStatus.textContent = 'Looking up VIN...';
-      vinStatus.style.color = '#9ca3af';
-
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/vin-lookup/${vin}`);
-
-        if (!response.ok) {
-          throw new Error('VIN lookup failed');
-        }
-
-        const data = await response.json();
-
-        if (data.ok && data.displayString) {
-          vehicleInput.value = data.displayString;
-          vinStatus.textContent = '✓ Vehicle info auto-filled';
-          vinStatus.style.color = '#22c55e';
-          vinInput.value = '';
-        } else {
-          throw new Error('Could not decode VIN');
-        }
-
-      } catch (err) {
-        console.error('VIN lookup error:', err);
-        vinStatus.textContent = '✗ VIN lookup failed - enter vehicle info manually';
-        vinStatus.style.color = '#ef4444';
-      } finally {
-        vinLookupBtn.disabled = false;
-        vinLookupBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-        `;
-      }
-    });
-
-    vinInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        vinLookupBtn.click();
-      }
-    });
-
-    function showLoading() {
-      submitBtn.disabled = true;
-      submitBtn.innerHTML = '<div class="spinner"></div> Generating...';
-      estimateDisplay.innerHTML = `
-        <div class="empty-state">
-          <div class="spinner" style="width: 64px; height: 64px; border-width: 4px; border-color: #dc2626; border-top-color: transparent;"></div>
-          <p style="margin-top: 1rem;">AI analyzing job...</p>
-        </div>
-      `;
-    }
-
-    function resetButton() {
-      submitBtn.disabled = false;
-      submitBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
-        </svg>
-        Generate Estimate
-      `;
-    }
-
-    function displayEstimate(estimate) {
-      const partsHTML = estimate.parts && estimate.parts.length > 0 ? `
+    const partsHTML = Array.isArray(est.parts) && est.parts.length > 0
+      ? `
         <div class="info-box">
           <h3>Parts</h3>
-          <div class="parts-list">
-            ${estimate.parts.map(part => `
-              <div class="part-item">
-                <span>${part.name}</span>
-                <span>${formatCurrency(part.cost)}</span>
-              </div>
-            `).join('')}
-            <div class="part-item part-total">
-              <span>Parts Total</span>
-              <span>${formatCurrency(estimate.partsCost)}</span>
+          ${est.parts.map(p => `
+            <div class="part-row">
+              <span>${p.name}</span>
+              <span>${formatCurrency(p.cost || 0)}</span>
             </div>
+          `).join("")}
+          <div class="part-row total">
+            <span>Parts Total</span>
+            <span>${formatCurrency(partsCost)}</span>
           </div>
         </div>
-      ` : '';
+      `
+      : "";
 
-      const workStepsHTML = estimate.workSteps && estimate.workSteps.length > 0 ? `
-        <div class="info-box">
-          <h3>Work Steps</h3>
-          <ul class="work-steps">
-            ${estimate.workSteps.map(step => `
-              <li>
-                <span style="color: #dc2626;">✓</span>
-                <span>${step}</span>
-              </li>
-            `).join('')}
-          </ul>
+    estimateDisplay.innerHTML = `
+      <div class="info-box">
+        <h3>${est.jobType || "Repair / Service"}</h3>
+        <p>${est.shortDescription || "AI-generated job overview."}</p>
+      </div>
+
+      <div class="info-box">
+        <h3>Labor</h3>
+        <div class="part-row">
+          <span>${laborHours.toFixed(1)} hrs @ ${formatCurrency(laborRate)}/hr</span>
+          <span>${formatCurrency(laborCost)}</span>
         </div>
-      ` : '';
+      </div>
 
-      const notesHTML = estimate.notes ? `
-        <div class="info-box">
-          <h4 style="color: #d1d5db; margin-bottom: 0.5rem;">📋 Notes</h4>
-          <p style="color: #9ca3af; font-size: 0.875rem;">${estimate.notes}</p>
+      ${partsHTML}
+
+      <div class="info-box">
+        <div class="part-row">
+          <span>Shop Supplies (${suppliesPercent}%)</span>
+          <span>${formatCurrency(shopSupplies)}</span>
         </div>
-      ` : '';
+      </div>
 
-      const proTipsHTML = estimate.proTips && estimate.proTips.length > 0 ? `
-        <div class="tips-box">
-          <h4>💡 Pro Tips & Tricks</h4>
-          <ul class="tips-list">
-            ${estimate.proTips.map(tip => `
-              <li>
-                <span>+</span>
-                <span>${tip}</span>
-              </li>
-            `).join('')}
-          </ul>
+      <div class="total-box">
+        <span>Total Estimate</span>
+        <span>${formatCurrency(subtotal)}</span>
+      </div>
+
+      <div class="tax-box">
+        <div style="margin-bottom:0.25rem;color:#fde047;font-weight:600;font-size:0.8rem;">
+          Tax Set-Aside (for you, not the customer)
         </div>
-      ` : '';
-
-      const warningsHTML = estimate.warnings && estimate.warnings.length > 0 ? `
-        <div class="warnings-box">
-          <h4>⚠️ Watch For</h4>
-          <ul class="warnings-list">
-            ${estimate.warnings.map(warning => `
-              <li>
-                <span>!</span>
-                <span>${warning}</span>
-              </li>
-            `).join('')}
-          </ul>
+        <div class="tax-row">
+          <span>Job Total</span>
+          <span>${formatCurrency(subtotal)}</span>
         </div>
-      ` : '';
-
-      // FEATURE B: OEM Data Display
-      let oemDataHTML = '';
-      if (currentOemData && currentOemData.found) {
-        const oem = currentOemData.data;
-        oemDataHTML = `
-          <div class="oem-data-box">
-            <h4>
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Factory OEM Data (charm.li)
-            </h4>
-            <div class="oem-grid">
-              <div class="oem-item">
-                <strong>Factory Labor:</strong> ${oem.laborHours} hrs
-              </div>
-              <div class="oem-item">
-                <strong>Your Labor:</strong> ${estimate.laborHours} hrs
-              </div>
-            </div>
-            ${oem.torqueSpecs && oem.torqueSpecs.length > 0 ? `
-              <h5 style="color: #86efac; font-size: 0.875rem; margin-top: 0.75rem; margin-bottom: 0.25rem;">Torque Specifications:</h5>
-              <table class="torque-table">
-                <thead>
-                  <tr>
-                    <th>Component</th>
-                    <th>Torque</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${oem.torqueSpecs.map(spec => `
-                    <tr>
-                      <td>${spec.component}</td>
-                      <td>${spec.value}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            ` : ''}
-            ${oem.knownIssues && oem.knownIssues.length > 0 ? `
-              <h5 style="color: #fde047; font-size: 0.875rem; margin-top: 0.75rem; margin-bottom: 0.25rem;">Known Issues:</h5>
-              <ul style="margin-left: 1.25rem; color: #fef08a; font-size: 0.875rem;">
-                ${oem.knownIssues.map(issue => `<li>${issue}</li>`).join('')}
-              </ul>
-            ` : ''}
-            <p style="font-size: 0.75rem; color: #86efac; margin-top: 0.75rem;">
-              Source: ${currentOemData.source} | Confidence: ${currentOemData.confidence}
-            </p>
-          </div>
-        `;
-      }
-
-      const taxSetAside = estimate.subtotal * 0.28;
-      const takeHome = estimate.subtotal - taxSetAside;
-
-      estimateDisplay.innerHTML = `
-        <div class="estimate-content">
-          <div class="info-box">
-            <h3>${estimate.jobType}</h3>
-            <p style="color: #d1d5db; font-size: 0.875rem;">${estimate.shortDescription}</p>
-            ${estimate.oemDataUsed ? '<p style="color: #22c55e; font-size: 0.875rem; margin-top: 0.5rem;">✓ Factory OEM Data Used</p>' : ''}
-          </div>
-
-          ${oemDataHTML}
-
-          <div style="display: flex; align-items: center; gap: 0.75rem; color: #d1d5db;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color: #dc2626;">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span><strong>Timeline:</strong> ${estimate.timeline}</span>
-          </div>
-
-          <div class="info-box">
-            <h3>Labor</h3>
-            <div class="part-item">
-              <span>${estimate.laborHours} hours @ ${formatCurrency(estimate.laborRate)}/hr</span>
-              <span style="font-weight: 600;">${formatCurrency(estimate.laborCost)}</span>
-            </div>
-          </div>
-
-          ${partsHTML}
-
-          <div class="info-box">
-            <div class="part-item">
-              <span>Shop Supplies (${estimate.shopSuppliesPercent}%)</span>
-              <span>${formatCurrency(estimate.shopSupplies)}</span>
-            </div>
-          </div>
-
-          <div class="total-box">
-            <span class="label">Total Estimate</span>
-            <span class="amount">${formatCurrency(estimate.subtotal)}</span>
-          </div>
-
-          <div class="tax-box">
-            <h4>💰 Tax Set-Aside (For You)</h4>
-            <div class="tax-item">
-              <span>Job Total</span>
-              <span>${formatCurrency(estimate.subtotal)}</span>
-            </div>
-            <div class="tax-item">
-              <span>Recommended Tax Set-Aside (28%)</span>
-              <span>-${formatCurrency(taxSetAside)}</span>
-            </div>
-            <div class="tax-item tax-takehome">
-              <span>Your Take-Home</span>
-              <span>${formatCurrency(takeHome)}</span>
-            </div>
-            <p style="font-size: 0.75rem; color: #fef08a; margin-top: 0.5rem;">This does NOT appear on the customer invoice.</p>
-          </div>
-
-          ${workStepsHTML}
-          ${proTipsHTML}
-          ${warningsHTML}
-          ${notesHTML}
+        <div class="tax-row">
+          <span>Set aside ~28% for taxes</span>
+          <span>-${formatCurrency(taxSetAside)}</span>
         </div>
-      `;
+        <div class="tax-row takehome">
+          <span>Your Take-Home (after tax stash)</span>
+          <span>${formatCurrency(takeHome)}</span>
+        </div>
+        <div class="tax-note">
+          This tax line is for you only. Never shows on customer invoice.
+        </div>
+      </div>
+    `;
+  }
+
+  // Access logic
+  function unlockApp(access) {
+    const tier = access.tier || "free";
+    setTierUI(tier);
+
+    accessGate.classList.add("hidden");
+    mainApp.classList.add("visible");
+
+    userInfo.innerHTML = `
+      Logged in as: <strong>${access.customer || (tier === "pro" ? "Pro User" : "Free User")}</strong>
+      (${tier === "pro" ? "Pro" : "Free – Limited"})
+      <button type="button" onclick="logout()">Logout</button>
+    `;
+
+    if (tier === "pro") {
+      loadCustomers();
     }
+  }
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      hideMessages();
+  function logout() {
+    localStorage.removeItem("sksk_autopro_access");
+    location.reload();
+  }
+  window.logout = logout;
 
-      const customerName = document.getElementById('customerName').value.trim();
-      const customerPhone = document.getElementById('customerPhone').value.trim();
-      const customerEmail = document.getElementById('customerEmail').value.trim();
-      const vehicle = document.getElementById('vehicle').value.trim();
-      const description = document.getElementById('description').value.trim();
-      const useOemData = document.getElementById('useOemData').checked;
-      const vin = document.getElementById('vin').value.trim();
-      const laborRate = parseFloat(document.getElementById('laborRate').value) || 65;
-
-      if (!customerName || !description) {
-        showError('Customer name and job description are required');
-        return;
-      }
-
-      showLoading();
-      currentOemData = null;
-
-      try {
-        const requestBody = {
-          customer: {
-            name: customerName,
-            phone: customerPhone,
-            email: customerEmail
-          },
-          vehicle: vehicle,
-          description: description,
-          laborRate: laborRate
-        };
-
-        if (useOemData && vin) {
-          requestBody.useOemData = true;
-          requestBody.vin = vin;
-        }
-
-        const response = await fetch(`${BACKEND_URL}/api/generate-estimate`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(requestBody)
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `Server error: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        if (!data.ok || !data.estimate) {
-          throw new Error(data.error || 'Failed to generate estimate');
-        }
-
-        // Store OEM data if present
-        if (data.oemData) {
-          currentOemData = data.oemData;
-        }
-
-        displayEstimate(data.estimate);
-        showSuccess('✅ Estimate generated successfully!');
-        
-        // Reload customers (in case new one was added)
-        await loadCustomers();
-        
-        // Scroll to estimate
-        setTimeout(() => {
-          estimateDisplay.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 500);
-
-      } catch (err) {
-        console.error('Error:', err);
-        showError(err.message || 'Failed to connect to server. Please try again.');
-        estimateDisplay.innerHTML = `
-          <div class="empty-state">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <p>Fill in form and generate</p>
-          </div>
-        `;
-      } finally {
-        resetButton();
-      }
-    });
-  </script>
-</body>
-</html><form id="estimateForm">
-            <!-- FEATURE C: Customer Selector -->
-            <div class="form-group">
-              <label for="customerSelect">Customer</label>
-              <select id="customerSelect">
-                <option value="">+ New Customer</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label for="customerName">Customer Name *</label>
-              <input type="text" id="customerName" placeholder="John Smith" required>
-            </div>
-
-            <div class="form-group">
-              <label for="customerPhone">Phone Number</label>
-              <input type="tel" id="customerPhone" placeholder="330-555-1212">
-            </div>
-
-            <div class="form-group">
-              <label for="customerEmail">Email Address</label>
-              <input type="email" id="customerEmail" placeholder="john@example.com">
-            </div>
-
-            <!-- FEATURE A: DTC Code Analyzer -->
-            <div class="form-group">
-              <div class="dtc-section">
-                <label style="color: #60a5fa; margin-bottom: 0.5rem;">🔍 Diagnostic Trouble Codes (Optional)</label>
-                <div class="dtc-input-group">
-                  <input type="text" id="dtcCodes" placeholder="P0171, P0174, P0300" style="flex: 1; border-color: #3b82f6;">
-                  <button type="button" id="analyzeDtcBtn" class="button-secondary" style="width: auto; padding: 0.75rem 1rem; background: #3b82f6; border-color: #2563eb;">
-                    Analyze
-                  </button>
-                </div>
-                <p style="font-size: 0.75rem; color: #93c5fd;">Enter codes separated by commas. AI will find root cause correlation.</p>
-                <div id="dtcResults"></div>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label for="vin">VIN Lookup (Auto-fill Vehicle Info)</label>
-              <div style="display: flex; gap: 0.5rem;">
-                <input type="text" id="vin" placeholder="Enter 17-digit VIN" maxlength="17" style="flex: 1;">
-                <button type="button" id="vinLookupBtn" style="width: auto; padding: 0.75rem 1.5rem; background: #22c55e; border-color: #16a34a;">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </button>
-              </div>
-              <small id="vinStatus" style="color: #9ca3af; font-size: 0.75rem; margin-top: 0.25rem; display: block;"></small>
-            </div>
-
-            <div class="form-group">
-              <label for="vehicle">Vehicle</label>
-              <input type="text" id="vehicle" placeholder="2008 Ford F-150 5.4L V8">
-            </div>
-
-            <div class="form-group" style="background: rgba(34, 197, 94, 0.1); border: 2px solid #22c55e; border-radius: 8px; padding: 1rem;">
-              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin: 0;">
-                <input type="checkbox" id="useOemData" style="width: auto; margin: 0;">
-                <span style="color: #22c55e; font-weight: 600;">🔧 Use Factory OEM Data (charm.li)</span>
-              </label>
-              <p style="font-size: 0.75rem; color: #86efac; margin-top: 0.5rem; margin-left: 1.5rem;">
-                Includes factory labor times, torque specs, known issues, and step-by-step procedures
-              </p>
-            </div>
-
-            <!-- ADJUSTABLE LABOR RATE -->
-            <div class="form-group">
-              <label for="laborRate">Your Labor Rate ($/hour)</label>
-              <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span style="color: #22c55e; font-size: 1.5rem;">$</span>
-                <input 
-                  type="number" 
-                  id="laborRate" 
-                  value="65" 
-                  min="0" 
-                  max="200"
-                  step="5"
-                  style="width: 100px;"
-                >
-                <span style="color: #9ca3af;">/hr</span>
-              </div>
-              <div class="quick-buttons">
-                <button type="button" class="quick-button" onclick="setLaborRate(40)">Friends $40</button>
-                <button type="button" class="quick-button" onclick="setLaborRate(65)">Standard $65</button>
-                <button type="button" class="quick-button" onclick="setLaborRate(90)">Premium $90</button>
-              </div>
-              <p style="font-size: 0.75rem; color: #9ca3af; margin-top: 0.5rem;">
-                💡 Adjust per customer: Friends/Family ($30-50) | Standard ($50-75) | Premium ($75-100)
-              </p>
-            </div>
-
-            <div class="form-group">
-              <label for="description">Job Description *</label>
-              <textarea id="description" rows="4" placeholder="Example: Oil change with full synthetic" required></textarea>
-            </div>
-
-            <div id="errorBox" style="display: none;" class="error"></div>
-            <div id="successBox" style="display: none;" class="success"></div>
-
-            <button type="submit" id="submitBtn">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
-              </svg>
-              Generate Estimate
-            </button>
-          </form>
-        </div>
-
-        <div class="card">
-          <h2 class="card-title">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Estimate
-        </h2>
+  async function loadCustomers() {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/customers`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.customers)) {
+        customers = data.customers;
+        customerSelect.innerHTML = '<option value="">+ New Customer</option>';
+        customers.forEach(c => {
+          const opt = document.createElement("option");
+          opt.value = c.id;
