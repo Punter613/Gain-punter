@@ -464,7 +464,6 @@ app.get('/api/jobs', async (req, res) => {
 // 1. Install Stripe package
 // Run in terminal: npm install stripe
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://sksk-protech.netlify.app';
 
