@@ -658,6 +658,53 @@
         </p>
       </div>
 
+      <section id="pricing" style="margin-top:2rem;">
+        <h2 style="text-align:center;margin-bottom:1rem;">Upgrade to Pro</h2>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:1rem;max-width:700px;margin:0 auto;">
+
+          <!-- MONTHLY -->
+          <div style="background:#111827;border:1px solid #27272a;border-radius:12px;padding:1.25rem;text-align:center;">
+            <h3>Pro Monthly</h3>
+            <div style="font-size:2rem;font-weight:700;margin:0.5rem 0;">$29</div>
+            <div style="font-size:0.8rem;color:#9ca3af;margin-bottom:1rem;">per month</div>
+
+            <ul style="text-align:left;font-size:0.85rem;color:#e5e7eb;margin-bottom:1rem;list-style:none;padding-left:0;">
+              <li style="margin-bottom:0.2rem;">✓ VIN auto-decode</li>
+              <li style="margin-bottom:0.2rem;">✓ OEM labor guidance</li>
+              <li style="margin-bottom:0.2rem;">✓ Customer database</li>
+              <li>✓ Pro shop tools</li>
+            </ul>
+
+            <button
+              onclick="startCheckout('pro_monthly')"
+              style="width:100%;padding:0.7rem;border-radius:8px;border:0;background:#dc2626;color:#fff;font-weight:600;cursor:pointer;">
+              Subscribe Monthly
+            </button>
+          </div>
+
+          <!-- YEARLY -->
+          <div style="background:#020617;border:1px solid #2563eb;border-radius:12px;padding:1.25rem;text-align:center;">
+            <h3>Pro Yearly</h3>
+            <div style="font-size:2rem;font-weight:700;margin:0.5rem 0;">$290</div>
+            <div style="font-size:0.8rem;color:#9ca3af;margin-bottom:1rem;">per year (2 months free)</div>
+
+            <ul style="text-align:left;font-size:0.85rem;color:#e5e7eb;margin-bottom:1rem;list-style:none;padding-left:0;">
+              <li style="margin-bottom:0.2rem;">✓ Everything in Monthly</li>
+              <li style="margin-bottom:0.2rem;">✓ Best value</li>
+              <li>✓ Locked pricing for a year</li>
+            </ul>
+
+            <button
+              onclick="startCheckout('pro_yearly')"
+              style="width:100%;padding:0.7rem;border-radius:8px;border:0;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;">
+              Subscribe Yearly
+            </button>
+          </div>
+
+        </div>
+      </section>
+
       <div class="grid">
         <!-- LEFT: FORM -->
         <div class="card">
@@ -1256,10 +1303,13 @@
 
   async function startCheckout(plan) {
     try {
-      const email = (proEmailInput?.value || "").trim();
+      let email = (proEmailInput?.value || "").trim();
+
+      // Prompt for email when the user starts checkout from a button that
+      // isn't paired with the paywall's email field (e.g., pricing cards).
       if (!email) {
-        alert("Enter your email to receive your Pro access code.");
-        return;
+        email = prompt("Enter your email for Pro access:");
+        if (!email) return;
       }
 
       const res = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
@@ -1267,19 +1317,21 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           plan,
-          customerEmail: email
+          customerEmail: email,
+          customerName: "Pro User"
         })
       });
 
       const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert(data.error || "Stripe error. Try again.");
+      if (!data.ok || !data.url) {
+        alert("Failed to start checkout.");
+        return;
       }
+
+      window.location.href = data.url;
     } catch (err) {
       console.error("Checkout error:", err);
-      alert("Unable to start checkout. Try again.");
+      alert("Checkout failed. Try again.");
     }
   }
 </script>
