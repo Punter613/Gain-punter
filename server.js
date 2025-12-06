@@ -6,7 +6,53 @@ const { createClient } = require('@supabase/supabase-js');
 const { z } = require('zod');
 
 const app = express();
+// ========================================
+// STRIPE WEBHOOK — MUST BE ABOVE express.json()
+// ========================================
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
 
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error('[WEBHOOK ERROR]', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  console.log('[STRIPE EVENT]', event.type);
+
+  switch (event.type) {
+    case 'checkout.session.completed':
+      console.log('[CHECKOUT COMPLETED]');
+      break;
+
+    case 'customer.subscription.created':
+      console.log('[SUB CREATED]');
+      break;
+
+    case 'customer.subscription.updated':
+      console.log('[SUB UPDATED]');
+      break;
+
+    case 'customer.subscription.deleted':
+      console.log('[SUB DELETED]');
+      break;
+
+    case 'invoice.payment_failed':
+      console.log('[PAYMENT FAILED]');
+      break;
+
+    default:
+      console.log('[UNHANDLED EVENT]', event.type);
+  }
+
+  res.json({ received: true });
+});
 // ========================================
 // CORS & MIDDLEWARE
 // ========================================
