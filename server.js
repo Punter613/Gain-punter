@@ -456,7 +456,341 @@ app.get('/api/jobs', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true, data });
 });
+// ========================================
+// STRIPE INTEGRATION FOR PRO SUBSCRIPTIONS
+// Add this to your existing server.js
+// ========================================
 
+// 1. Install Stripe package
+// Run in terminal: npm install stripe
+
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://sksk-protech.netlify.app';
+
+// ========================================
+// PRICING
+// ========================================
+const PRICING = {
+  pro_monthly: {
+    price: 2900, // $29.00 in cents
+    interval: 'month',
+    name: 'SKSK ProTech Pro - Monthly'
+  },
+  pro_yearly: {
+    price: 29000, // $290.00 in cents (save $58/year)
+    interval: 'year',
+    name: 'SKSK ProTech Pro - Yearly'
+  }
+};
+
+// ========================================
+// CREATE STRIPE CHECKOUT SESSION
+// Frontend calls this to start subscription
+// ========================================
+app.post('/api/create-checkout-session', async (req, res) => {
+  try {
+    const { plan, customerEmail, customerName } = req.body;
+    
+    // Validate plan
+    if (!plan || !PRICING[plan]) {
+      return res.status(400).json({ error: 'Invalid plan selected' });
+    }
+    
+    const pricing = PRICING[plan];
+    
+    // Create Stripe checkout session
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'subscription',
+      customer_email: customerEmail || undefined,
+      client_reference_id: customerName || undefined,
+      
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: pricing.name,
+              description: 'Full access to Pro features: Invoice generation, customer database, VIN lookup, expense tracking, tax reports',
+            },
+            unit_amount: pricing.price,
+            recurring: {
+              interval: pricing.interval,
+            },
+          },
+          quantity: 1,
+        },
+      ],
+      
+      success_url: `${FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${FRONTEND_URL}?canceled=true`,
+      
+      metadata: {
+        plan: plan,
+        tier: 'pro'
+      },
+    });
+    
+    res.json({ 
+      ok: true, 
+      sessionId: session.id,
+      url: session.url 
+    });
+    
+  } catch (err) {
+    console.error('[STRIPE CHECKOUT ERROR]', err);
+    res.status(500).json({ error: err.message || 'Failed to create checkout session' });
+  }
+});
+
+// ========================================
+// STRIPE WEBHOOK (handles subscription events)
+// ========================================
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  
+  let event;
+  
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('[WEBHOOK ERROR]', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+  
+  console.log(`[STRIPE EVENT] ${event.type}`);
+  
+  // Handle different event types
+  switch (event.type) {
+    case 'checkout.session.completed':
+      await handleCheckoutCompleted(event.data.object);
+      break;
+      
+    case 'customer.subscription.created':
+      await handleSubscriptionCreated(event.data.object);
+      break;
+      
+    case 'customer.subscription.updated':
+      await handleSubscriptionUpdated(event.data.object);
+      break;
+      
+    case 'customer.subscription.deleted':
+      await handleSubscriptionDeleted(event.data.object);
+      break;
+      
+    case 'invoice.payment_succeeded':
+      console.log('[PAYMENT SUCCEEDED]', event.data.object.customer);
+      break;
+      
+    case 'invoice.payment_failed':
+      console.log('[PAYMENT FAILED]', event.data.object.customer);
+      await handlePaymentFailed(event.data.object);
+      break;
+      
+    default:
+      console.log(`[UNHANDLED EVENT] ${event.type}`);
+  }
+  
+  res.json({ received: true });
+});
+
+// ========================================
+// WEBHOOK HANDLERS
+// ========================================
+
+async function handleCheckoutCompleted(session) {
+  console.log('[CHECKOUT COMPLETED]', session.id);
+  
+  const customerEmail = session.customer_email;
+  const customerName = session.client_reference_id;
+  const stripeCustomerId = session.customer;
+  const subscriptionId = session.subscription;
+  
+  // Generate permanent access code
+  const accessCode = generateAccessCode();
+  
+  try {
+    // Create access code in database
+    const { error } = await supabase.from('access_codes').insert({
+      code: accessCode,
+      tier: 'pro',
+      customer_name: customerName || customerEmail,
+      email: customerEmail,
+      is_active: true,
+      max_uses: 999, // Unlimited for paid
+      stripe_customer_id: stripeCustomerId,
+      stripe_subscription_id: subscriptionId
+    });
+    
+    if (error) throw error;
+    
+    console.log(`[ACCESS CODE CREATED] ${accessCode} for ${customerEmail}`);
+    
+    // TODO: Send email with access code
+    // await sendWelcomeEmail(customerEmail, accessCode);
+    
+  } catch (err) {
+    console.error('[CHECKOUT HANDLER ERROR]', err);
+  }
+}
+
+async function handleSubscriptionCreated(subscription) {
+  console.log('[SUBSCRIPTION CREATED]', subscription.id);
+  
+  const { error } = await supabase
+    .from('access_codes')
+    .update({ 
+      is_active: true,
+      stripe_subscription_id: subscription.id,
+      stripe_subscription_status: subscription.status
+    })
+    .eq('stripe_customer_id', subscription.customer);
+  
+  if (error) console.error('[UPDATE ERROR]', error);
+}
+
+async function handleSubscriptionUpdated(subscription) {
+  console.log('[SUBSCRIPTION UPDATED]', subscription.id, subscription.status);
+  
+  const isActive = subscription.status === 'active' || subscription.status === 'trialing';
+  
+  const { error } = await supabase
+    .from('access_codes')
+    .update({ 
+      is_active: isActive,
+      stripe_subscription_status: subscription.status
+    })
+    .eq('stripe_subscription_id', subscription.id);
+  
+  if (error) console.error('[UPDATE ERROR]', error);
+}
+
+async function handleSubscriptionDeleted(subscription) {
+  console.log('[SUBSCRIPTION DELETED]', subscription.id);
+  
+  // Deactivate access code
+  const { error } = await supabase
+    .from('access_codes')
+    .update({ 
+      is_active: false,
+      stripe_subscription_status: 'canceled'
+    })
+    .eq('stripe_subscription_id', subscription.id);
+  
+  if (error) console.error('[UPDATE ERROR]', error);
+}
+
+async function handlePaymentFailed(invoice) {
+  console.log('[PAYMENT FAILED]', invoice.customer);
+  
+  // Optionally notify customer
+  // Could also give them a grace period before deactivating
+}
+
+// ========================================
+// GENERATE RANDOM ACCESS CODE
+// ========================================
+function generateAccessCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No confusing chars
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
+
+// ========================================
+// CHECK SUBSCRIPTION STATUS
+// ========================================
+app.get('/api/subscription-status/:email', async (req, res) => {
+  try {
+    const email = req.params.email;
+    
+    const { data, error } = await supabase
+      .from('access_codes')
+      .select('*')
+      .eq('email', email)
+      .eq('is_active', true)
+      .single();
+    
+    if (error || !data) {
+      return res.json({ 
+        ok: true, 
+        hasSubscription: false 
+      });
+    }
+    
+    // If has Stripe subscription, verify it's still active
+    if (data.stripe_subscription_id) {
+      const subscription = await stripe.subscriptions.retrieve(data.stripe_subscription_id);
+      
+      return res.json({
+        ok: true,
+        hasSubscription: true,
+        status: subscription.status,
+        currentPeriodEnd: subscription.current_period_end,
+        cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        accessCode: data.code
+      });
+    }
+    
+    res.json({ 
+      ok: true, 
+      hasSubscription: true,
+      accessCode: data.code 
+    });
+    
+  } catch (err) {
+    console.error('[SUBSCRIPTION STATUS ERROR]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========================================
+// CUSTOMER PORTAL (manage subscription)
+// ========================================
+app.post('/api/create-portal-session', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email required' });
+    }
+    
+    // Get Stripe customer ID from access code
+    const { data } = await supabase
+      .from('access_codes')
+      .select('stripe_customer_id')
+      .eq('email', email)
+      .single();
+    
+    if (!data || !data.stripe_customer_id) {
+      return res.status(404).json({ error: 'No subscription found' });
+    }
+    
+    const session = await stripe.billingPortal.sessions.create({
+      customer: data.stripe_customer_id,
+      return_url: `${FRONTEND_URL}`,
+    });
+    
+    res.json({ 
+      ok: true, 
+      url: session.url 
+    });
+    
+  } catch (err) {
+    console.error('[PORTAL SESSION ERROR]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========================================
+// ADD TO YOUR .env FILE:
+// STRIPE_SECRET_KEY=sk_test_...
+// STRIPE_WEBHOOK_SECRET=whsec_...
+// FRONTEND_URL=https://sksk-protech.netlify.app
+// ========================================
 // ========================================
 // START SERVER
 // ========================================
