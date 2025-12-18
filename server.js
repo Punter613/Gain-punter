@@ -292,18 +292,19 @@ app.post('/api/generate-estimate', async (req, res) => {
     });
   }
 });
-// CUSTOMERS
+// CUSTOMERS (FIXED - async/await)
 app.get('/api/customers', async (req, res) => {
   try {
     const { data, error } = await supabase.from('customers').select('*').order('name');
     if (error) throw error;
     res.json({ ok: true, customers: data || [] });
   } catch (err) {
+    console.error('[CUSTOMERS ERROR]', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ACCESS CODE VALIDATION
+// ACCESS CODE VALIDATION (FIXED)
 app.post('/api/validate-access', async (req, res) => {
   try {
     const { accessCode } = req.body;
@@ -338,6 +339,7 @@ app.post('/api/validate-access', async (req, res) => {
     res.status(500).json({ valid: false, error: 'Server error' });
   }
 });
+
 // VIN LOOKUP
 app.get('/api/vin-lookup/:vin', async (req, res) => {
   try {
