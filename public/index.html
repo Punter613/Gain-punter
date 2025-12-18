@@ -1,1506 +1,255 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SKSK ProTech – AI Auto Estimator</title>
+  <title>SKSK ProTech - AI Auto Estimator</title>
+  <script src="https://js.stripe.com/v3/"></script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    :root {
-      --bg: #000000;
-      --card: #18181b;
-      --accent: #dc2626;
-      --accent-dark: #b91c1c;
-      --text-muted: #9ca3af;
-      --border-subtle: #27272a;
-      --success-bg: rgba(34,197,94,0.12);
-      --success-border: #22c55e;
-      --warning-bg: rgba(251,191,36,0.12);
-      --warning-border: #fbbf24;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: radial-gradient(circle at top, #111827 0, #000 55%);
-      color: #fff;
-      min-height: 100vh;
-      padding: 1.5rem 1rem 3rem;
-    }
-    .page {
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-    /* NAV */
-    .nav {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 2rem;
-      gap: 1rem;
-    }
-    .nav-left {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-    .logo-mark {
-      width: 38px;
-      height: 38px;
-      border-radius: 10px;
-      border: 2px solid var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #000;
-      box-shadow: 0 0 24px rgba(220,38,38,0.6);
-    }
-    .logo-mark svg {
-      width: 24px;
-      height: 24px;
-      color: var(--accent);
-    }
-    .logo-text {
-      display: flex;
-      flex-direction: column;
-    }
-    .logo-text span:first-child {
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      font-size: 0.9rem;
-      text-transform: uppercase;
-    }
-    .logo-text span:last-child {
-      font-size: 0.7rem;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.18em;
-    }
-    .nav-actions {
-      display: flex;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-    .btn {
-      border-radius: 999px;
-      padding: 0.55rem 1.15rem;
-      font-size: 0.85rem;
-      border: 1px solid var(--border-subtle);
-      background: rgba(24,24,27,0.9);
-      color: #e5e7eb;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      white-space: nowrap;
-    }
-    .btn-primary {
-      background: linear-gradient(to right, var(--accent), var(--accent-dark));
-      border-color: transparent;
-      color: #fff;
-      box-shadow: 0 12px 30px rgba(220,38,38,0.45);
-    }
-    .btn-ghost {
-      background: transparent;
-    }
-    .btn-sm {
-      padding: 0.4rem 0.9rem;
-      font-size: 0.78rem;
-      border-radius: 999px;
-    }
-    .pill {
-      border-radius: 999px;
-      padding: 0.15rem 0.6rem;
-      background: rgba(34,197,94,0.1);
-      border: 1px solid rgba(34,197,94,0.5);
-      font-size: 0.7rem;
-      color: #a7f3d0;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.3rem;
-    }
-    .pill-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 999px;
-      background: #22c55e;
-      box-shadow: 0 0 10px #22c55e;
-    }
-
-    /* HERO */
-    .hero {
-      display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-      gap: 2.5rem;
-      align-items: center;
-      margin-bottom: 3rem;
-    }
-    @media (max-width: 900px) {
-      .hero {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-    .hero-main h1 {
-      font-size: clamp(2.1rem, 3vw, 3rem);
-      line-height: 1.05;
-      margin-top: 0.75rem;
-      margin-bottom: 0.6rem;
-    }
-    .hero-main h1 span.accent {
-      color: var(--accent);
-      text-shadow: 0 0 20px rgba(220,38,38,0.7);
-    }
-    .hero-main p.lead {
-      color: var(--text-muted);
-      max-width: 34rem;
-      font-size: 0.98rem;
-      line-height: 1.6;
-      margin-bottom: 1.1rem;
-    }
-    .hero-badges {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-bottom: 0.75rem;
-      font-size: 0.78rem;
-      color: #9ca3af;
-    }
-    .hero-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      padding: 0.25rem 0.6rem;
-      border-radius: 999px;
-      border: 1px solid rgba(55,65,81,0.9);
-      background: rgba(17,24,39,0.9);
-    }
-    .hero-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem;
-      margin-bottom: 0.75rem;
-    }
-    .hero-note {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-    }
-    .hero-note strong { color: #e5e7eb; }
-
-    .hero-right {
-      background: radial-gradient(circle at top, rgba(220,38,38,0.22), transparent 55%);
-      padding: 1px;
-      border-radius: 18px;
-    }
-    .hero-panel {
-      border-radius: 17px;
-      background: radial-gradient(circle at top left, #111827, #020617);
-      border: 1px solid rgba(55,65,81,0.9);
-      padding: 1.25rem 1.25rem 1.1rem;
-      box-shadow:
-        0 22px 60px rgba(15,23,42,0.85),
-        0 0 0 1px rgba(15,23,42,0.9);
-    }
-    .hero-panel-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.75rem;
-      font-size: 0.85rem;
-    }
-    .hero-tag-row {
-      display: flex;
-      gap: 0.35rem;
-      flex-wrap: wrap;
-    }
-    .badge {
-      border-radius: 999px;
-      padding: 0.18rem 0.55rem;
-      font-size: 0.7rem;
-      border: 1px solid rgba(55,65,81,0.9);
-      color: #e5e7eb;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-      background: rgba(15,23,42,0.9);
-    }
-    .badge-free {
-      border-color: rgba(34,197,94,0.7);
-      color: #bbf7d0;
-    }
-    .badge-pro {
-      border-color: rgba(239,68,68,0.8);
-      color: #fecaca;
-    }
-    .hero-fields {
-      display: grid;
-      gap: 0.6rem;
-      margin-bottom: 0.7rem;
-      font-size: 0.78rem;
-    }
-    .hero-field {
-      display: flex;
-      justify-content: space-between;
-      gap: 0.75rem;
-      padding: 0.45rem 0.55rem;
-      border-radius: 8px;
-      background: rgba(15,23,42,0.95);
-      border: 1px solid rgba(31,41,55,0.95);
-      align-items: center;
-    }
-    .hero-field-label {
-      color: #9ca3af;
-    }
-    .hero-field-value {
-      color: #e5e7eb;
-      font-weight: 500;
-    }
-    .hero-field-pill {
-      font-size: 0.7rem;
-      padding: 0.1rem 0.45rem;
-      border-radius: 999px;
-      border: 1px solid rgba(55,65,81,0.9);
-      color: #9ca3af;
-    }
-    .hero-alert {
-      margin-top: 0.25rem;
-      padding: 0.45rem 0.55rem;
-      border-radius: 8px;
-      background: rgba(34,197,94,0.08);
-      border: 1px dashed rgba(34,197,94,0.7);
-      font-size: 0.75rem;
-      color: #bbf7d0;
-      display: flex;
-      justify-content: space-between;
-      gap: 0.75rem;
-      align-items: center;
-    }
-    .hero-alert span {
-      opacity: 0.9;
-    }
-
-    /* FEATURES / PRICING */
-    .section {
-      margin-bottom: 2.5rem;
-    }
-    .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 1rem;
-      margin-bottom: 1.1rem;
-    }
-    .section-title {
-      font-size: 1.1rem;
-      font-weight: 600;
-    }
-    .section-sub {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-    .feature-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.75rem;
-    }
-    @media (max-width: 720px) {
-      .feature-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-    .feature-card {
-      background: #111827;
-      border-radius: 12px;
-      border: 1px solid var(--border-subtle);
-      padding: 0.9rem 0.9rem 0.85rem;
-      font-size: 0.82rem;
-    }
-    .feature-card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.4rem;
-    }
-    .feature-title {
-      font-weight: 500;
-    }
-    .feature-tag-row {
-      display: flex;
-      gap: 0.25rem;
-      flex-wrap: wrap;
-      font-size: 0.7rem;
-    }
-    .tag-free {
-      padding: 0.1rem 0.45rem;
-      border-radius: 999px;
-      border: 1px solid rgba(34,197,94,0.7);
-      color: #bbf7d0;
-    }
-    .tag-pro {
-      padding: 0.1rem 0.45rem;
-      border-radius: 999px;
-      border: 1px solid rgba(239,68,68,0.8);
-      color: #fecaca;
-    }
-    .feature-body {
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-
-    .pricing-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.9rem;
-    }
-    @media (max-width: 720px) {
-      .pricing-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-    .pricing-card {
-      border-radius: 14px;
-      padding: 1rem 1rem 0.9rem;
-      border: 1px solid var(--border-subtle);
-      background: #020617;
-    }
-    .pricing-card.pro {
-      border-color: rgba(248,113,113,0.9);
-      background: radial-gradient(circle at top, rgba(220,38,38,0.16), #020617);
-      box-shadow: 0 14px 40px rgba(220,38,38,0.4);
-      position: relative;
-      overflow: hidden;
-    }
-    .pricing-label {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.15em;
-      color: var(--text-muted);
-      margin-bottom: 0.3rem;
-    }
-    .pricing-name {
-      font-size: 1.1rem;
-      font-weight: 600;
-      margin-bottom: 0.3rem;
-    }
-    .pricing-price {
-      font-size: 1.3rem;
-      font-weight: 700;
-      margin-bottom: 0.3rem;
-    }
-    .pricing-note {
-      font-size: 0.76rem;
-      color: var(--text-muted);
-      margin-bottom: 0.6rem;
-    }
-    .pricing-list {
-      list-style: none;
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin-bottom: 0.8rem;
-    }
-    .pricing-list li {
-      display: flex;
-      gap: 0.4rem;
-      margin-bottom: 0.28rem;
-    }
-    .pricing-list li span:first-child {
-      color: #4ade80;
-    }
-    .pricing-list li.pro-only span:first-child {
-      color: #fb7185;
-    }
-    .pricing-cta {
-      display: flex;
-      gap: 0.4rem;
-      flex-wrap: wrap;
-    }
-
-    /* APP / ESTIMATOR SECTION */
-    .app-shell {
-      border-radius: 18px;
-      border: 1px solid rgba(55,65,81,0.9);
-      background: radial-gradient(circle at top left, #020617, #020617);
-      padding: 1.2rem;
-      box-shadow:
-        0 20px 60px rgba(15,23,42,0.9),
-        0 0 0 1px rgba(15,23,42,0.85);
-    }
-    .app-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-      margin-bottom: 0.9rem;
-      font-size: 0.85rem;
-    }
-    .app-mode-pill {
-      border-radius: 999px;
-      padding: 0.2rem 0.7rem;
-      font-size: 0.75rem;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      border: 1px solid rgba(55,65,81,0.9);
-      background: #020617;
-      color: #e5e7eb;
-    }
-    .app-mode-pill.free {
-      border-color: rgba(34,197,94,0.7);
-      color: #bbf7d0;
-    }
-    .app-mode-pill.pro {
-      border-color: rgba(239,68,68,0.8);
-      color: #fecaca;
-    }
-    .app-mode-pill-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 999px;
-    }
-    .app-mode-pill.free .app-mode-pill-dot {
-      background: #22c55e;
-      box-shadow: 0 0 9px #22c55e;
-    }
-    .app-mode-pill.pro .app-mode-pill-dot {
-      background: #ef4444;
-      box-shadow: 0 0 9px #ef4444;
-    }
-    .app-note {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-    }
-
-    .app-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-      gap: 1rem;
-    }
-    @media (max-width: 900px) {
-      .app-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-    .card {
-      background: #020617;
-      border-radius: 14px;
-      border: 1px solid rgba(55,65,81,0.9);
-      padding: 1rem;
-    }
-    .card h2 {
-      font-size: 0.98rem;
-      margin-bottom: 0.75rem;
-      display: flex;
-      align-items: center;
-      gap: 0.45rem;
-    }
-    .card h2 span.icon {
-      width: 22px;
-      height: 22px;
-      border-radius: 999px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid rgba(55,65,81,0.9);
-      font-size: 0.75rem;
-      color: var(--text-muted);
-    }
-
-    .form-group { margin-bottom: 0.85rem; }
-    label {
-      display: block;
-      font-size: 0.78rem;
-      margin-bottom: 0.38rem;
-      color: #d1d5db;
-    }
-    input, textarea, select {
-      width: 100%;
-      padding: 0.6rem 0.7rem;
-      border-radius: 8px;
-      border: 1px solid rgba(55,65,81,0.95);
-      background: rgba(15,23,42,0.95);
-      color: #e5e7eb;
-      font-size: 0.85rem;
-      font-family: inherit;
-    }
-    input:focus, textarea:focus, select:focus {
-      border-color: var(--accent);
-      outline: none;
-      box-shadow: 0 0 0 1px rgba(220,38,38,0.4);
-    }
-    textarea {
-      resize: none;
-      min-height: 90px;
-    }
-    small {
-      display: block;
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      margin-top: 0.25rem;
-    }
-    .row {
-      display: flex;
-      gap: 0.5rem;
-      align-items: center;
-    }
-
-    .btn-main {
-      width: 100%;
-      border-radius: 9px;
-      padding: 0.7rem 1rem;
-      border: none;
-      background: linear-gradient(to right, var(--accent), var(--accent-dark));
-      color: #fff;
-      font-size: 0.9rem;
-      font-weight: 600;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.4rem;
-      cursor: pointer;
-      margin-top: 0.3rem;
-    }
-    .btn-main:disabled {
-      background: #4b5563;
-      box-shadow: none;
-      cursor: not-allowed;
-    }
-    .spinner {
-      width: 18px;
-      height: 18px;
-      border-radius: 999px;
-      border: 2px solid #fff;
-      border-top-color: transparent;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    .alert {
-      padding: 0.7rem 0.75rem;
-      border-radius: 8px;
-      font-size: 0.78rem;
-      margin-bottom: 0.7rem;
-      display: none;
-    }
-    .alert.error {
-      background: rgba(220,38,38,0.14);
-      border: 1px solid #dc2626;
-      color: #fecaca;
-    }
-    .alert.success {
-      background: rgba(34,197,94,0.14);
-      border: 1px solid #22c55e;
-      color: #bbf7d0;
-    }
-
-    .estimate-empty {
-      text-align: center;
-      padding: 2.4rem 1rem;
-      color: var(--text-muted);
-      font-size: 0.85rem;
-    }
-    .estimate-empty-icon {
-      width: 40px;
-      height: 40px;
-      border-radius: 999px;
-      border: 1px dashed rgba(75,85,99,0.9);
-      margin: 0 auto 0.75rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #4b5563;
-    }
-    .estimate-content {
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-      font-size: 0.83rem;
-    }
-    .info-box {
-      background: #020617;
-      border-radius: 10px;
-      border: 1px solid rgba(55,65,81,0.9);
-      padding: 0.8rem 0.85rem;
-    }
-    .info-box h3 {
-      font-size: 0.9rem;
-      margin-bottom: 0.25rem;
-    }
-    .info-box p {
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-    .part-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.3rem;
-      color: #e5e7eb;
-    }
-    .part-row span:first-child {
-      color: var(--text-muted);
-    }
-    .part-row.total {
-      border-top: 1px solid rgba(75,85,99,0.9);
-      padding-top: 0.4rem;
-      margin-top: 0.4rem;
-      font-weight: 600;
-    }
-    .total-box {
-      border-radius: 10px;
-      padding: 0.8rem 0.85rem;
-      background: linear-gradient(to right, var(--accent), var(--accent-dark));
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      font-size: 0.95rem;
-      font-weight: 600;
-    }
-    .total-box span:last-child {
-      font-size: 1.15rem;
-    }
-    .tax-box {
-      border-radius: 10px;
-      padding: 0.8rem 0.85rem;
-      background: var(--warning-bg);
-      border: 1px solid var(--warning-border);
-      font-size: 0.8rem;
-      color: #fef3c7;
-    }
-    .tax-row {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 0.25rem;
-    }
-    .tax-row.takehome {
-      border-top: 1px solid rgba(250,204,21,0.5);
-      padding-top: 0.35rem;
-      margin-top: 0.35rem;
-      font-weight: 600;
-      color: #fefce8;
-    }
-
-    /* PRO-ONLY VISUAL LOCK */
-    .pro-only {
-      position: relative;
-    }
-    body:not(.pro-mode) .pro-only {
-      opacity: 0.35;
-      pointer-events: none;
-    }
-    body:not(.pro-mode) .pro-only::after {
-      content: "PRO";
-      position: absolute;
-      top: 6px;
-      right: 6px;
-      font-size: 0.65rem;
-      letter-spacing: 0.12em;
-      padding: 0.1rem 0.45rem;
-      border-radius: 999px;
-      border: 1px solid rgba(248,113,113,0.9);
-      background: rgba(24,24,27,0.98);
-      color: #fecaca;
-    }
-
-    /* PRO MODAL */
-    .modal-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.7);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 40;
-    }
-    .modal-backdrop.show {
-      display: flex;
-    }
-    .modal {
-      width: 100%;
-      max-width: 380px;
-      background: #020617;
-      border-radius: 14px;
-      border: 1px solid rgba(75,85,99,0.9);
-      padding: 1.1rem 1.1rem 1rem;
-      box-shadow:
-        0 18px 45px rgba(0,0,0,0.9),
-        0 0 0 1px rgba(15,23,42,0.9);
-    }
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.55rem;
-    }
-    .modal-title {
-      font-size: 0.95rem;
-      font-weight: 600;
-    }
-    .modal-close {
-      border: none;
-      background: transparent;
-      color: var(--text-muted);
-      cursor: pointer;
-      font-size: 1.1rem;
-      line-height: 1;
-    }
-    .modal-body {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      margin-bottom: 0.6rem;
-    }
-    .modal-body input {
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      text-align: center;
-    }
-    .modal-footer {
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      margin-top: 0.45rem;
-    }
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+    .screen { display: none; } .screen.active { display: block; }
+    button { background: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; }
+    button:hover { background: #0056b3; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    input, textarea, select { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+    textarea { height: 100px; resize: vertical; }
+    .estimate { background: white; padding: 25px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .section { background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }
+    .price { font-size: 24px; font-weight: bold; color: #28a745; }
+    #status { padding: 10px; border-radius: 6px; margin: 10px 0; }
+    .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    h1 { color: #333; text-align: center; }
+    h2 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
   </style>
 </head>
 <body>
-  <div class="page">
-    <!-- NAV -->
-    <header class="nav">
-      <div class="nav-left">
-        <div class="logo-mark">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke="currentColor" fill="none">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10l-2 4h3l-2 4m5.5-14.5l-3 3M6 3l3 3m-3 9l3 3m9-3l-3 3" />
-          </svg>
-        </div>
-        <div class="logo-text">
-          <span>SKSK PROTECH</span>
-          <span>AI AUTO ESTIMATOR</span>
-        </div>
-      </div>
-      <div class="nav-actions">
-        <button id="navStartFree" class="btn btn-primary">
-          <span>Start Free Trial</span>
-        </button>
-        <button id="navProCode" class="btn btn-ghost btn-sm">
-          <span>Have a Pro code?</span>
-        </button>
-      </div>
-    </header>
-
-    <!-- HERO -->
-    <section class="hero">
-      <div class="hero-main">
-        <span class="pill">
-          <span class="pill-dot"></span>
-          Built for mobile mechanics
-        </span>
-        <h1>
-          Your new sidekick. <span class="accent">You're good at what you do.</span><br>
-          Now make it easier, faster, more accurate, and automatic.
-        </h1>
-        <p class="lead">
-          Drop in the basics and let the AI do the heavy lifting. Clean estimates, clear pricing, and pro‑level clarity – without spending your whole night in the notebook.
-        </p>
-        <div class="hero-badges">
-          <span class="hero-badge">⚡ Estimates in seconds</span>
-          <span class="hero-badge">📄 Customer‑ready layout</span>
-          <span class="hero-badge">🛠️ Built for real‑world diagnostics</span>
-        </div>
-        <div class="hero-actions">
-          <button id="heroStartFree" class="btn btn-primary">
-            <span>Start Free Trial</span>
-          </button>
-          <button id="heroScrollToApp" class="btn">
-            <span>See estimator</span>
-          </button>
-        </div>
-        <p class="hero-note">
-          <strong>Free tier:</strong> full estimate engine unlocked. VIN & OEM tools turn on when you upgrade to Pro.
-        </p>
-      </div>
-
-      <aside class="hero-right">
-        <div class="hero-panel">
-          <div class="hero-panel-header">
-            <div>
-              <div style="font-size:0.78rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.16em;">Live Preview</div>
-              <div style="font-size:0.92rem; font-weight:600;">What SKSK ProTech does</div>
-            </div>
-            <div class="hero-tag-row">
-              <span class="badge badge-free">Free estimate engine</span>
-              <span class="badge badge-pro">Pro: VIN & OEM tools</span>
-            </div>
-          </div>
-          <div class="hero-fields">
-            <div class="hero-field">
-              <div>
-                <div class="hero-field-label">VIN auto‑decode</div>
-                <div class="hero-field-value">Year / make / model in one tap</div>
-              </div>
-              <span class="hero-field-pill">PRO</span>
-            </div>
-            <div class="hero-field">
-              <div>
-                <div class="hero-field-label">AI job breakdown</div>
-                <div class="hero-field-value">Labor, parts, shop supplies</div>
-              </div>
-              <span class="hero-field-pill">FREE</span>
-            </div>
-            <div class="hero-field">
-              <div>
-                <div class="hero-field-label">Customer‑ready summary</div>
-                <div class="hero-field-value">Plain‑English explanation</div>
-              </div>
-              <span class="hero-field-pill">FREE</span>
-            </div>
-            <div class="hero-field">
-              <div>
-                <div class="hero-field-label">Factory data assist</div>
-                <div class="hero-field-value">Labor times & torque specs</div>
-              </div>
-              <span class="hero-field-pill">PRO</span>
-            </div>
-          </div>
-          <div class="hero-alert">
-            <span>
-              Free trial hits the core: estimate engine, labor math, and tax set‑aside so you know what’s actually yours.
-            </span>
-            <button id="heroMiniStart" class="btn btn-sm btn-primary" style="padding-inline:0.7rem;">
-              Go free
-            </button>
-          </div>
-        </div>
-      </aside>
-    </section>
-
-    <!-- WHAT IT DOES -->
-    <section class="section">
-      <div class="section-header">
-        <div>
-          <div class="section-title">What it does for you</div>
-          <div class="section-sub">Everything you actually use in the field – without the bloated shop software bloat.</div>
-        </div>
-      </div>
-      <div class="feature-grid">
-        <article class="feature-card">
-          <div class="feature-card-header">
-            <div class="feature-title">Instant AI estimates</div>
-            <div class="feature-tag-row">
-              <span class="tag-free">Free</span>
-            </div>
-          </div>
-          <p class="feature-body">
-            Type what you’re doing – “front pads & rotors”, “heater core diagnosis”, “engine swap prep” – and get a full breakdown: labor hours, parts list, shop supplies, and customer‑facing explanation.
-          </p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-card-header">
-            <div class="feature-title">VIN & vehicle autofill</div>
-            <div class="feature-tag-row">
-              <span class="tag-pro">Pro</span>
-            </div>
-          </div>
-          <p class="feature-body">
-            Drop in a 17‑digit VIN and let SKSK ProTech fill year, make, model, engine, and trim so you’re not chasing details or ordering the wrong part.
-          </p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-card-header">
-            <div class="feature-title">Shop‑ready tax & take‑home</div>
-            <div class="feature-tag-row">
-              <span class="tag-free">Free</span>
-            </div>
-          </div>
-          <p class="feature-body">
-            See total, recommended tax set‑aside, and what you actually keep. This stays on your side – never on the customer’s copy.
-          </p>
-        </article>
-        <article class="feature-card">
-          <div class="feature-card-header">
-            <div class="feature-title">Factory‑style guidance</div>
-            <div class="feature-tag-row">
-              <span class="tag-pro">Pro</span>
-            </div>
-          </div>
-          <p class="feature-body">
-            Tie into OEM‑style labor times, torque specs, and common gotchas so you’re quoting like a full shop – even if you’re working out of a truck.
-          </p>
-        </article>
-      </div>
-    </section>
-
-    <!-- PRICING -->
-    <section class="section">
-      <div class="section-header">
-        <div>
-          <div class="section-title">Start free. Level up when you’re ready.</div>
-        </div>
-      </div>
-      <div class="pricing-grid">
-        <div class="pricing-card">
-          <div class="pricing-label">Free</div>
-          <div class="pricing-name">Field Estimator</div>
-          <div class="pricing-price">$0</div>
-          <div class="pricing-note">No card. No BS. Just the core engine.</div>
-          <ul class="pricing-list">
-            <li><span>•</span><span>Unlimited AI estimates</span></li>
-            <li><span>•</span><span>Labor & parts breakdown</span></li>
-            <li><span>•</span><span>Shop supplies & tax set‑aside math</span></li>
-            <li><span>•</span><span>Customer‑ready explanation text</span></li>
-          </ul>
-          <div class="pricing-cta">
-            <button id="pricingStartFree" class="btn btn-primary btn-sm" style="width:auto;">Start free</button>
-          </div>
-        </div>
-        <div class="pricing-card pro">
-          <div class="pricing-label">Coming Online</div>
-          <div class="pricing-name">Pro Shop Mode</div>
-          <div class="pricing-price">$14.99<span style="font-size:0.78rem; font-weight:500;">/mo</span></div>
-          <div class="pricing-note">For small shops, mobile crews, and serious side hustlers.</div>
-          <ul class="pricing-list">
-            <li class="pro-only"><span>•</span><span>VIN auto‑decode & vehicle autofill</span></li>
-            <li class="pro-only"><span>•</span><span>OEM‑style labor times & torque hints</span></li>
-            <li class="pro-only"><span>•</span><span>Customer database & job history</span></li>
-            <li class="pro-only"><span>•</span><span>Photo‑based damage notes (roadmap)</span></li>
-          </ul>
-          <div class="pricing-cta">
-            <button id="pricingProCode" class="btn btn-sm" style="width:auto;">Enter Pro access code</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ESTIMATOR APP -->
-    <section id="app" class="section">
-      <div class="section-header">
-        <div>
-          <div class="section-title">Try the estimator right now</div>
-          <div class="section-sub">This is the actual tool – not a fake demo. Free tier hits the core so you can see if it earns its spot in your workflow.</div>
-        </div>
-      </div>
-
-      <div class="app-shell">
-        <div class="app-header">
-          <div id="modePill" class="app-mode-pill free">
-            <span class="app-mode-pill-dot"></span>
-            <span id="modeLabel">Free trial – core estimator active</span>
-          </div>
-          <div class="app-note">
-            VIN & OEM helpers are visible but locked until you enter a Pro access code.
-          </div>
-        </div>
-
-        <div class="app-grid">
-          <!-- LEFT: FORM -->
-          <div class="card">
-            <h2><span class="icon">🧾</span><span>Job details</span></h2>
-
-            <form id="estimateForm">
-              <div class="form-group pro-only">
-                <label for="customerSelect">Customer (Pro)</label>
-                <select id="customerSelect">
-                  <option value="">+ New customer</option>
-                </select>
-                <small>Customer database & history is a Pro feature – visible here so you see what’s coming.</small>
-              </div>
-
-              <div class="form-group">
-                <label for="customerName">Customer name *</label>
-                <input type="text" id="customerName" placeholder="John Smith" required>
-              </div>
-
-              <div class="form-group">
-                <label for="customerPhone">Phone</label>
-                <input type="tel" id="customerPhone" placeholder="330-555-1212">
-              </div>
-
-              <div class="form-group">
-                <label for="customerEmail">Email</label>
-                <input type="email" id="customerEmail" placeholder="john@example.com">
-              </div>
-
-              <div class="form-group pro-only">
-                <label for="vin">VIN lookup (Pro)</label>
-                <div class="row">
-                  <input type="text" id="vin" maxlength="17" placeholder="Enter 17-digit VIN" style="flex:1;">
-                  <button type="button" id="vinLookupBtn" class="btn btn-sm" style="width:auto; padding-inline:0.8rem;">Lookup</button>
-                </div>
-                <small id="vinStatus">VIN decode unlocks with Pro – you can still type vehicle details manually below.</small>
-              </div>
-
-              <div class="form-group">
-                <label for="vehicle">Vehicle</label>
-                <input type="text" id="vehicle" placeholder="2008 Ford F-150 5.4L V8">
-              </div>
-
-              <div class="form-group pro-only">
-                <label style="display:flex; align-items:center; gap:0.4rem;">
-                  <input type="checkbox" id="useOemData" style="width:auto;">
-                  <span>Use factory-style OEM data assist (Pro)</span>
-                </label>
-                <small>When Pro is on, this pulls in labor‑time style guidance & torque hints.</small>
-              </div>
-
-              <div class="form-group">
-                <label for="laborRate">Your labor rate ($/hr)</label>
-                <div class="row">
-                  <span style="color:#22c55e; font-size:1.1rem;">$</span>
-                  <input type="number" id="laborRate" value="65" min="0" max="200" step="5" style="max-width:110px;">
-                  <span style="font-size:0.78rem; color:var(--text-muted);">/hr</span>
-                </div>
-                <small>Friends & family: 40 • Standard: 65 • Premium/mobile: 90</small>
-              </div>
-
-              <div class="form-group">
-                <label for="description">Job description *</label>
-                <textarea id="description" rows="4" placeholder="Example: Front pads and rotors with hardware, flush brake fluid" required></textarea>
-              </div>
-
-              <div id="errorBox" class="alert error"></div>
-              <div id="successBox" class="alert success"></div>
-
-              <button type="submit" id="submitBtn" class="btn-main">
-                <span>Generate estimate</span>
-              </button>
-            </form>
-          </div>
-
-          <!-- RIGHT: ESTIMATE -->
-          <div class="card">
-            <h2><span class="icon">📊</span><span>Estimate</span></h2>
-            <div id="estimateDisplay">
-              <div class="estimate-empty">
-                <div class="estimate-empty-icon">🛠️</div>
-                <p>Run an estimate to see the full breakdown: labor, parts, shop supplies, and your real take‑home.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  </div>
-
-  <!-- PRO CODE MODAL -->
-  <div id="proModalBackdrop" class="modal-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title">Enter Pro access code</div>
-        <button class="modal-close" id="modalCloseBtn">&times;</button>
-      </div>
-      <div class="modal-body">
-        <p style="margin-bottom:0.5rem;">
-          If Brian gave you a Pro code, drop it here to unlock VIN lookup, OEM‑style helpers, customer history, and more.
-        </p>
-        <input type="text" id="proCodeInput" placeholder="ENTER CODE" />
-        <div id="proModalError" style="margin-top:0.45rem; color:#fecaca; font-size:0.76rem; display:none;"></div>
-        <div id="proModalSuccess" style="margin-top:0.45rem; color:#bbf7d0; font-size:0.76rem; display:none;"></div>
-      </div>
-      <button id="proCodeSubmit" class="btn-main" style="margin-top:0;">
-        Unlock Pro
-      </button>
-      <div class="modal-footer">
-        No Pro code yet? Run the free estimator first and see if it earns your money.
-      </div>
+  <!-- Access Screen -->
+  <div id="accessScreen" class="screen active">
+    <div class="section">
+      <h1>🔧 SKSK ProTech</h1>
+      <p style="text-align: center; color: #666;">AI-Powered Auto Repair Estimator</p>
+      <p>Enter your Pro Access Code:</p>
+      <input id="accessCode" placeholder="Enter 8-character code (e.g. ABC123XY)" />
+      <button onclick="validateAccess()">Unlock Pro Features</button>
+      <div id="accessStatus"></div>
     </div>
   </div>
 
+  <!-- Main Estimator -->
+  <div id="mainScreen" class="screen">
+    <button onclick="showAccess()" style="background: #6c757d;">← Back to Access</button>
+    
+    <div class="section">
+      <h2>📋 Create New Estimate</h2>
+      <input id="customerName" placeholder="Customer Name *" required />
+      <input id="phone" placeholder="Phone (optional)" />
+      <input id="vin" placeholder="VIN (17 characters)" maxlength="17" />
+      <button onclick="decodeVin()" style="width: auto; margin-top: 5px;">🔍 Decode VIN</button>
+      <input id="vehicle" placeholder="Vehicle (auto-filled from VIN)" />
+      <textarea id="description" placeholder="Describe the repair needed... (e.g. 'Replace water pump and flush coolant')" required></textarea>
+      <input id="laborRate" type="number" step="0.01" placeholder="Labor Rate ($/hr)" value="65" min="50" max="200" />
+      <button onclick="generateEstimate()">🤖 Generate AI Estimate</button>
+    </div>
+
+    <div id="estimateResult"></div>
+    
+    <div id="paySection" style="display:none;">
+      <div class="section">
+        <h3>💳 Pay Invoice</h3>
+        <div id="payButton">
+          <button onclick="createCheckout()">Pay with Stripe Card</button>
+        </div>
+        <div id="payStatus"></div>
+      </div>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
   <script>
-    const BACKEND_URL = window.location.hostname === 'localhost' ? '' : 'https://p613-backend.onrender.com';
+    // CONFIG - UPDATE THESE
+    const BACKEND_URL = 'https://p613-backend.onrender.com';
+    const STRIPE_PUBLISHABLE_KEY = 'pk_test_YOUR_STRIPE_PUBLISHABLE_KEY_HERE'; // ← ADD YOUR KEY
+    const stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
+    
+    let currentJobId = null;
+    let userTier = null;
+    let currentEstimate = null;
 
-    const estimateForm = document.getElementById('estimateForm');
-    const submitBtn = document.getElementById('submitBtn');
-    const errorBox = document.getElementById('errorBox');
-    const successBox = document.getElementById('successBox');
-    const estimateDisplay = document.getElementById('estimateDisplay');
-
-    const customerSelect = document.getElementById('customerSelect');
-    const customerNameInput = document.getElementById('customerName');
-    const customerPhoneInput = document.getElementById('customerPhone');
-    const customerEmailInput = document.getElementById('customerEmail');
-    const vinInput = document.getElementById('vin');
-    const vinLookupBtn = document.getElementById('vinLookupBtn');
-    const vinStatus = document.getElementById('vinStatus');
-    const vehicleInput = document.getElementById('vehicle');
-    const useOemDataCheckbox = document.getElementById('useOemData');
-    const laborRateInput = document.getElementById('laborRate');
-    const descriptionInput = document.getElementById('description');
-
-    const modePill = document.getElementById('modePill');
-    const modeLabel = document.getElementById('modeLabel');
-
-    const navStartFree = document.getElementById('navStartFree');
-    const navProCode = document.getElementById('navProCode');
-    const heroStartFree = document.getElementById('heroStartFree');
-    const heroMiniStart = document.getElementById('heroMiniStart');
-    const pricingStartFree = document.getElementById('pricingStartFree');
-    const pricingProCode = document.getElementById('pricingProCode');
-    const heroScrollToApp = document.getElementById('heroScrollToApp');
-
-    const proModalBackdrop = document.getElementById('proModalBackdrop');
-    const modalCloseBtn = document.getElementById('modalCloseBtn');
-    const proCodeInput = document.getElementById('proCodeInput');
-    const proCodeSubmit = document.getElementById('proCodeSubmit');
-    const proModalError = document.getElementById('proModalError');
-    const proModalSuccess = document.getElementById('proModalSuccess');
-
-    let customers = [];
-    let currentTier = 'free'; // 'free' or 'pro'
-
-    function setTier(tier, customerName) {
-      currentTier = tier;
-      if (tier === 'pro') {
-        document.body.classList.add('pro-mode');
-        modePill.classList.remove('free');
-        modePill.classList.add('pro');
-        modeLabel.textContent = 'Pro mode – VIN & OEM helpers unlocked';
-        successBox.style.display = 'none';
-        errorBox.style.display = 'none';
-        // store
-        const payload = {
-          tier: 'pro',
-          customer: customerName || 'Pro User',
-          expires: null
-        };
-        localStorage.setItem('sksk_autopro_access', JSON.stringify(payload));
-        // load pro-only data
-        loadCustomers();
-      } else {
-        document.body.classList.remove('pro-mode');
-        modePill.classList.remove('pro');
-        modePill.classList.add('free');
-        modeLabel.textContent = 'Free trial – core estimator active';
-        const payload = {
-          tier: 'free',
-          customer: 'Free Trial',
-          expires: null
-        };
-        localStorage.setItem('sksk_autopro_access', JSON.stringify(payload));
-      }
+    async function showStatus(message, isError = false) {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = message;
+      statusEl.className = `success ${isError ? 'error' : ''}`;
+      statusEl.style.display = 'block';
+      setTimeout(() => statusEl.style.display = 'none', 5000);
     }
 
-    function openProModal() {
-      proModalError.style.display = 'none';
-      proModalSuccess.style.display = 'none';
-      proCodeInput.value = '';
-      proModalBackdrop.classList.add('show');
-      setTimeout(() => proCodeInput.focus(), 50);
-    }
-    function closeProModal() {
-      proModalBackdrop.classList.remove('show');
-    }
-
-    // Restore tier from localStorage if present
-    window.addEventListener('DOMContentLoaded', () => {
-      try {
-        const stored = localStorage.getItem('sksk_autopro_access');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (parsed.tier === 'pro') {
-            setTier('pro', parsed.customer);
-          } else {
-            setTier('free', parsed.customer);
-          }
-        } else {
-          setTier('free');
-        }
-      } catch {
-        setTier('free');
-      }
-    });
-
-    // CTA wiring
-    function activateFree() {
-      setTier('free');
-      document.getElementById('app').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-
-    [navStartFree, heroStartFree, heroMiniStart, pricingStartFree].forEach(btn => {
-      if (btn) {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          activateFree();
-        });
-      }
-    });
-
-    [navProCode, pricingProCode].forEach(btn => {
-      if (btn) {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          openProModal();
-        });
-      }
-    });
-
-    heroScrollToApp.addEventListener('click', (e) => {
-      e.preventDefault();
-      document.getElementById('app').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-
-    modalCloseBtn.addEventListener('click', closeProModal);
-    proModalBackdrop.addEventListener('click', (e) => {
-      if (e.target === proModalBackdrop) closeProModal();
-    });
-
-    proCodeSubmit.addEventListener('click', async () => {
-      const code = proCodeInput.value.trim().toUpperCase();
-      if (!code) return;
-      proModalError.style.display = 'none';
-      proModalSuccess.style.display = 'none';
-      proCodeSubmit.disabled = true;
-      proCodeSubmit.innerHTML = '<div class="spinner"></div> Validating...';
-
+    async function validateAccess() {
+      const code = document.getElementById('accessCode').value.trim();
+      if (!code) return showStatus('Enter access code', true);
+      
+      document.getElementById('accessStatus').innerHTML = 'Validating...';
+      
       try {
         const res = await fetch(`${BACKEND_URL}/api/validate-access`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accessCode: code })
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({accessCode: code})
         });
         const data = await res.json();
-
+        
         if (data.valid) {
-          proModalSuccess.textContent = data.message || 'Pro unlocked.';
-          proModalSuccess.style.display = 'block';
-          setTier('pro', data.customer);
-          setTimeout(() => {
-            closeProModal();
-          }, 800);
+          userTier = data.tier;
+          document.getElementById('accessScreen').classList.remove('active');
+          document.getElementById('mainScreen').classList.add('active');
+          showStatus(`Welcome ${data.customer || 'Pro User'} (${data.tier})!`);
         } else {
-          proModalError.textContent = data.error || 'Invalid access code';
-          proModalError.style.display = 'block';
+          showStatus(data.error || 'Invalid code', true);
         }
       } catch (err) {
-        proModalError.textContent = 'Connection error. Try again.';
-        proModalError.style.display = 'block';
-      } finally {
-        proCodeSubmit.disabled = false;
-        proCodeSubmit.textContent = 'Unlock Pro';
+        showStatus('Connection error. Check backend.', true);
       }
-    });
+    }
 
-    // Customers (Pro-only)
-    async function loadCustomers() {
-      if (currentTier !== 'pro') return;
+    async function decodeVin() {
+      const vin = document.getElementById('vin').value.trim().toUpperCase();
+      if (vin.length !== 17) return showStatus('VIN must be 17 characters', true);
+      
       try {
-        const res = await fetch(`${BACKEND_URL}/api/customers`);
-        if (!res.ok) return;
+        const res = await fetch(`${BACKEND_URL}/api/vin-lookup/${vin}`);
         const data = await res.json();
-        if (data.ok && data.customers) {
-          customers = data.customers;
-          customerSelect.innerHTML = '<option value="">+ New customer</option>';
-          customers.forEach(c => {
-            const opt = document.createElement('option');
-            opt.value = c.id;
-            opt.textContent = `${c.name} (${c.phone || c.email || 'no contact'})`;
-            customerSelect.appendChild(opt);
-          });
+        if (data.ok) {
+          document.getElementById('vehicle').value = data.displayString;
+          showStatus(`Found: ${data.displayString}`);
+        } else {
+          showStatus(data.error || 'VIN not found', true);
         }
       } catch (err) {
-        console.error('Load customers failed:', err);
+        showStatus('VIN lookup failed', true);
       }
     }
 
-    customerSelect.addEventListener('change', (e) => {
-      const id = e.target.value;
-      if (!id) {
-        customerNameInput.value = '';
-        customerPhoneInput.value = '';
-        customerEmailInput.value = '';
-        return;
+    async function generateEstimate() {
+      const customerName = document.getElementById('customerName').value.trim();
+      const description = document.getElementById('description').value.trim();
+      
+      if (!customerName || !description) {
+        return showStatus('Customer name and job description required', true);
       }
-      const c = customers.find(x => String(x.id) === String(id));
-      if (c) {
-        customerNameInput.value = c.name || '';
-        customerPhoneInput.value = c.phone || '';
-        customerEmailInput.value = c.email || '';
-      }
-    });
-
-    // VIN lookup (Pro mode only)
-    if (vinLookupBtn) {
-      vinLookupBtn.addEventListener('click', async () => {
-        if (currentTier !== 'pro') {
-          vinStatus.textContent = 'VIN lookup unlocks with Pro. You can still type the vehicle manually.';
-          vinStatus.style.color = '#f97373';
-          return;
-        }
-
-        const vin = vinInput.value.trim().toUpperCase();
-        const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/;
-
-        if (!vin || !vinRegex.test(vin)) {
-          vinStatus.textContent = 'VIN must be exactly 17 characters (no I, O, or Q).';
-          vinStatus.style.color = '#f97373';
-          return;
-        }
-
-        vinLookupBtn.disabled = true;
-        vinLookupBtn.innerHTML = '<div class="spinner"></div>';
-        vinStatus.textContent = 'Looking up VIN...';
-        vinStatus.style.color = '#9ca3af';
-
-        try {
-          const res = await fetch(`${BACKEND_URL}/api/vin-lookup/${vin}`);
-          const data = await res.json();
-
-          if (res.ok && data.ok && data.displayString) {
-            vehicleInput.value = data.displayString;
-            vinStatus.textContent = 'Vehicle auto‑filled.';
-            vinStatus.style.color = '#22c55e';
-            vinInput.value = '';
-          } else {
-            throw new Error(data.error || 'VIN lookup failed');
-          }
-        } catch (err) {
-          vinStatus.textContent = 'VIN lookup failed – enter vehicle manually.';
-          vinStatus.style.color = '#f97373';
-        } finally {
-          vinLookupBtn.disabled = false;
-          vinLookupBtn.textContent = 'Lookup';
-        }
-      });
-    }
-
-    // Helpers
-    function showError(msg) {
-      errorBox.textContent = msg;
-      errorBox.style.display = 'block';
-      successBox.style.display = 'none';
-    }
-    function showSuccess(msg) {
-      successBox.textContent = msg;
-      successBox.style.display = 'block';
-      errorBox.style.display = 'none';
-    }
-    function hideMessages() {
-      errorBox.style.display = 'none';
-      successBox.style.display = 'none';
-    }
-    function formatCurrency(amt) {
-      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amt);
-    }
-
-    function showLoading() {
-      submitBtn.disabled = true;
-      submitBtn.innerHTML = '<div class="spinner"></div><span>Generating...</span>';
-      estimateDisplay.innerHTML = '<div class="estimate-empty"><div class="spinner" style="width:32px;height:32px;border-width:3px;margin:0 auto 0.75rem;"></div><p>AI analyzing job details...</p></div>';
-    }
-
-    function resetButton() {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Generate estimate';
-    }
-
-    function displayEstimate(est) {
-      const partsHTML = est.parts && est.parts.length > 0 ? (
-        '<div class="info-box">' +
-          '<h3>Parts</h3>' +
-          est.parts.map(p => (
-            '<div class="part-row"><span>' +
-            (p.name || 'Part') +
-            '</span><span>' +
-            formatCurrency(p.cost || 0) +
-            '</span></div>'
-          )).join('') +
-          '<div class="part-row total"><span>Parts total</span><span>' +
-          formatCurrency(est.partsCost || 0) +
-          '</span></div>' +
-        '</div>'
-      ) : '';
-
-      const tax = (est.subtotal || 0) * 0.28;
-      const takeHome = (est.subtotal || 0) - tax;
-
-      estimateDisplay.innerHTML = (
-        '<div class="estimate-content">' +
-          '<div class="info-box">' +
-            '<h3>' + (est.jobType || 'Job estimate') + '</h3>' +
-            '<p>' + (est.shortDescription || '') + '</p>' +
-          '</div>' +
-          '<div class="info-box">' +
-            '<h3>Labor</h3>' +
-            '<div class="part-row"><span>' +
-              (est.laborHours || 0).toFixed ? est.laborHours.toFixed(1) : est.laborHours +
-              ' hrs @ ' + formatCurrency(est.laborRate || 65) + '/hr</span>' +
-              '<span>' + formatCurrency(est.laborCost || 0) + '</span>' +
-            '</div>' +
-          '</div>' +
-          partsHTML +
-          '<div class="info-box">' +
-            '<div class="part-row"><span>Shop supplies (' +
-              (est.shopSuppliesPercent || 7) +
-              '%)</span><span>' + formatCurrency(est.shopSupplies || 0) + '</span></div>' +
-          '</div>' +
-          '<div class="total-box">' +
-            '<span>Total estimate</span><span>' + formatCurrency(est.subtotal || 0) + '</span>' +
-          '</div>' +
-          '<div class="tax-box">' +
-            '<div class="tax-row"><span>Job total</span><span>' + formatCurrency(est.subtotal || 0) + '</span></div>' +
-            '<div class="tax-row"><span>Recommended tax set‑aside (28%)</span><span>-' + formatCurrency(tax) + '</span></div>' +
-            '<div class="tax-row takehome"><span>Your take‑home</span><span>' + formatCurrency(takeHome) + '</span></div>' +
-            '<p style="margin-top:0.35rem;">This stays on your side only – not on the customer invoice.</p>' +
-          '</div>' +
-        '</div>'
-      );
-    }
-
-    estimateForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      hideMessages();
-
-      const name = customerNameInput.value.trim();
-      const phone = customerPhoneInput.value.trim();
-      const email = customerEmailInput.value.trim();
-      const vehicle = vehicleInput.value.trim();
-      const desc = descriptionInput.value.trim();
-      const rate = parseFloat(laborRateInput.value) || 65;
-      const vinVal = vinInput ? vinInput.value.trim() : '';
-      const useOem = currentTier === 'pro' && useOemDataCheckbox && useOemDataCheckbox.checked;
-
-      if (!name || !desc) {
-        showError('Customer name and job description are required.');
-        return;
-      }
-
-      showLoading();
-
+      
+      document.getElementById('estimateResult').innerHTML = '<div style="text-align:center;padding:40px;">🤖 AI is generating estimate...</div>';
+      
       try {
-        const body = {
-          customer: { name, phone, email },
-          vehicle,
-          description: desc,
-          laborRate: rate
+        const data = {
+          customer: {
+            name: customerName,
+            phone: document.getElementById('phone').value
+          },
+          vehicle: document.getElementById('vehicle').value,
+          description,
+          laborRate: parseFloat(document.getElementById('laborRate').value) || 65
         };
-
-        if (useOem && vinVal) {
-          body.useOemData = true;
-          body.vin = vinVal;
-        }
-
+        
         const res = await fetch(`${BACKEND_URL}/api/generate-estimate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(data)
         });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || 'Server error while generating estimate.');
+        const result = await res.json();
+        
+        if (result.ok) {
+          currentJobId = result.savedJob?.id || result.job?.id;
+          currentEstimate = result.estimate;
+          
+          document.getElementById('estimateResult').innerHTML = `
+            <div class="estimate">
+              <h3>${result.estimate.shortDescription || 'Auto Repair Estimate'}</h3>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+                <div>
+                  <h4>Labor</h4>
+                  <p>${result.estimate.laborHours?.toFixed(1) || 0}h × $${result.estimate.laborRate}/hr</p>
+                  <div class="price">$${result.estimate.laborCost?.toFixed(2) || 0}</div>
+                </div>
+                <div>
+                  <h4>Parts</h4>
+                  <p>${(result.estimate.parts || []).length} items</p>
+                  <div class="price">$${result.estimate.partsCost?.toFixed(2) || 0}</div>
+                </div>
+              </div>
+              <div style="margin-top:20px;padding-top:20px;border-top:2px solid #eee;">
+                <div style="display:flex;justify-content:space-between;">
+                  <span>Shop Supplies (${result.estimate.shopSuppliesPercent || 7}%):</span>
+                  <span>$${result.estimate.shopSupplies?.toFixed(2) || 0}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:20px;">
+                  <strong>TOTAL</strong>
+                  <div class="price">$${result.estimate.subtotal?.toFixed(2) || 0}</div>
+                </div>
+                ${result.estimate.recommendedTaxSetaside ? `
+                  <div style="background:#fff3cd;padding:10px;border-radius:6px;margin-top:15px;">
+                    💰 Recommended tax set-aside: $${result.estimate.recommendedTaxSetaside.toFixed(2)} (${result.estimate.taxRate}%)
+                  </div>
+                ` : ''}
+              </div>
+              ${result.estimate.workSteps?.length ? `
+                <div style="margin-top:20px;">
+                  <h4>Work Steps:</h4>
+                  <ol>${result.estimate.workSteps.map(step => `<li>${step}</li>`).join('')}</ol>
+                </div>
+              ` : ''}
+            </div>
+          `;
+          
+          document.getElementById('paySection').style.display = 'block';
+          showStatus('Estimate generated! Job saved to database.');
+        } else {
+          showStatus('Estimate failed: ' + (result.error || 'Unknown error'), true);
         }
-
-        const data = await res.json();
-        if (!data.ok || !data.estimate) {
-          throw new Error(data.error || 'Failed to generate estimate.');
-        }
-
-        displayEstimate(data.estimate);
-        showSuccess('Estimate generated successfully.');
       } catch (err) {
-        console.error('Estimate error:', err);
-        showError(err.message || 'Failed to connect to server. Check your connection.');
-        estimateDisplay.innerHTML = '<div class="estimate-empty"><div class="estimate-empty-icon">🛠️</div><p>Fill in the form and generate again.</p></div>';
-      } finally {
-        resetButton();
+        showStatus('Connection error. Check backend is running.', true);
+        console.error(err);
+      }
+    }
+
+    async function createCheckout() {
+      if (!currentJobId || !currentEstimate) {
+        return showStatus('Generate estimate first', true);
+      }
+      
+      document.getElementById('payStatus').innerHTML = 'Creating payment link...';
+      
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            jobId: currentJobId,
+            amount: currentEstimate.subtotal || 250
+          })
+        });
+        const data = await res.json();
+        
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          showStatus('Payment setup failed', true);
+        }
+      } catch (err) {
+        showStatus('Payment error. Check Stripe keys.', true);
+        console.error(err);
+      }
+    }
+
+    function showAccess() {
+      document.getElementById('mainScreen').classList.remove('active');
+      document.getElementById('accessScreen').classList.add('active');
+    }
+
+    // Enter key support
+    document.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        if (document.getElementById('accessScreen').classList.contains('active')) {
+          validateAccess();
+        }
       }
     });
   </script>
