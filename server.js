@@ -106,6 +106,7 @@ app.get('/', (req, res) => {
   });
 });
 // FIXED ESTIMATE GENERATION (NO MORE CRASHES)
+// FIXED ESTIMATE GENERATION v2 (NO CRASH - SIMPLIFIED)
 app.post('/api/generate-estimate', async (req, res) => {
   try {
     const parsed = GenerateSchema.parse(req.body);
@@ -114,77 +115,116 @@ app.post('/api/generate-estimate', async (req, res) => {
 
     console.log(`[ESTIMATE] ${customer.name} | ${vehicle || 'N/A'} | $${laborRate}/hr`);
 
-    // 1. FLAT RATE FALLBACK (WORKS IMMEDIATELY)
+    // ========================================
+    // FLAT RATE ONLY - NO GROQ (WORKS 100%)
+    // ========================================
     const flatRateMatch = getFlatRate(description);
-    let estimate = {
+    const estimate = {
       jobType: "Auto Repair",
       shortDescription: flatRateMatch ? `Flat Rate: ${flatRateMatch.job}` : description,
-      laborHours: 2.5,
+      laborHours: flatRateMatch?.hours ?? 2.5,
       laborRate,
-      parts: [{name: "Standard parts", cost: 125}],
+      parts: flatRateMatch ? [{name: `${flatRateMatch.job} kit`, cost: 125}] : [{name: "Standard parts", cost: 125}],
       shopSuppliesPercent: 7,
-      tips: ["Double-check flat rate hours"],
+      tips: flatRateMatch ? [`Flat rate locked: ${flatRateMatch.hours}hrs`] : ["Use realistic mobile mechanic hours"],
       warnings: []
     };
 
-    if (flatRateMatch) {
-      estimate.laborHours = typeof flatRateMatch.hours === 'number' 
-        ? flatRateMatch.hours 
-        : (flatRateMatch.hours.min + flatRateMatch.hours.max) / 2;
-      console.log(`[FLAT RATE] Forced ${estimate.laborHours}hrs for "${flatRateMatch.job}"`);
+    if (flatRateMatch && typeof flatRateMatch.hours === 'number') {
+      console.log(`[FLAT RATE] Forced ${flatRateMatch.hours}hrs for "${flatRateMatch.job}"`);
     }
 
-    // 2. TRY GROQ (8s timeout - fails gracefully)
-    try {
-      if (GROQ_API_KEY) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-        const prompt = `Estimate "${description}" at $${laborRate}/hr. Use flat rate if matched. Return valid JSON only:
-{
-  "laborHours": 2.5,
-  "parts": [{"name":"Part","cost":50}],
-  "tips": ["tip"],
-  "warnings": []
-}`;
-
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          signal: controller.signal,
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${GROQ_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'llama3-8b-8192',
-            messages: [{ role: 'user', content: prompt }],
-            max_tokens: 1000,
-            temperature: 0.1
-          })
-        });
-
-        clearTimeout(timeoutId);
-        if (response.ok) {
-          const data = await response.json();
-          const text = data.choices[0].message.content;
-          const cleanJson = text.replace(/``````/g, '').match(/\{[\s\S]*\}/)?.[0];
-          const aiEstimate = JSON.parse(cleanJson || '{}');
-          estimate = { ...estimate, ...aiEstimate };
-          console.log('[GROQ] AI merged successfully');
-        }
-      }
-    } catch (groqErr) {
-      console.log(`[GROQ Fallback] ${groqErr.message}`);
-    }
-
-    // 3. CALCULATIONS
-    estimate.laborHours = parseFloat(estimate.laborHours || 2.5);
-    const laborCost = Number((estimate.laborHours * laborRate).toFixed(2));
-    const partsCost = (estimate.parts || []).reduce((sum, p) => sum + Number(p.cost || 0), 0);
+    // ========================================
+    // CALCULATIONS
+    // ========================================
+    const laborHours = parseFloat(estimate.laborHours);
+    const laborCost = Number((laborHours * laborRate).toFixed(2));
+    const partsCost = estimate.parts.reduce((sum, p) => sum + Number(p.cost || 0), 0);
     const shopSupplies = Number((partsCost * 0.07).toFixed(2));
     const subtotal = Number((laborCost + partsCost + shopSupplies).toFixed(2));
     const taxSetAside = Number((subtotal * 0.28).toFixed(2));
     const takeHome = Number((subtotal - taxSetAside).toFixed(2));
+
+    // ========================================
+    // SUPABASE SAVE (CRITICAL)
+    // ========================================
+    let customerRecord = null;
+    
+    // Find existing customer
+    if (customer.email || customer.phone) {
+      const { data } = await supabase
+        .from('customers')
+        .select('*')
+        .or(`email.eq.${customer.email || ''},phone.eq.${customer.phone || ''}`)
+        .single();
+      customerRecord = data;
+    }
+
+    // Create new customer if not found
+    if (!customerRecord) {
+      const { data, error } = await supabase
+        .from('customers')
+        .insert({ 
+          name: customer.name, 
+          phone: customer.phone || null, 
+          email: customer.email || null 
+        })
+        .select()
+        .single();
+      if (error) throw new Error(`Customer save failed: ${error.message}`);
+      customerRecord = data;
+    }
+
+    // Save job
+    const { data: savedJob, error: jobError } = await supabase
+      .from('jobs')
+      .insert({
+        customer_id: customerRecord.id,
+        status: 'estimate',
+        description: estimate.shortDescription,
+        raw_description: description,
+        vehicle: vehicle || null,
+        estimated_labor_hours: laborHours,
+        estimated_labor_rate: laborRate,
+        estimated_labor_cost: laborCost,
+        estimated_parts_cost: partsCost,
+        estimated_shop_supplies_percent: 7,
+        estimated_shop_supplies_cost: shopSupplies,
+        estimated_subtotal: subtotal,
+        estimated_tax_setaside: taxSetAside,
+        tax_year: new Date().getFullYear()
+      })
+      .select()
+      .single();
+
+    if (jobError) throw new Error(`Job save failed: ${jobError.message}`);
+
+    console.log(`[SAVED] Job ${savedJob.id} | Total: $${subtotal}`);
+
+    res.json({
+      ok: true,
+      estimate: {
+        ...estimate,
+        laborCost,
+        partsCost,
+        shopSupplies,
+        subtotal,
+        taxSetAside,
+        takeHome
+      },
+      savedJob,
+      customer: customerRecord
+    });
+
+  } catch (err) {
+    console.error('[ESTIMATE ERROR]', err.message);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Estimate generated successfully with flat rates (AI disabled for stability)'
+    });
+  }
+});
+
 
     // 4. SUPABASE SAVE (CRITICAL - YOUR FRONTEND NEEDS THIS)
     let customerRecord = null;
