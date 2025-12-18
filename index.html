@@ -2,7 +2,6 @@
 <html>
 <head>
   <title>SKSK ProTech - AI Auto Estimator</title>
-  <script src="https://js.stripe.com/v3/"></script>
   <style>
     body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
     .screen { display: none; } .screen.active { display: block; }
@@ -19,6 +18,7 @@
     .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
     h1 { color: #333; text-align: center; }
     h2 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+    .loading { text-align: center; padding: 40px; color: #666; }
   </style>
 </head>
 <body>
@@ -66,19 +66,36 @@
   </div>
 
   <script>
-    // CONFIG - UPDATE THESE
+    // 🔒 SECURE CONFIG - NO KEYS IN FRONTEND
     const BACKEND_URL = 'https://p613-backend.onrender.com';
-    const STRIPE_PUBLISHABLE_KEY = 'pk_test_YOUR_STRIPE_PUBLISHABLE_KEY_HERE'; // ← ADD YOUR KEY
-    const stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
-    
+    let stripe = null;
     let currentJobId = null;
-    let userTier = null;
     let currentEstimate = null;
+    let userTier = null;
+
+    // Load Stripe securely from backend
+    async function loadStripe() {
+      if (stripe) return stripe;
+      
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/stripe-config`);
+        const config = await res.json();
+        if (config.publishableKey) {
+          stripe = Stripe(config.publishableKey);
+          return stripe;
+        } else {
+          throw new Error('Stripe config not available');
+        }
+      } catch (err) {
+        console.error('Failed to load Stripe:', err);
+        throw err;
+      }
+    }
 
     async function showStatus(message, isError = false) {
       const statusEl = document.getElementById('status');
       statusEl.textContent = message;
-      statusEl.className = `success ${isError ? 'error' : ''}`;
+      statusEl.className = isError ? 'error' : 'success';
       statusEl.style.display = 'block';
       setTimeout(() => statusEl.style.display = 'none', 5000);
     }
@@ -87,13 +104,13 @@
       const code = document.getElementById('accessCode').value.trim();
       if (!code) return showStatus('Enter access code', true);
       
-      document.getElementById('accessStatus').innerHTML = 'Validating...';
+      document.getElementById('accessStatus').innerHTML = '🔍 Validating...';
       
       try {
         const res = await fetch(`${BACKEND_URL}/api/validate-access`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({accessCode: code})
+          body: JSON.stringify({accessCode: code.toUpperCase()})
         });
         const data = await res.json();
         
@@ -101,12 +118,12 @@
           userTier = data.tier;
           document.getElementById('accessScreen').classList.remove('active');
           document.getElementById('mainScreen').classList.add('active');
-          showStatus(`Welcome ${data.customer || 'Pro User'} (${data.tier})!`);
+          showStatus(`✅ Welcome ${data.customer || 'Pro User'} (${data.tier})!`);
         } else {
           showStatus(data.error || 'Invalid code', true);
         }
       } catch (err) {
-        showStatus('Connection error. Check backend.', true);
+        showStatus('❌ Connection error. Check backend.', true);
       }
     }
 
@@ -119,12 +136,12 @@
         const data = await res.json();
         if (data.ok) {
           document.getElementById('vehicle').value = data.displayString;
-          showStatus(`Found: ${data.displayString}`);
+          showStatus(`✅ Found: ${data.displayString}`);
         } else {
           showStatus(data.error || 'VIN not found', true);
         }
       } catch (err) {
-        showStatus('VIN lookup failed', true);
+        showStatus('❌ VIN lookup failed', true);
       }
     }
 
@@ -136,15 +153,15 @@
         return showStatus('Customer name and job description required', true);
       }
       
-      document.getElementById('estimateResult').innerHTML = '<div style="text-align:center;padding:40px;">🤖 AI is generating estimate...</div>';
+      document.getElementById('estimateResult').innerHTML = '<div class="loading">🤖 AI generating estimate...</div>';
       
       try {
         const data = {
           customer: {
             name: customerName,
-            phone: document.getElementById('phone').value
+            phone: document.getElementById('phone').value.trim()
           },
-          vehicle: document.getElementById('vehicle').value,
+          vehicle: document.getElementById('vehicle').value.trim(),
           description,
           laborRate: parseFloat(document.getElementById('laborRate').value) || 65
         };
@@ -165,19 +182,19 @@
               <h3>${result.estimate.shortDescription || 'Auto Repair Estimate'}</h3>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
                 <div>
-                  <h4>Labor</h4>
+                  <h4>👷 Labor</h4>
                   <p>${result.estimate.laborHours?.toFixed(1) || 0}h × $${result.estimate.laborRate}/hr</p>
                   <div class="price">$${result.estimate.laborCost?.toFixed(2) || 0}</div>
                 </div>
                 <div>
-                  <h4>Parts</h4>
+                  <h4>🔩 Parts</h4>
                   <p>${(result.estimate.parts || []).length} items</p>
                   <div class="price">$${result.estimate.partsCost?.toFixed(2) || 0}</div>
                 </div>
               </div>
               <div style="margin-top:20px;padding-top:20px;border-top:2px solid #eee;">
                 <div style="display:flex;justify-content:space-between;">
-                  <span>Shop Supplies (${result.estimate.shopSuppliesPercent || 7}%):</span>
+                  <span>🛠️ Shop Supplies (${result.estimate.shopSuppliesPercent || 7}%):</span>
                   <span>$${result.estimate.shopSupplies?.toFixed(2) || 0}</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:20px;">
@@ -192,20 +209,23 @@
               </div>
               ${result.estimate.workSteps?.length ? `
                 <div style="margin-top:20px;">
-                  <h4>Work Steps:</h4>
+                  <h4>📝 Work Steps:</h4>
                   <ol>${result.estimate.workSteps.map(step => `<li>${step}</li>`).join('')}</ol>
                 </div>
               ` : ''}
+              <div style="margin-top:15px;padding:10px;background:#e7f3ff;border-radius:6px;">
+                💾 Job ID: <strong>${currentJobId}</strong> (Saved to database)
+              </div>
             </div>
           `;
           
           document.getElementById('paySection').style.display = 'block';
-          showStatus('Estimate generated! Job saved to database.');
+          showStatus('✅ Estimate generated! Job saved to database.');
         } else {
-          showStatus('Estimate failed: ' + (result.error || 'Unknown error'), true);
+          showStatus('❌ Estimate failed: ' + (result.error || 'Unknown error'), true);
         }
       } catch (err) {
-        showStatus('Connection error. Check backend is running.', true);
+        showStatus('❌ Connection error. Check backend.', true);
         console.error(err);
       }
     }
@@ -215,9 +235,12 @@
         return showStatus('Generate estimate first', true);
       }
       
-      document.getElementById('payStatus').innerHTML = 'Creating payment link...';
-      
       try {
+        // Load Stripe securely
+        await loadStripe();
+        
+        document.getElementById('payStatus').innerHTML = '🔄 Creating secure payment link...';
+        
         const res = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -229,12 +252,13 @@
         const data = await res.json();
         
         if (data.url) {
+          document.getElementById('payStatus').innerHTML = '✅ Redirecting to Stripe...';
           window.location.href = data.url;
         } else {
-          showStatus('Payment setup failed', true);
+          showStatus('❌ Payment setup failed', true);
         }
       } catch (err) {
-        showStatus('Payment error. Check Stripe keys.', true);
+        showStatus('❌ Payment error. Check Stripe setup.', true);
         console.error(err);
       }
     }
@@ -250,6 +274,15 @@
         if (document.getElementById('accessScreen').classList.contains('active')) {
           validateAccess();
         }
+      }
+    });
+
+    // Auto-load Stripe config on page load
+    window.addEventListener('load', async () => {
+      try {
+        await loadStripe();
+      } catch (err) {
+        console.warn('Stripe will load on first payment');
       }
     });
   </script>
