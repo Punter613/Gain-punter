@@ -1,551 +1,257 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SKSK ProTech – AI Estimator</title>
-<style>
-body { background:#000; color:#fff; font-family:system-ui; padding:1rem; max-width:800px; margin:0 auto }
-input, textarea, select, button { width:100%; padding:.6rem; margin:.3rem 0; background:#020617; color:#fff; border:1px solid #333; border-radius:8px; font-size:1rem }
-button { background:#dc2626; font-weight:600; cursor:pointer; border:2px solid #b91c1c }
-button:disabled{ opacity:.5; cursor:not-allowed }
-.card{ background:#111827; border-radius:12px; padding:1rem; margin-bottom:1rem; border:1px solid #27272a }
-.total-box{ background:linear-gradient(90deg,#dc2626,#b91c1c); padding:1rem; border-radius:10px; display:flex; justify-content:space-between; font-weight:700; font-size:1.1rem }
-.error{ background:#dc262633; border:1px solid #dc2626; padding:.5rem; border-radius:8px; margin:.5rem 0; display:none }
-.success{ background:#22c55e33; border:1px solid #22c55e; padding:.5rem; border-radius:8px; margin:.5rem 0; display:none }
-.part-row{ display:flex; justify-content:space-between; font-size:.9rem; margin:.2rem 0 }
-.tax-box{ border:1px solid #fbbf24; background:rgba(251,191,36,0.08); padding:.6rem; border-radius:8px; margin-top:.5rem; font-size:.85rem }
-.tax-row{ display:flex; justify-content:space-between; margin:.15rem 0; color:#fef08a }
-.takehome{ border-top:1px solid #fbbf24; padding-top:.3rem; margin-top:.3rem; font-weight:600; color:#fefce8 }
-.pro-disabled{ opacity:.4; pointer-events:none }
-.spinner{ display:inline-block; width:16px; height:16px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite }
-@keyframes spin{ to{transform:rotate(360deg)} }
-h2{ margin-top:0 }
-h3{ margin-bottom:.3rem; font-size:1rem }
-ul{ margin:.3rem 0; padding-left:1.2rem; font-size:.85rem }
-.info-box{ background:#020617; border:1px solid #27272a; padding:.6rem; border-radius:8px; margin-bottom:.5rem }
-label{ display:block; font-size:.8rem; color:#9ca3af; margin-bottom:.2rem }
-.quick-rate{ display:flex; gap:.3rem; margin-top:.3rem }
-.quick-btn{ flex:1; padding:.4rem; font-size:.75rem; background:#020617; border:1px solid #374151; cursor:pointer }
-.quick-btn:hover{ border-color:#dc2626; color:#f9fafb }
-.pricing-card{ border:2px solid #dc2626; position:relative }
-.pricing-card.best{ border-color:#22c55e }
-.badge{ position:absolute; top:-10px; right:10px; background:#22c55e; color:#000; padding:.2rem .5rem; border-radius:4px; font-size:.7rem; font-weight:700 }
-.price-display{ display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem }
-.price-num{ font-size:2rem; font-weight:700; color:#dc2626 }
-.best .price-num{ color:#22c55e }
-.upgrade-btn{ background:#22c55e; color:#000; font-weight:700; margin-top:.5rem }
-</style>
+  <title>SKSK ProTech - AI Auto Estimator</title>
+  <script src="https://js.stripe.com/v3/"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+    .screen { display: none; } .screen.active { display: block; }
+    button { background: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; }
+    button:hover { background: #0056b3; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    input, textarea, select { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+    textarea { height: 100px; resize: vertical; }
+    .estimate { background: white; padding: 25px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .section { background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }
+    .price { font-size: 24px; font-weight: bold; color: #28a745; }
+    #status { padding: 10px; border-radius: 6px; margin: 10px 0; }
+    .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    h1 { color: #333; text-align: center; }
+    h2 { color: #007bff; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+  </style>
 </head>
 <body>
-
-<!-- ACCESS GATE -->
-<div id="accessGate">
-  <div class="card">
-    <h2>🔧 SKSK ProTech</h2>
-    <p style="color:#9ca3af; font-size:.9rem">AI-powered auto estimator for mobile mechanics</p>
-    <input id="accessCodeInput" placeholder="ENTER PRO ACCESS CODE" style="text-transform:uppercase; letter-spacing:1px">
-    <button id="accessBtn">🔓 Unlock Pro</button>
-    <button id="freeBtn" style="background:#374151; border-color:#4b5563">Start Free (Limited Features)</button>
-    <div id="accessError" class="error"></div>
-    <div id="accessSuccess" class="success"></div>
+  <!-- Access Screen -->
+  <div id="accessScreen" class="screen active">
+    <div class="section">
+      <h1>🔧 SKSK ProTech</h1>
+      <p style="text-align: center; color: #666;">AI-Powered Auto Repair Estimator</p>
+      <p>Enter your Pro Access Code:</p>
+      <input id="accessCode" placeholder="Enter 8-character code (e.g. ABC123XY)" />
+      <button onclick="validateAccess()">Unlock Pro Features</button>
+      <div id="accessStatus"></div>
+    </div>
   </div>
-</div>
 
-<!-- PRICING PAGE -->
-<div id="pricingPage" style="display:none">
-  <div class="card" style="max-width:700px; margin:0 auto">
-    <h2>🚀 Upgrade to Pro</h2>
-    <p style="color:#9ca3af; margin-bottom:1.5rem; font-size:.9rem">
-      Get unlimited estimates, customer database, VIN lookup, invoice generation, expense tracking, and year-end tax reports.
-    </p>
+  <!-- Main Estimator -->
+  <div id="mainScreen" class="screen">
+    <button onclick="showAccess()" style="background: #6c757d;">← Back to Access</button>
+    
+    <div class="section">
+      <h2>📋 Create New Estimate</h2>
+      <input id="customerName" placeholder="Customer Name *" required />
+      <input id="phone" placeholder="Phone (optional)" />
+      <input id="vin" placeholder="VIN (17 characters)" maxlength="17" />
+      <button onclick="decodeVin()" style="width: auto; margin-top: 5px;">🔍 Decode VIN</button>
+      <input id="vehicle" placeholder="Vehicle (auto-filled from VIN)" />
+      <textarea id="description" placeholder="Describe the repair needed... (e.g. 'Replace water pump and flush coolant')" required></textarea>
+      <input id="laborRate" type="number" step="0.01" placeholder="Labor Rate ($/hr)" value="65" min="50" max="200" />
+      <button onclick="generateEstimate()">🤖 Generate AI Estimate</button>
+    </div>
 
-    <!-- Monthly Plan -->
-    <div class="card pricing-card" style="margin-bottom:1rem">
-      <div class="price-display">
-        <div>
-          <h3 style="margin:0">Pro Monthly</h3>
-          <p style="color:#9ca3af; font-size:.8rem; margin:.2rem 0">Cancel anytime</p>
+    <div id="estimateResult"></div>
+    
+    <div id="paySection" style="display:none;">
+      <div class="section">
+        <h3>💳 Pay Invoice</h3>
+        <div id="payButton">
+          <button onclick="createCheckout()">Pay with Stripe Card</button>
         </div>
-        <div style="text-align:right">
-          <div class="price-num">$29</div>
-          <div style="font-size:.75rem; color:#9ca3af">per month</div>
-        </div>
+        <div id="payStatus"></div>
       </div>
-      <button class="checkout-btn" data-plan="pro_monthly">Subscribe Monthly</button>
     </div>
 
-    <!-- Yearly Plan -->
-    <div class="card pricing-card best" style="margin-bottom:1rem">
-      <div class="badge">SAVE $58/YR</div>
-      <div class="price-display">
-        <div>
-          <h3 style="margin:0">Pro Yearly</h3>
-          <p style="color:#9ca3af; font-size:.8rem; margin:.2rem 0">Best value - 2 months free</p>
-        </div>
-        <div style="text-align:right">
-          <div class="price-num">$290</div>
-          <div style="font-size:.75rem; color:#9ca3af">per year</div>
-          <div style="font-size:.7rem; color:#9ca3af">($24/month)</div>
-        </div>
-      </div>
-      <button class="checkout-btn" data-plan="pro_yearly" style="background:#22c55e; color:#000">Subscribe Yearly</button>
-    </div>
-
-    <!-- Features -->
-    <div class="card" style="background:#020617">
-      <h4 style="margin-bottom:.5rem">✅ What You Get</h4>
-      <ul style="font-size:.85rem; color:#9ca3af; line-height:1.7">
-        <li>Unlimited AI estimates with 80+ flat rates</li>
-        <li>Customer database (save & auto-fill)</li>
-        <li>VIN lookup (auto-populate vehicle)</li>
-        <li>Invoice generation (PDF ready)</li>
-        <li>Payment tracking</li>
-        <li>Expense logging</li>
-        <li>Mileage tracking (IRS compliant)</li>
-        <li>Year-end tax reports (Schedule C ready)</li>
-        <li>Priority email support</li>
-      </ul>
-    </div>
-
-    <button id="backToFreeBtn" style="background:#374151">← Back to Free Version</button>
-
-    <p style="text-align:center; color:#6b7280; font-size:.7rem; margin-top:1rem">
-      🔒 Secure payment by Stripe • Cancel anytime, no questions asked
-    </p>
-  </div>
-</div>
-
-<!-- MAIN APP -->
-<div id="mainApp" style="display:none">
-  <div class="card">
-    <h2>📋 Job Details</h2>
-    <div id="userInfo" style="background:rgba(34,197,94,0.1); border:1px solid #22c55e; padding:.5rem; border-radius:6px; font-size:.85rem; margin-bottom:1rem; color:#bbf7d0">
-      <span id="tierLabel">Free Tier - Limited Features</span>
-      <button id="logoutBtn" style="width:auto; padding:.3rem .6rem; font-size:.75rem; margin-left:.5rem; background:transparent; border:1px solid #dc2626; color:#fecaca">Logout</button>
-    </div>
-
-    <label>Customer Name *</label>
-    <input id="customerName" placeholder="John Smith" required>
-    
-    <label>Phone</label>
-    <input id="customerPhone" type="tel" placeholder="330-555-1212">
-    
-    <label>Email</label>
-    <input id="customerEmail" type="email" placeholder="customer@example.com">
-
-    <div class="pro-feature" style="border:1px dashed #374151; padding:.5rem; border-radius:8px; margin:.5rem 0">
-      <label>🔒 VIN Lookup (Pro Feature)</label>
-      <div style="display:flex; gap:.3rem">
-        <input id="vin" placeholder="17-digit VIN" maxlength="17" style="flex:1">
-        <button id="vinLookupBtn" style="width:auto; padding:.5rem .7rem; white-space:nowrap; font-size:.8rem">Lookup</button>
-      </div>
-      <small id="vinStatus" style="color:#9ca3af; font-size:.7rem"></small>
-    </div>
-
-    <label>Vehicle</label>
-    <input id="vehicle" placeholder="2008 Ford F-150 5.4L V8">
-    
-    <label>Your Labor Rate ($/hr)</label>
-    <div style="display:flex; align-items:center; gap:.3rem">
-      <span style="color:#22c55e; font-size:1.2rem">$</span>
-      <input id="laborRate" type="number" value="65" min="0" max="200" step="5" style="max-width:100px">
-      <span style="color:#9ca3af; font-size:.9rem">/hr</span>
-    </div>
-    <div class="quick-rate">
-      <button class="quick-btn" data-rate="45">Friends $45</button>
-      <button class="quick-btn" data-rate="65">Standard $65</button>
-      <button class="quick-btn" data-rate="90">Premium $90</button>
-    </div>
-    <small style="color:#9ca3af; font-size:.75rem">Adjust per job: Friends (40-50) • Standard (50-75) • Premium (75-100)</small>
-
-    <label>Job Description *</label>
-    <textarea id="description" placeholder="Example: Water pump replacement, front brake pads and rotors" rows="4" required></textarea>
-
-    <div id="errorBox" class="error"></div>
-    <div id="successBox" class="success"></div>
-
-    <button id="submitBtn">⚡ Generate Estimate</button>
+    <div id="status"></div>
   </div>
 
-  <div class="card">
-    <h2>💰 Estimate</h2>
-    <div id="estimateDisplay">
-      <p style="color:#6b7280; text-align:center; padding:2rem">No estimate yet. Fill out job details above.</p>
-    </div>
-  </div>
-</div>
-
-<script>
-const BACKEND_URL = location.hostname === "localhost" ? "http://localhost:4000" : "https://p613-backend.onrender.com";
-
-// Elements
-const accessGate = document.getElementById("accessGate");
-const pricingPage = document.getElementById("pricingPage");
-const mainApp = document.getElementById("mainApp");
-const accessBtn = document.getElementById("accessBtn");
-const freeBtn = document.getElementById("freeBtn");
-const accessCodeInput = document.getElementById("accessCodeInput");
-const accessError = document.getElementById("accessError");
-const accessSuccess = document.getElementById("accessSuccess");
-const errorBox = document.getElementById("errorBox");
-const successBox = document.getElementById("successBox");
-const submitBtn = document.getElementById("submitBtn");
-const estimateDisplay = document.getElementById("estimateDisplay");
-const vinLookupBtn = document.getElementById("vinLookupBtn");
-const tierLabel = document.getElementById("tierLabel");
-const logoutBtn = document.getElementById("logoutBtn");
-const backToFreeBtn = document.getElementById("backToFreeBtn");
-
-let currentTier = "free";
-
-function formatCurrency(amt) {
-  return new Intl.NumberFormat("en-US", {style:"currency", currency:"USD"}).format(amt || 0);
-}
-
-function setTierUI(mode){
-  currentTier = mode;
-  const proFeatures = document.querySelectorAll(".pro-feature");
-  
-  if(mode === "free"){
-    proFeatures.forEach(el => {
-      el.classList.add("pro-disabled");
-      el.querySelectorAll("input,button").forEach(x => x.disabled = true);
-    });
-    tierLabel.innerHTML = '🆓 Free Tier - Pro features locked <button id="upgradeBtn" class="upgrade-btn" style="width:auto; padding:.3rem .6rem; font-size:.75rem; margin-left:.5rem">⬆️ Upgrade</button>';
+  <script>
+    // CONFIG - UPDATE THESE
+    const BACKEND_URL = 'https://p613-backend.onrender.com';
+    const STRIPE_PUBLISHABLE_KEY = 'pk_test_YOUR_STRIPE_PUBLISHABLE_KEY_HERE'; // ← ADD YOUR KEY
+    const stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
     
-    // Add upgrade button click
-    setTimeout(() => {
-      const upgradeBtn = document.getElementById("upgradeBtn");
-      if(upgradeBtn) upgradeBtn.onclick = showPricing;
-    }, 100);
-    
-  } else {
-    proFeatures.forEach(el => {
-      el.classList.remove("pro-disabled");
-      el.querySelectorAll("input,button").forEach(x => x.disabled = false);
-    });
-    tierLabel.textContent = "✅ Pro Tier Active";
-    tierLabel.style.borderColor = "#22c55e";
-    tierLabel.style.background = "rgba(34,197,94,0.1)";
-    tierLabel.style.color = "#bbf7d0";
-  }
-}
+    let currentJobId = null;
+    let userTier = null;
+    let currentEstimate = null;
 
-function showPricing() {
-  accessGate.style.display = "none";
-  mainApp.style.display = "none";
-  pricingPage.style.display = "block";
-}
-
-function unlock(mode){
-  setTierUI(mode);
-  localStorage.setItem("sksk_tier", mode);
-  accessGate.style.display = "none";
-  pricingPage.style.display = "none";
-  mainApp.style.display = "block";
-}
-
-// Access button
-accessBtn.onclick = async () => {
-  const code = accessCodeInput.value.trim().toUpperCase();
-  if(!code){
-    accessError.textContent = "Enter an access code";
-    accessError.style.display = "block";
-    return;
-  }
-  
-  accessBtn.disabled = true;
-  accessBtn.innerHTML = '<span class="spinner"></span> Validating...';
-  
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/validate-access`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({accessCode: code})
-    });
-    const data = await res.json();
-    
-    if(data.valid){
-      accessSuccess.textContent = data.message || "Pro unlocked!";
-      accessSuccess.style.display = "block";
-      accessError.style.display = "none";
-      setTimeout(() => unlock("pro"), 1000);
-    } else {
-      accessError.textContent = data.error || "Invalid code";
-      accessError.style.display = "block";
-      accessSuccess.style.display = "none";
+    async function showStatus(message, isError = false) {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = message;
+      statusEl.className = `success ${isError ? 'error' : ''}`;
+      statusEl.style.display = 'block';
+      setTimeout(() => statusEl.style.display = 'none', 5000);
     }
-  } catch(err) {
-    accessError.textContent = "Connection error. Try again.";
-    accessError.style.display = "block";
-  } finally {
-    accessBtn.disabled = false;
-    accessBtn.textContent = "🔓 Unlock Pro";
-  }
-};
 
-// Free button
-freeBtn.onclick = () => unlock("free");
-
-// Back to free
-backToFreeBtn.onclick = () => {
-  pricingPage.style.display = "none";
-  mainApp.style.display = "block";
-};
-
-// Logout
-logoutBtn.onclick = () => {
-  localStorage.removeItem("sksk_tier");
-  location.reload();
-};
-
-// Checkout buttons
-document.querySelectorAll(".checkout-btn").forEach(btn => {
-  btn.onclick = async () => {
-    const plan = btn.getAttribute("data-plan");
-    const email = prompt("Enter your email for subscription:");
-    
-    if(!email || !email.includes("@")){
-      alert("Valid email required");
-      return;
+    async function validateAccess() {
+      const code = document.getElementById('accessCode').value.trim();
+      if (!code) return showStatus('Enter access code', true);
+      
+      document.getElementById('accessStatus').innerHTML = 'Validating...';
+      
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/validate-access`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({accessCode: code})
+        });
+        const data = await res.json();
+        
+        if (data.valid) {
+          userTier = data.tier;
+          document.getElementById('accessScreen').classList.remove('active');
+          document.getElementById('mainScreen').classList.add('active');
+          showStatus(`Welcome ${data.customer || 'Pro User'} (${data.tier})!`);
+        } else {
+          showStatus(data.error || 'Invalid code', true);
+        }
+      } catch (err) {
+        showStatus('Connection error. Check backend.', true);
+      }
     }
-    
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Loading...';
-    
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          plan: plan,
-          customerEmail: email,
-          customerName: email.split("@")[0]
-        })
-      });
+
+    async function decodeVin() {
+      const vin = document.getElementById('vin').value.trim().toUpperCase();
+      if (vin.length !== 17) return showStatus('VIN must be 17 characters', true);
       
-      const data = await res.json();
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/vin-lookup/${vin}`);
+        const data = await res.json();
+        if (data.ok) {
+          document.getElementById('vehicle').value = data.displayString;
+          showStatus(`Found: ${data.displayString}`);
+        } else {
+          showStatus(data.error || 'VIN not found', true);
+        }
+      } catch (err) {
+        showStatus('VIN lookup failed', true);
+      }
+    }
+
+    async function generateEstimate() {
+      const customerName = document.getElementById('customerName').value.trim();
+      const description = document.getElementById('description').value.trim();
       
-      if(!data.ok){
-        throw new Error(data.error || "Failed");
+      if (!customerName || !description) {
+        return showStatus('Customer name and job description required', true);
       }
       
-      // Redirect to Stripe
-      window.location.href = data.url;
+      document.getElementById('estimateResult').innerHTML = '<div style="text-align:center;padding:40px;">🤖 AI is generating estimate...</div>';
       
-    } catch(err) {
-      alert("Error: " + err.message);
-      btn.disabled = false;
-      btn.textContent = "Try Again";
+      try {
+        const data = {
+          customer: {
+            name: customerName,
+            phone: document.getElementById('phone').value
+          },
+          vehicle: document.getElementById('vehicle').value,
+          description,
+          laborRate: parseFloat(document.getElementById('laborRate').value) || 65
+        };
+        
+        const res = await fetch(`${BACKEND_URL}/api/generate-estimate`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(data)
+        });
+        const result = await res.json();
+        
+        if (result.ok) {
+          currentJobId = result.savedJob?.id || result.job?.id;
+          currentEstimate = result.estimate;
+          
+          document.getElementById('estimateResult').innerHTML = `
+            <div class="estimate">
+              <h3>${result.estimate.shortDescription || 'Auto Repair Estimate'}</h3>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+                <div>
+                  <h4>Labor</h4>
+                  <p>${result.estimate.laborHours?.toFixed(1) || 0}h × $${result.estimate.laborRate}/hr</p>
+                  <div class="price">$${result.estimate.laborCost?.toFixed(2) || 0}</div>
+                </div>
+                <div>
+                  <h4>Parts</h4>
+                  <p>${(result.estimate.parts || []).length} items</p>
+                  <div class="price">$${result.estimate.partsCost?.toFixed(2) || 0}</div>
+                </div>
+              </div>
+              <div style="margin-top:20px;padding-top:20px;border-top:2px solid #eee;">
+                <div style="display:flex;justify-content:space-between;">
+                  <span>Shop Supplies (${result.estimate.shopSuppliesPercent || 7}%):</span>
+                  <span>$${result.estimate.shopSupplies?.toFixed(2) || 0}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:20px;">
+                  <strong>TOTAL</strong>
+                  <div class="price">$${result.estimate.subtotal?.toFixed(2) || 0}</div>
+                </div>
+                ${result.estimate.recommendedTaxSetaside ? `
+                  <div style="background:#fff3cd;padding:10px;border-radius:6px;margin-top:15px;">
+                    💰 Recommended tax set-aside: $${result.estimate.recommendedTaxSetaside.toFixed(2)} (${result.estimate.taxRate}%)
+                  </div>
+                ` : ''}
+              </div>
+              ${result.estimate.workSteps?.length ? `
+                <div style="margin-top:20px;">
+                  <h4>Work Steps:</h4>
+                  <ol>${result.estimate.workSteps.map(step => `<li>${step}</li>`).join('')}</ol>
+                </div>
+              ` : ''}
+            </div>
+          `;
+          
+          document.getElementById('paySection').style.display = 'block';
+          showStatus('Estimate generated! Job saved to database.');
+        } else {
+          showStatus('Estimate failed: ' + (result.error || 'Unknown error'), true);
+        }
+      } catch (err) {
+        showStatus('Connection error. Check backend is running.', true);
+        console.error(err);
+      }
     }
-  };
-});
 
-// Handle Stripe return
-const urlParams = new URLSearchParams(window.location.search);
-if(urlParams.get("session_id")){
-  alert("🎉 Payment successful! Check your email for your Pro access code.");
-  window.location.href = window.location.pathname;
-}
-if(urlParams.get("canceled")){
-  alert("Payment canceled. You can upgrade anytime.");
-  window.location.href = window.location.pathname;
-}
-
-// VIN lookup
-vinLookupBtn.onclick = async () => {
-  if(currentTier !== "pro"){
-    vinStatus.textContent = "Pro feature - unlock with code";
-    vinStatus.style.color = "#f97316";
-    return;
-  }
-  
-  const vin = document.getElementById("vin").value.trim().toUpperCase();
-  if(!vin || vin.length !== 17){
-    vinStatus.textContent = "Enter 17-character VIN";
-    vinStatus.style.color = "#fca5a5";
-    return;
-  }
-  
-  vinLookupBtn.disabled = true;
-  vinLookupBtn.innerHTML = '<span class="spinner"></span>';
-  vinStatus.textContent = "Looking up...";
-  vinStatus.style.color = "#9ca3af";
-  
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/vin-lookup/${vin}`);
-    const data = await res.json();
-    if(data.ok && data.displayString){
-      document.getElementById("vehicle").value = data.displayString;
-      vinStatus.textContent = "✅ Vehicle auto-filled";
-      vinStatus.style.color = "#22c55e";
-      document.getElementById("vin").value = "";
-    } else {
-      vinStatus.textContent = "VIN not found";
-      vinStatus.style.color = "#fca5a5";
+    async function createCheckout() {
+      if (!currentJobId || !currentEstimate) {
+        return showStatus('Generate estimate first', true);
+      }
+      
+      document.getElementById('payStatus').innerHTML = 'Creating payment link...';
+      
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/create-checkout-session`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            jobId: currentJobId,
+            amount: currentEstimate.subtotal || 250
+          })
+        });
+        const data = await res.json();
+        
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          showStatus('Payment setup failed', true);
+        }
+      } catch (err) {
+        showStatus('Payment error. Check Stripe keys.', true);
+        console.error(err);
+      }
     }
-  } catch(err) {
-    vinStatus.textContent = "Lookup failed";
-    vinStatus.style.color = "#fca5a5";
-  } finally {
-    vinLookupBtn.disabled = false;
-    vinLookupBtn.textContent = "Lookup";
-  }
-};
 
-// Quick rate buttons
-document.querySelectorAll(".quick-btn").forEach(btn => {
-  btn.onclick = () => {
-    const rate = btn.getAttribute("data-rate");
-    document.getElementById("laborRate").value = rate;
-  };
-});
+    function showAccess() {
+      document.getElementById('mainScreen').classList.remove('active');
+      document.getElementById('accessScreen').classList.add('active');
+    }
 
-// Generate estimate
-submitBtn.onclick = async () => {
-  errorBox.style.display = "none";
-  successBox.style.display = "none";
-
-  const name = customerName.value.trim();
-  const description_val = description.value.trim();
-  
-  if(!name || !description_val){
-    errorBox.textContent = "Customer name and job description required";
-    errorBox.style.display = "block";
-    return;
-  }
-
-  const payload = {
-    customer: {
-      name: customerName.value,
-      phone: customerPhone.value,
-      email: customerEmail.value
-    },
-    vehicle: vehicle.value,
-    description: description_val,
-    laborRate: Number(laborRate.value) || 65
-  };
-
-  submitBtn.disabled = true;
-  submitBtn.innerHTML = '<span class="spinner"></span> Generating...';
-  estimateDisplay.innerHTML = '<div style="text-align:center; padding:2rem"><div class="spinner" style="width:40px; height:40px; border-width:3px"></div><p style="margin-top:1rem; color:#9ca3af">AI building estimate...</p></div>';
-
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/generate-estimate`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload)
+    // Enter key support
+    document.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        if (document.getElementById('accessScreen').classList.contains('active')) {
+          validateAccess();
+        }
+      }
     });
-
-    const data = await res.json();
-    if(!data.ok) throw new Error(data.error || "Failed");
-
-    displayEstimate(data.estimate);
-    successBox.textContent = "✅ Estimate generated successfully";
-    successBox.style.display = "block";
-  } catch(err) {
-    errorBox.textContent = err.message || "Connection error";
-    errorBox.style.display = "block";
-    estimateDisplay.innerHTML = '<p style="color:#6b7280; text-align:center; padding:2rem">Failed. Try again.</p>';
-  } finally {
-    submitBtn.disabled = false;
-    submitBtn.innerHTML = "⚡ Generate Estimate";
-  }
-};
-
-function displayEstimate(est) {
-  const laborRate = est.laborRate || Number(laborRate.value) || 65;
-  const laborHours = est.laborHours || 0;
-  const laborCost = est.laborCost ?? (laborHours * laborRate);
-  const partsCost = est.partsCost || 0;
-  const suppliesPercent = est.shopSuppliesPercent ?? 7;
-  const shopSupplies = est.shopSupplies ?? ((laborCost + partsCost) * (suppliesPercent / 100));
-  const subtotal = est.subtotal ?? (laborCost + partsCost + shopSupplies);
-  const taxSetAside = subtotal * 0.28;
-  const takeHome = subtotal - taxSetAside;
-
-  const partsHTML = Array.isArray(est.parts) && est.parts.length > 0
-    ? `<div class="info-box">
-        <h3>Parts</h3>
-        ${est.parts.map(p => `<div class="part-row"><span>${p.name}</span><span>${formatCurrency(p.cost || 0)}</span></div>`).join("")}
-        <div class="part-row" style="border-top:1px solid #374151; padding-top:.3rem; margin-top:.3rem; font-weight:600">
-          <span>Parts Total</span><span>${formatCurrency(partsCost)}</span>
-        </div>
-      </div>`
-    : "";
-
-  const tipsHTML = Array.isArray(est.tips) && est.tips.length
-    ? `<div class="info-box" style="border-color:#22c55e">
-        <h3 style="color:#86efac">💡 Pro Tips</h3>
-        <ul style="color:#bbf7d0">${est.tips.map(t => `<li>${t}</li>`).join("")}</ul>
-      </div>`
-    : "";
-
-  const warningsHTML = Array.isArray(est.warnings) && est.warnings.length
-    ? `<div class="info-box" style="border-color:#dc2626">
-        <h3 style="color:#fecaca">⚠️ Watch For</h3>
-        <ul style="color:#fecaca">${est.warnings.map(w => `<li>${w}</li>`).join("")}</ul>
-      </div>`
-    : "";
-
-  estimateDisplay.innerHTML = `
-    <div class="info-box">
-      <h3>${est.jobType || "Repair"}</h3>
-      <p style="color:#9ca3af; font-size:.85rem">${est.shortDescription || "AI-generated estimate"}</p>
-    </div>
-
-    <div class="info-box">
-      <h3>Labor</h3>
-      <div class="part-row">
-        <span>${laborHours.toFixed(1)} hrs @ ${formatCurrency(laborRate)}/hr</span>
-        <span>${formatCurrency(laborCost)}</span>
-      </div>
-    </div>
-
-    ${partsHTML}
-
-    <div class="info-box">
-      <div class="part-row">
-        <span>Shop Supplies (${suppliesPercent}%)</span>
-        <span>${formatCurrency(shopSupplies)}</span>
-      </div>
-    </div>
-
-    ${tipsHTML}
-    ${warningsHTML}
-
-    <div class="total-box">
-      <span>Total Estimate</span>
-      <span>${formatCurrency(subtotal)}</span>
-    </div>
-
-    <div class="tax-box">
-      <div style="margin-bottom:.4rem; font-weight:600; color:#fde047">💰 Tax Set-Aside (for you only)</div>
-      <div class="tax-row">
-        <span>Job Total</span>
-        <span>${formatCurrency(subtotal)}</span>
-      </div>
-      <div class="tax-row">
-        <span>Set aside ~28% for taxes</span>
-        <span>-${formatCurrency(taxSetAside)}</span>
-      </div>
-      <div class="tax-row takehome">
-        <span>Your Take-Home (after tax stash)</span>
-        <span>${formatCurrency(takeHome)}</span>
-      </div>
-      <small style="color:#fef08a; margin-top:.3rem; display:block; font-size:.7rem">This never shows on customer invoices.</small>
-    </div>
-  `;
-}
-
-// Check for existing session
-window.addEventListener("DOMContentLoaded", () => {
-  const savedTier = localStorage.getItem("sksk_tier");
-  if(savedTier){
-    unlock(savedTier);
-  }
-});
-</script>
+  </script>
 </body>
-  </html>
+</html>
