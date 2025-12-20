@@ -28,7 +28,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DEFAULT_LABOR_RATE = Number(process.env.DEFAULT_LABOR_RATE || 65);
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://sksk-protech.netlify.app';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://skskprotech.pages.dev';
 
 if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY missing');
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE creds missing');
