@@ -6,39 +6,152 @@ const { z } = require('zod');
 
 const app = express();
 
-// Bulletproof CORS
+// ========================================
+// CORS & MIDDLEWARE
+// ========================================
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   credentials: false
 }));
-
 app.options('*', cors());
 app.use(express.json());
 
+// ========================================
+// ENVIRONMENT VARIABLES
+// ========================================
 const PORT = process.env.PORT || 4000;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DEFAULT_LABOR_RATE = Number(process.env.DEFAULT_LABOR_RATE || 65);
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://sksk-protech.netlify.app';
 
-if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY missing in env');
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE creds missing in env');
+if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY missing');
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE creds missing');
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Health check
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    service: 'SKSK AutoPro Backend (Groq-powered)',
-    version: '2.0.0',
-    features: ['Groq AI', 'Flat Rates', 'Tax Tracking', 'OEM Data Ready']
-  });
-});
+// Initialize Stripe (only if key exists)
+let stripe = null;
+if (STRIPE_SECRET_KEY) {
+  stripe = require('stripe')(STRIPE_SECRET_KEY);
+  console.log('💳 Stripe initialized');
+}
 
-// Input validation
+// ========================================
+// FLAT RATES TABLE
+// ========================================
+const FLAT_RATES = {
+  'oil change': 0.5, 'oil change basic': 0.5, 'oil change synthetic': 0.5,
+  'oil and filter': 0.5, 'oil change + rotation': 1.0, 'oil change and tire rotation': 1.0,
+  'tire rotation': 0.5, 'rotate tires': 0.5,
+  'battery replacement': 0.3, 'battery install': 0.3, 'replace battery': 0.3,
+  'wiper blades': 0.2, 'windshield wipers': 0.2,
+  'air filter': 0.3, 'engine air filter': 0.3,
+  'cabin filter': 0.4, 'cabin air filter': 0.4,
+  'brake fluid flush': 0.75, 'brake fluid change': 0.75,
+  'coolant flush': 1.0, 'radiator flush': 1.0, 'coolant change': 1.0,
+  'transmission fluid': 1.0, 'transmission fluid change': 1.0, 'trans fluid': 1.0,
+  'power steering flush': 0.5, 'power steering fluid': 0.5,
+  'differential fluid': 0.75, 'diff fluid': 0.75,
+  'thermostat': 1.0, 'thermostat replacement': 1.0,
+  'water pump': 2.5, 'water pump replacement': 2.5, 'coolant pump': 2.5,
+  'radiator': { min: 2.0, max: 3.5 }, 'radiator replacement': { min: 2.0, max: 3.5 },
+  'radiator hose': 0.5, 'coolant hose': 0.5,
+  'brake pads front': { min: 1.5, max: 2.0 }, 'front brake pads': { min: 1.5, max: 2.0 },
+  'brake pads rear': { min: 1.5, max: 2.0 }, 'rear brake pads': { min: 1.5, max: 2.0 },
+  'brake pads and rotors front': { min: 2.0, max: 2.5 },
+  'brake pads and rotors rear': { min: 2.0, max: 2.5 },
+  'brake caliper': { min: 1.0, max: 1.5 },
+  'alternator': { min: 1.5, max: 3.5 }, 'alternator replacement': { min: 1.5, max: 3.5 },
+  'starter': { min: 1.5, max: 3.5 }, 'starter motor': { min: 1.5, max: 3.5 },
+  'spark plugs': { min: 0.75, max: 2.0 }, 'spark plug replacement': { min: 0.75, max: 2.0 },
+  'ignition coil': { min: 0.5, max: 1.0 },
+  'serpentine belt': { min: 0.5, max: 1.0 }, 'drive belt': { min: 0.5, max: 1.0 },
+  'timing belt': { min: 4.0, max: 8.0 },
+  'belt tensioner': 0.75,
+  'tie rod': { min: 1.0, max: 1.5 },
+  'ball joint': { min: 1.5, max: 2.5 },
+  'control arm': { min: 1.5, max: 2.5 },
+  'sway bar link': 0.75,
+  'shock absorber': { min: 1.0, max: 1.5 },
+  'strut': { min: 1.5, max: 2.5 },
+  'fuel pump': { min: 2.0, max: 3.5 },
+  'fuel filter': 0.5,
+  'fuel injector': { min: 1.0, max: 2.0 },
+  'muffler': { min: 1.0, max: 1.5 },
+  'catalytic converter': { min: 1.5, max: 2.5 },
+  'oxygen sensor': 0.5, 'o2 sensor': 0.5,
+  'headlight bulb': 0.3,
+  'window regulator': { min: 1.5, max: 2.5 },
+  'wheel bearing': { min: 1.5, max: 2.5 }
+};
+
+function getFlatRate(description) {
+  const desc = description.toLowerCase().trim();
+  for (const [job, hours] of Object.entries(FLAT_RATES)) {
+    if (desc.includes(job)) return { job, hours };
+  }
+  return null;
+}
+
+function getHourGuidance(description) {
+  const flatRate = getFlatRate(description);
+  if (!flatRate) {
+    return { type: 'custom', message: '⚠️ CUSTOM JOB: Estimate realistic hours. Max 6hrs standard, 12hrs major.' };
+  }
+  const { job, hours } = flatRate;
+  if (typeof hours === 'number') {
+    return { type: 'fixed', message: `🔒 LOCKED: Use EXACTLY ${hours} hours for "${job}".`, hours };
+  }
+  return { type: 'range', message: `📊 RANGE: Use ${hours.min}-${hours.max} hours for "${job}".`, hours };
+}
+
+// ========================================
+// AI PROMPT BUILDER
+// ========================================
+function buildPrompt({ customer, vehicle, description, laborRate }) {
+  const effectiveRate = laborRate || DEFAULT_LABOR_RATE;
+  const guidance = getHourGuidance(description);
+  
+  return `You are an experienced mobile mechanic estimator.
+
+🔒 MANDATORY LABOR RATE: $${effectiveRate}/hour
+DO NOT change this rate. This is what the customer is being charged.
+
+${guidance.message}
+
+REALISTIC MOBILE TIMES: Water pump 2.5hrs, Alternator 1.5-3.5hrs, Brakes 1.5-2hrs, Oil change 0.5hrs, Spark plugs 0.75-2hrs
+
+JSON REQUIRED:
+{
+  "jobType": "Repair",
+  "shortDescription": "Brief summary",
+  "laborHours": 2.5,
+  "laborRate": ${effectiveRate},
+  "workSteps": ["Step 1", "Step 2"],
+  "parts": [{"name":"Part","cost":50}],
+  "shopSuppliesPercent": 7,
+  "timeline": "Same day",
+  "notes": "Context",
+  "tips": ["Tip 1"],
+  "warnings": ["Warning 1"]
+}
+
+Customer: ${customer.name}
+Vehicle: ${vehicle || 'N/A'}
+Job: ${description}
+
+Return ONLY valid JSON:`;
+}
+
+// ========================================
+// VALIDATION SCHEMAS
+// ========================================
 const GenerateSchema = z.object({
   customer: z.object({
     name: z.string().min(1),
@@ -48,122 +161,34 @@ const GenerateSchema = z.object({
   vehicle: z.string().optional(),
   description: z.string().min(3),
   jobType: z.string().optional(),
-  laborRate: z.number().optional() // ← BRIAN: Add this so frontend can pass custom rate
+  laborRate: z.number().optional()
 });
 
-// FLAT RATE TABLE - Common jobs have fixed labor times
-// BRIAN: Expand this list significantly! Add water pump, alternator, starter, 
-// fuel pump, thermostat, radiator, serpentine belt, brake jobs by axle, etc.
-const FLAT_RATES = {
-  'oil change': 0.5,
-  'oil change basic': 0.5,
-  'oil change synthetic': 0.5,
-  'oil change + rotation': 1.0,
-  'tire rotation': 0.5,
-  'battery replacement': 0.3,
-  'battery install': 0.3,
-  'wiper blades': 0.2,
-  'air filter': 0.3,
-  'cabin filter': 0.4,
-  'brake fluid flush': 0.75,
-  'coolant flush': 1.0,
-  'transmission fluid': 1.0
-  // BRIAN TODO: Add at least 20-30 more common jobs here with realistic mobile mechanic times
-};
+// ========================================
+// HEALTH CHECK
+// ========================================
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'SKSK ProTech Backend',
+    version: '3.0.0',
+    features: ['Groq AI', 'Flat Rates', 'Tax Tracking', 'Invoice System', 'VIN Lookup', 'Stripe Payments']
+  });
+});
 
-// Check if job matches a flat rate
-function getFlatRate(description) {
-  const desc = description.toLowerCase().trim();
-  for (const [job, hours] of Object.entries(FLAT_RATES)) {
-    if (desc.includes(job)) {
-      return hours;
-    }
-  }
-  return null;
-}
-
-// BRIAN: This prompt needs major work:
-// 1. Must RESPECT the custom laborRate passed from frontend
-// 2. Need better hour estimates (water pump was 8.5hrs - way too high!)
-// 3. Add more specific guidance for common repairs
-// 4. Make it understand mobile mechanic constraints vs full shop
-function buildPrompt({customer, vehicle, description, laborRate}) {
-  const flatRate = getFlatRate(description);
-  const effectiveRate = laborRate || DEFAULT_LABOR_RATE; // Use custom rate if provided
-  const flatRateHint = flatRate ? `\n\nIMPORTANT: This is a FLAT RATE job. Use exactly ${flatRate} hours for labor, no exceptions.` : '';
-  
-  return `You are an experienced automotive service writer for a MOBILE MECHANIC or small shop.
-Given a customer job description, produce a realistic estimate as JSON.
-
-CRITICAL FLAT RATE JOBS (USE EXACT HOURS):
-- Oil change (any type): 0.5 hours
-- Oil change + tire rotation: 1.0 hours  
-- Battery replacement: 0.3 hours
-- Wiper blades: 0.2 hours
-- Air filter: 0.3 hours
-- Cabin filter: 0.4 hours
-- Tire rotation: 0.5 hours
-- Brake fluid flush: 0.75 hours
-- Coolant flush: 1.0 hours
-
-OTHER JOBS - REALISTIC MOBILE MECHANIC TIMES:
-- Brake pads (front or rear): 1.5-2.0 hours TOTAL (not per wheel)
-- Brake pads + rotors: 2.0-2.5 hours TOTAL
-- Alternator: 1.5-3.0 hours (depends on accessibility)
-- Starter: 1.5-3.0 hours
-- Spark plugs (4-cyl): 0.75-1.0 hours TOTAL
-- Spark plugs (V6/V8): 1.0-1.5 hours TOTAL
-- Serpentine belt: 0.5-1.0 hours
-// BRIAN TODO: Add water pump (2-3.5hrs), thermostat (0.75-1.5hrs), fuel pump (1.5-2.5hrs), etc.
-
-SETUP TIME COUNTS ONCE:
-- Don't charge separately for lifting vehicle, removing wheels, etc.
-- If doing multiple tasks, overlap setup time
-
-JSON STRUCTURE REQUIRED:
-{
-  "jobType": string,
-  "shortDescription": string,
-  "laborHours": number (decimal),
-  "laborRate": number,
-  "workSteps": [string],
-  "parts": [{"name":string,"cost":number}],
-  "shopSuppliesPercent": number,
-  "timeline": string,
-  "notes": string,
-  "tips": [string],
-  "warnings": [string]
-}
-
-FIELDS EXPLAINED:
-- laborRate: Use ${effectiveRate} for this job (RESPECT THIS RATE - DO NOT CHANGE IT)
-- shopSuppliesPercent: Default 7%
-- workSteps: Plain bullet points (no special characters)
-- tips: Helpful advice for mechanic (e.g., "Use torque wrench")
-- warnings: Things to watch for (e.g., "Check for rust on brake lines")
-- parts: Use realistic aftermarket pricing, whole dollars
-- timeline: Realistic (e.g., "Same day", "2-3 hours", "1-2 days")
-
-IMPORTANT:
-- Return ONLY valid JSON, no markdown backticks
-- Use realistic mobile mechanic pricing
-- Don't inflate hours to increase profit${flatRateHint}
-
-Customer: ${customer.name}${customer.phone ? ` | ${customer.phone}` : ''}${customer.email ? ` | ${customer.email}` : ''}
-Vehicle: ${vehicle || 'Not specified'}
-Job: ${description}
-
-Generate estimate now:`;
-}
-
+// ========================================
+// ESTIMATE GENERATION
+// ========================================
 app.post('/api/generate-estimate', async (req, res) => {
   try {
     const parsed = GenerateSchema.parse(req.body);
-    const { customer, vehicle, description, laborRate } = parsed; // ← BRIAN: Extract laborRate here
+    const { customer, vehicle, description } = parsed;
+    const laborRate = parsed.laborRate || DEFAULT_LABOR_RATE;
 
-    const prompt = buildPrompt({ customer, vehicle, description, laborRate }); // ← BRIAN: Pass it to prompt
+    console.log(`[ESTIMATE] ${customer.name} | ${vehicle || 'N/A'} | $${laborRate}/hr`);
 
-    // Call Groq API
+    const prompt = buildPrompt({ customer, vehicle, description, laborRate });
+
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -173,10 +198,7 @@ app.post('/api/generate-estimate', async (req, res) => {
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { 
-            role: 'system', 
-            content: 'You are an expert automotive estimator. Always respond with valid JSON only, no markdown formatting or explanations.' 
-          },
+          { role: 'system', content: 'Expert automotive estimator. Return valid JSON only.' },
           { role: 'user', content: prompt }
         ],
         max_tokens: 1500,
@@ -184,23 +206,13 @@ app.post('/api/generate-estimate', async (req, res) => {
       })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Groq API error:', errorText);
-      throw new Error(`Groq API error: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`Groq API error: ${response.status}`);
 
     const data = await response.json();
     const text = data.choices?.[0]?.message?.content;
-    
-    if (!text) throw new Error('No response from AI');
+    if (!text) throw new Error('No AI response');
 
-    // Clean response
-    let cleanText = text.trim();
-    cleanText = cleanText.replace(/```json\n?/g, '');
-    cleanText = cleanText.replace(/```\n?/g, '');
-    cleanText = cleanText.trim();
-
+    let cleanText = text.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
     const jsonText = jsonMatch ? jsonMatch[0] : cleanText;
 
@@ -208,134 +220,383 @@ app.post('/api/generate-estimate', async (req, res) => {
     try {
       estimate = JSON.parse(jsonText);
     } catch (err) {
-      console.error('JSON parse error. Raw:', text);
-      return res.status(500).json({ error: 'AI returned invalid JSON', raw: text });
+      console.error('[JSON ERROR]', text.substring(0, 200));
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: text.substring(0, 500) });
     }
 
-    // BRIAN: Force the laborRate to match what user selected, don't trust AI
-    estimate.laborRate = laborRate || estimate.laborRate || DEFAULT_LABOR_RATE;
+    estimate.laborRate = laborRate;
+    
+    const flatRateMatch = getFlatRate(description);
+    if (flatRateMatch && typeof flatRateMatch.hours === 'number') {
+      estimate.laborHours = flatRateMatch.hours;
+      console.log(`[FLAT RATE] Forced ${flatRateMatch.hours}hrs for "${flatRateMatch.job}"`);
+    }
+    
     estimate.shopSuppliesPercent = estimate.shopSuppliesPercent ?? 7;
     estimate.laborHours = parseFloat(estimate.laborHours || 0);
     estimate.parts = (estimate.parts || []).map(p => ({ 
-      name: p.name, 
+      name: p.name || 'Part', 
       cost: Math.round(Number(p.cost || 0)) 
     }));
     estimate.tips = estimate.tips || [];
     estimate.warnings = estimate.warnings || [];
+    estimate.workSteps = estimate.workSteps || [];
 
-    // Calculate totals
     const laborCost = Number((estimate.laborHours * estimate.laborRate).toFixed(2));
-    const partsCost = estimate.parts.reduce((s,p)=> s + Number(p.cost || 0), 0);
-    const shopSupplies = Number((partsCost * (estimate.shopSuppliesPercent/100)).toFixed(2));
+    const partsCost = estimate.parts.reduce((s, p) => s + Number(p.cost || 0), 0);
+    const shopSupplies = Number((partsCost * (estimate.shopSuppliesPercent / 100)).toFixed(2));
     const subtotal = Number((laborCost + partsCost + shopSupplies).toFixed(2));
-
-    // Tax calculation (28% for self-employed)
     const taxRate = 28;
-    const recommendedTaxSetaside = Number((subtotal * (taxRate / 100)).toFixed(2));
+    const recommendedTaxSetaside = Number((subtotal * 0.28).toFixed(2));
     const netAfterTax = Number((subtotal - recommendedTaxSetaside).toFixed(2));
 
-    // Save customer (existing logic is fine)
     let customerRecord = null;
     if (customer.email) {
-      const { data: existing } = await supabase.from('customers').select('*').eq('email', customer.email).limit(1);
-      if (existing && existing.length) customerRecord = existing[0];
+      const { data } = await supabase.from('customers').select('*').eq('email', customer.email).limit(1);
+      if (data && data.length) customerRecord = data[0];
     }
     if (!customerRecord && customer.phone) {
-      const { data: existing } = await supabase.from('customers').select('*').eq('phone', customer.phone).limit(1);
-      if (existing && existing.length) customerRecord = existing[0];
+      const { data } = await supabase.from('customers').select('*').eq('phone', customer.phone).limit(1);
+      if (data && data.length) customerRecord = data[0];
     }
     if (!customerRecord) {
-      const { data: inserted, error: insertErr } = await supabase.from('customers').insert({
-        name: customer.name,
-        phone: customer.phone || null,
-        email: customer.email || null
-      }).select().single();
-      if (insertErr) throw insertErr;
-      customerRecord = inserted;
+      const { data, error } = await supabase.from('customers')
+        .insert({ name: customer.name, phone: customer.phone || null, email: customer.email || null })
+        .select().single();
+      if (error) throw error;
+      customerRecord = data;
     }
 
-    // Save job
-    const jobPayload = {
+    const { data: savedJob, error: jobErr } = await supabase.from('jobs').insert({
       customer_id: customerRecord.id,
+      status: 'estimate',
       description: estimate.shortDescription || description,
       raw_description: description,
       job_type: estimate.jobType || 'Auto Repair',
-      vehicle,
-      labor_hours: estimate.laborHours,
-      labor_rate: estimate.laborRate,
-      labor_cost: laborCost,
-      parts: estimate.parts,
-      parts_cost: partsCost,
-      shop_supplies_percent: estimate.shopSuppliesPercent,
-      shop_supplies_cost: shopSupplies,
-      subtotal,
+      vehicle: vehicle || null,
+      estimated_labor_hours: estimate.laborHours,
+      estimated_labor_rate: estimate.laborRate,
+      estimated_labor_cost: laborCost,
+      estimated_parts: estimate.parts,
+      estimated_parts_cost: partsCost,
+      estimated_shop_supplies_percent: estimate.shopSuppliesPercent,
+      estimated_shop_supplies_cost: shopSupplies,
+      estimated_subtotal: subtotal,
+      estimated_tax_setaside: recommendedTaxSetaside,
+      tax_year: new Date().getFullYear(),
       tax_rate: taxRate,
-      recommended_tax_setaside: recommendedTaxSetaside,
-      is_taxable: true,
-      timeline: estimate.timeline || '',
-      work_steps: estimate.workSteps || [],
+      timeline: estimate.timeline || 'TBD',
+      work_steps: estimate.workSteps,
       notes: estimate.notes || ''
-    };
-
-    const { data: savedJob, error: jobErr } = await supabase.from('jobs').insert(jobPayload).select().single();
+    }).select().single();
+    
     if (jobErr) throw jobErr;
+
+    console.log(`[SAVED] Job ${savedJob.id} | $${subtotal}`);
 
     res.json({
       ok: true,
-      estimate: { 
-        ...estimate, 
-        laborCost, 
-        partsCost, 
-        shopSupplies, 
-        subtotal,
-        taxRate,
-        recommendedTaxSetaside,
-        netAfterTax
-      },
+      estimate: { ...estimate, laborCost, partsCost, shopSupplies, subtotal, taxRate, recommendedTaxSetaside, netAfterTax },
       savedJob,
       customer: customerRecord
     });
 
   } catch (err) {
-    console.error('generate-estimate error', err);
+    console.error('[ESTIMATE ERROR]', err);
     res.status(500).json({ error: err.message || 'Server error' });
   }
 });
 
-// BRIAN TODO: Add /api/customers GET endpoint so frontend can load saved customers
-// BRIAN TODO: Add /api/validate-access POST endpoint for Pro access code checking
-// BRIAN TODO: Add /api/vin-lookup/:vin GET endpoint for VIN decoding (NHTSA API is free)
+// ========================================
+// CUSTOMERS
+// ========================================
+app.get('/api/customers', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('customers').select('*').order('name', { ascending: true });
+    if (error) throw error;
+    res.json({ ok: true, customers: data || [] });
+  } catch (err) {
+    console.error('[CUSTOMERS ERROR]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
+// ========================================
+// ACCESS CODE VALIDATION
+// ========================================
+app.post('/api/validate-access', async (req, res) => {
+  try {
+    const { accessCode } = req.body;
+    if (!accessCode || accessCode.trim().length === 0) {
+      return res.json({ valid: false, error: 'Access code required' });
+    }
+    
+    const code = accessCode.trim().toUpperCase();
+    
+    const { data, error } = await supabase.from('access_codes')
+      .select('*').eq('code', code).eq('is_active', true).single();
+    
+    if (error || !data) {
+      return res.json({ valid: false, error: 'Invalid or expired code' });
+    }
+    
+    if (data.expires_at && new Date(data.expires_at) < new Date()) {
+      return res.json({ valid: false, error: 'Code expired' });
+    }
+    
+    if (data.max_uses && data.current_uses >= data.max_uses) {
+      return res.json({ valid: false, error: 'Code max uses reached' });
+    }
+    
+    await supabase.from('access_codes').update({ 
+      current_uses: (data.current_uses || 0) + 1,
+      last_used_at: new Date().toISOString()
+    }).eq('id', data.id);
+    
+    res.json({
+      valid: true,
+      tier: data.tier || 'pro',
+      customer: data.customer_name || 'Pro User',
+      expires: data.expires_at,
+      message: `Welcome to SKSK ProTech ${data.tier === 'pro_plus' ? 'Pro Plus' : 'Pro'}!`
+    });
+  } catch (err) {
+    console.error('[VALIDATE ACCESS ERROR]', err);
+    res.status(500).json({ valid: false, error: 'Server error' });
+  }
+});
+
+// ========================================
+// VIN LOOKUP
+// ========================================
+app.get('/api/vin-lookup/:vin', async (req, res) => {
+  try {
+    const vin = req.params.vin.trim().toUpperCase();
+    if (vin.length !== 17) {
+      return res.status(400).json({ ok: false, error: 'VIN must be 17 characters' });
+    }
+    
+    const nhtsaUrl = `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/${vin}?format=json`;
+    const response = await fetch(nhtsaUrl);
+    if (!response.ok) throw new Error('NHTSA API failed');
+    
+    const data = await response.json();
+    if (!data.Results || data.Results.length === 0) {
+      return res.json({ ok: false, error: 'VIN not found' });
+    }
+    
+    const results = data.Results;
+    const getField = (variableId) => {
+      const field = results.find(r => r.VariableId === variableId);
+      return field?.Value || null;
+    };
+    
+    const year = getField(29) || getField(26);
+    const make = getField(26);
+    const model = getField(28);
+    const trim = getField(109);
+    const displacement = getField(11);
+    const cylinders = getField(9);
+    
+    let displayString = '';
+    if (year) displayString += `${year} `;
+    if (make) displayString += `${make} `;
+    if (model) displayString += `${model} `;
+    if (trim) displayString += `${trim} `;
+    if (displacement && cylinders) displayString += `${displacement}L V${cylinders}`;
+    
+    res.json({
+      ok: true,
+      vin,
+      year, make, model, trim, displacement, cylinders,
+      displayString: displayString.trim()
+    });
+  } catch (err) {
+    console.error('[VIN LOOKUP ERROR]', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ========================================
+// JOBS
+// ========================================
 app.get('/api/jobs', async (req, res) => {
   const { data, error } = await supabase.from('jobs').select('*').order('created_at', { ascending: false }).limit(50);
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ data });
+  res.json({ ok: true, data });
 });
 
-// Tax summary endpoints
-app.get('/api/tax-summary/month', async (req, res) => {
+// ========================================
+// STRIPE INTEGRATION
+// ========================================
+
+const PRICING = {
+  pro_monthly: {
+    price: 2900,
+    interval: 'month',
+    name: 'SKSK ProTech Pro - Monthly'
+  },
+  pro_yearly: {
+    price: 29000,
+    interval: 'year',
+    name: 'SKSK ProTech Pro - Yearly'
+  }
+};
+
+// Generate random access code
+function generateAccessCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
+
+// Create Stripe checkout session
+app.post('/api/create-checkout-session', async (req, res) => {
+  if (!stripe) {
+    return res.status(500).json({ error: 'Stripe not configured' });
+  }
+
   try {
-    const { data, error } = await supabase.from('tax_summary').select('*').limit(12);
-    if (error) throw error;
-    res.json({ ok: true, data });
+    const { plan, customerEmail, customerName } = req.body;
+    
+    if (!plan || !PRICING[plan]) {
+      return res.status(400).json({ error: 'Invalid plan' });
+    }
+    
+    const pricing = PRICING[plan];
+    
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'subscription',
+      customer_email: customerEmail || undefined,
+      client_reference_id: customerName || undefined,
+      
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: pricing.name,
+              description: 'Full access: Unlimited estimates, customer DB, VIN lookup, invoices, expense tracking, tax reports',
+            },
+            unit_amount: pricing.price,
+            recurring: {
+              interval: pricing.interval,
+            },
+          },
+          quantity: 1,
+        },
+      ],
+      
+      success_url: `${FRONTEND_URL}?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${FRONTEND_URL}?canceled=true`,
+      
+      metadata: {
+        plan: plan,
+        tier: 'pro'
+      },
+    });
+    
+    console.log(`[STRIPE] Checkout session created: ${session.id}`);
+    
+    res.json({ 
+      ok: true, 
+      sessionId: session.id,
+      url: session.url 
+    });
+    
   } catch (err) {
+    console.error('[STRIPE CHECKOUT ERROR]', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/tax-summary/quarter', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('quarterly_tax_summary').select('*').limit(8);
-    if (error) throw error;
-    res.json({ ok: true, data });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// Stripe webhook handler
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe) {
+    return res.status(500).send('Stripe not configured');
   }
+
+  const sig = req.headers['stripe-signature'];
+  
+  let event;
+  
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('[WEBHOOK ERROR]', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+  
+  console.log(`[STRIPE EVENT] ${event.type}`);
+  
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        const customerEmail = session.customer_email;
+        const customerName = session.client_reference_id;
+        const stripeCustomerId = session.customer;
+        const subscriptionId = session.subscription;
+        
+        const accessCode = generateAccessCode();
+        
+        await supabase.from('access_codes').insert({
+          code: accessCode,
+          tier: 'pro',
+          customer_name: customerName || customerEmail,
+          email: customerEmail,
+          is_active: true,
+          max_uses: 999,
+          stripe_customer_id: stripeCustomerId,
+          stripe_subscription_id: subscriptionId,
+          stripe_subscription_status: 'active'
+        });
+        
+        console.log(`[ACCESS CODE CREATED] ${accessCode} for ${customerEmail}`);
+        break;
+        
+      case 'customer.subscription.updated':
+        const subscription = event.data.object;
+        const isActive = subscription.status === 'active' || subscription.status === 'trialing';
+        
+        await supabase.from('access_codes').update({ 
+          is_active: isActive,
+          stripe_subscription_status: subscription.status
+        }).eq('stripe_subscription_id', subscription.id);
+        
+        console.log(`[SUBSCRIPTION UPDATED] ${subscription.id} -> ${subscription.status}`);
+        break;
+        
+      case 'customer.subscription.deleted':
+        const deletedSub = event.data.object;
+        
+        await supabase.from('access_codes').update({ 
+          is_active: false,
+          stripe_subscription_status: 'canceled'
+        }).eq('stripe_subscription_id', deletedSub.id);
+        
+        console.log(`[SUBSCRIPTION DELETED] ${deletedSub.id}`);
+        break;
+    }
+  } catch (err) {
+    console.error('[WEBHOOK HANDLER ERROR]', err);
+  }
+  
+  res.json({ received: true });
 });
 
+// ========================================
+// START SERVER
+// ========================================
 app.listen(PORT, () => {
-  console.log(`🔥 SKSK AutoPro Backend running on port ${PORT}`);
-  console.log(`🤖 Powered by Groq (llama-3.3-70b-versatile)`);
+  console.log(`🔥 SKSK ProTech Backend v3.0 on port ${PORT}`);
+  console.log(`🤖 Groq AI + 80+ flat rates active`);
   console.log(`💰 Tax tracking enabled`);
-  console.log(`⚡ Flat rates active for common jobs`);
+  if (stripe) {
+    console.log(`💳 Stripe payments enabled`);
+  }
 });
