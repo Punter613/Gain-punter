@@ -189,40 +189,95 @@ app.post('/api/generate-estimate', async (req, res) => {
 
     const prompt = buildPrompt({ customer, vehicle, description, laborRate });
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: 'Expert automotive estimator. Return valid JSON only.' },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 1500,
-        temperature: 0.1
-      })
-    });
+  const url = 'https://api.groq.com/openai/v1/chat/completions';
 
-    if (!response.ok) throw new Error(`Groq API error: ${response.status}`);
+// 15s timeout so it doesn’t hang forever
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(new Error('timeout')), 15000);
 
-    const data = await response.json();
-    const text = data.choices?.[0]?.message?.content;
-    if (!text) throw new Error('No AI response');
+let response;
+try {
+  response = await fetch(url, {
+    method: 'POST',
+    signal: controller.signal,
+    headers: {
+      'Authorization': `Bearer ${String(GROQ_API_KEY).trim()}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: 'Expert automotive estimator. Return valid JSON only.' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 1500,
+      temperature: 0.1
+    })
+  });
+} catch (err) {
+  console.error('[GROQ FETCH FAILED]', {
+    message: err?.message,
+    causeCode: err?.cause?.code,
+    causeMessage: err?.cause?.message,
+    cause: err?.cause,
+  });
 
-    let cleanText = text.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-    const jsonText = jsonMatch ? jsonMatch[0] : cleanText;
+  return res.status(502).json({
+    ok: false,
+    error: 'Groq fetch failed',
+    hint: err?.cause?.code || err?.message || 'unknown'
+  });
+} finally {
+  clearTimeout(timeout);
+}
 
-    let estimate;
-    try {
-      estimate = JSON.parse(jsonText);
-    } catch (err) {
-      console.error('[JSON ERROR]', text.substring(0, 200));
-      return res.status(500).json({ error: 'AI returned invalid JSON', raw: text.substring(0, 500) });
-    }
+if (!response.ok) {
+  const body = await response.text().catch(() => '');
+  console.error('[GROQ BAD STATUS]', response.status, body.slice(0, 300));
+  return res.status(502).json({
+    ok: false,
+    error: `Groq API error: ${response.status}`,
+    hint: body.slice(0, 300)
+  });
+}
+
+const data = await response.json();
+
+const text = data?.choices?.[0]?.message?.content;
+if (!text) {
+  console.error('[GROQ WEIRD RESPONSE]', JSON.stringify(data).slice(0, 500));
+  return res.status(502).json({
+    ok: false,
+    error: 'Groq response missing content'
+  });
+}
+
+// clean + extract JSON
+let cleanText = text
+  .trim()
+  .replace(/```json\n?/g, '')
+  .replace(/```\n?/g, '')
+  .trim();
+
+const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+const jsonText = jsonMatch ? jsonMatch[0] : cleanText;
+
+let estimate;
+try {
+  estimate = JSON.parse(jsonText);
+} catch (err) {
+  console.error('[JSON ERROR]', text.substring(0, 200));
+  return res.status(500).json({
+    ok: false,
+    error: 'AI returned invalid JSON',
+    raw: text.substring(0, 500)
+  });
+}
+if (!estimate || typeof estimate !== 'object' || Array.isArray(estimate)) {
+  console.error('[AI JSON NOT OBJECT]', typeof estimate, JSON.stringify(estimate).slice(0, 200));
+  return res.status(500).json({ ok:false, error:'AI JSON was not an object', raw: text.substring(0, 500) });
+}
 
     estimate.laborRate = laborRate;
     
