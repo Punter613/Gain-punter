@@ -112,43 +112,195 @@ function getHourGuidance(description) {
 }
 
 // ========================================
-// AI PROMPT BUILDER
 // ========================================
+// SECTION 4: AI PROMPT BUILDER (ENHANCED)
+// REPLACE YOUR EXISTING buildPrompt() FUNCTION WITH THIS
+// ========================================
+
 function buildPrompt({ customer, vehicle, description, laborRate }) {
   const effectiveRate = laborRate || DEFAULT_LABOR_RATE;
-  const guidance = getHourGuidance(description);
   
-  return `You are an experienced mobile mechanic estimator.
+  // ========================================
+  // SYMPTOM DETECTION
+  // Detect if user described a symptom vs specific repair
+  // ========================================
+  const symptomKeywords = [
+    'no heat', 'no ac', 'overheating', 'rough idle', 'wont start', 'won\'t start',
+    'no start', 'stalling', 'stalls', 'smoking', 'leaking', 'leak', 'noise', 
+    'clicking', 'grinding', 'squealing', 'squeaking', 'vibration', 'shaking', 
+    'pulling', 'hesitation', 'hesitates', 'check engine', 'light on', 'mil on',
+    'smell', 'burning', 'not working', 'doesn\'t work', 'misfire', 'misfiring',
+    'hard to start', 'cranks but', 'turns over', 'sputtering', 'jerking',
+    'sluggish', 'loss of power', 'no power', 'running rough'
+  ];
+  
+  const isSymptom = symptomKeywords.some(keyword => 
+    description.toLowerCase().includes(keyword)
+  );
+  
+  // ========================================
+  // DIAGNOSTIC GUIDANCE (for symptoms)
+  // ========================================
+  const diagnosticGuidance = isSymptom ? `
+
+🚨 CRITICAL: This is a SYMPTOM, not a confirmed repair!
+
+DIAGNOSTIC APPROACH REQUIRED:
+1. Set "jobType": "Diagnosis"
+2. Set "shortDescription": "Diagnose [symptom] - [vehicle if known]"
+3. Set "laborHours": 1.0-1.5 (diagnostic time only)
+4. Set "parts": [] (empty - no parts until diagnosis confirms issue)
+5. In "workSteps": List diagnostic steps (not repair steps)
+6. In "warnings": List POSSIBLE causes ranked by probability
+7. In "notes": Explain diagnostic fee applies toward repair if approved
+
+DIAGNOSTIC STEP DETAIL LEVEL (Goldilocks - not too basic, not excessive):
+✅ GOOD: "Remove wheel, inspect brake lines and hoses for cracks/leaks, check pad thickness and wear pattern (uneven = stuck caliper), measure rotor thickness with micrometer, check caliper slide pins for binding"
+
+❌ TOO BASIC: "Check brakes"
+
+❌ TOO DETAILED: "Using 19mm socket, turn lug nuts counterclockwise exactly 12 rotations, lift with floor jack rated 3-ton minimum..."
+
+PROBABILITY RANKING (in warnings):
+- List MOST LIKELY cause first (60-80% probability)
+- Then COMMON causes (15-25%)
+- Then LESS COMMON (5-10%)
+- Include cost estimate for each: "Thermostat ($20 + 1.0hr)"
+
+EXAMPLE for "no heat" symptom:
+{
+  "jobType": "Diagnosis",
+  "shortDescription": "Diagnose no heat condition - HVAC system",
+  "laborHours": 1.5,
+  "laborRate": ${effectiveRate},
+  "parts": [],
+  "workSteps": [
+    "Check coolant level and condition (low = air in system)",
+    "Start engine, feel heater hoses - both should get hot (if not, flow issue)",
+    "Monitor temp gauge - if slow to warm up, likely thermostat",
+    "With engine warm, change temp from cold to hot - listen for blend door motor clicking",
+    "Check cabin air filter - severely clogged reduces airflow",
+    "If available, scan for HVAC fault codes"
+  ],
+  "shopSuppliesPercent": 7,
+  "timeline": "1-2 hours",
+  "notes": "Diagnostic fee applies toward repair cost if work is approved. Multiple possible causes require testing before accurate parts quote.",
+  "tips": [
+    "Start with easiest checks first - coolant level is free",
+    "Heater core clogs are less common but expensive - diagnose thoroughly first"
+  ],
+  "warnings": [
+    "MOST LIKELY (70%): Low coolant or air in system - refill/bleed ($20 + 0.5hr)",
+    "COMMON (20%): Stuck thermostat - replace ($25 + 1.0hr)",
+    "COMMON (15%): Blend door actuator failure - replace ($80 + 2.0hrs)",
+    "LESS LIKELY (10%): Clogged heater core - flush or replace ($150 + 3.0hrs)",
+    "RARE (5%): Failed heater control valve (if equipped) - replace ($60 + 1.5hrs)",
+    "Additional labor/parts determined after diagnosis confirms root cause"
+  ]
+}
+` : `
+
+CONFIRMED REPAIR APPROACH:
+This is a specific repair request (not just a symptom).
+- Quote the repair with parts and labor
+- Provide detailed work steps (Goldilocks detail level)
+- Include possible complications in warnings
+- Tips should help mechanic do job efficiently
+`;
+  
+  return `You are an experienced mobile mechanic estimator with 20+ years diagnostic experience.
 
 🔒 MANDATORY LABOR RATE: $${effectiveRate}/hour
-DO NOT change this rate. This is what the customer is being charged.
+NEVER change this rate. This is what the customer is being charged.
 
-${guidance.message}
+${diagnosticGuidance}
 
-REALISTIC MOBILE TIMES: Water pump 2.5hrs, Alternator 1.5-3.5hrs, Brakes 1.5-2hrs, Oil change 0.5hrs, Spark plugs 0.75-2hrs
+📋 REALISTIC MOBILE MECHANIC LABOR TIMES:
 
-JSON REQUIRED:
+DIAGNOSTICS (symptom-based jobs):
+- General diagnosis: 1.0-1.5 hrs
+- Electrical diagnosis: 1.5-2.0 hrs  
+- Drivability diagnosis: 1.5-2.0 hrs
+- No-start diagnosis: 1.0-1.5 hrs
+- HVAC diagnosis: 1.0-1.5 hrs
+
+CONFIRMED REPAIRS (specific part replacement):
+- Water pump: 2.5 hrs
+- Thermostat: 1.0 hrs
+- Alternator: 1.5-3.5 hrs (depends on access)
+- Starter: 1.5-3.5 hrs
+- Brake pads (per axle): 1.5-2.0 hrs
+- Brake pads + rotors (per axle): 2.0-2.5 hrs
+- Spark plugs (4-cyl): 0.75-1.0 hrs
+- Spark plugs (V6/V8): 1.0-2.0 hrs
+- Serpentine belt: 0.5-1.0 hrs
+- Oil change: 0.5 hrs
+- Battery: 0.3 hrs
+
+🎯 WORK STEP DETAIL GUIDELINES:
+
+GOLDILOCKS LEVEL (what we want):
+- Include key troubleshooting checks during work
+- Mention critical torque specs or procedures
+- Note common complications to watch for
+- Professional but not hand-holding
+
+EXAMPLES:
+✅ Brakes: "Remove wheel, inspect lines/hoses for damage, check pad wear pattern (uneven = stuck caliper), apply thin film of grease to pad backs, lubricate caliper slide pins, compress piston while watching for fluid leaks, torque lug nuts to spec"
+
+✅ Thermostat: "Drain coolant into container, remove upper hose, note thermostat orientation before removal, clean mating surfaces thoroughly, install with spring toward engine, refill and bleed system, verify temp gauge reaches normal operating range"
+
+✅ Alternator: "Disconnect battery negative first, photograph belt routing before removal, check belt condition while off, inspect alternator connections for corrosion, torque mounting bolts to spec, verify battery warning light goes off after start"
+
+JSON RESPONSE REQUIRED:
 {
-  "jobType": "Repair",
-  "shortDescription": "Brief summary",
+  "jobType": "Diagnosis" OR "Repair" OR "Service",
+  "shortDescription": "Brief one-line summary",
   "laborHours": 2.5,
   "laborRate": ${effectiveRate},
-  "workSteps": ["Step 1", "Step 2"],
-  "parts": [{"name":"Part","cost":50}],
+  "workSteps": [
+    "Step 1 with troubleshooting details",
+    "Step 2 with key procedures",
+    "Step 3 with verification checks"
+  ],
+  "parts": [
+    {"name": "Part Name", "cost": 50}
+  ],
   "shopSuppliesPercent": 7,
-  "timeline": "Same day",
-  "notes": "Context",
-  "tips": ["Tip 1"],
-  "warnings": ["Warning 1"]
+  "timeline": "Same day" OR "2-3 hours" OR "Next day",
+  "notes": "Important context for customer",
+  "tips": [
+    "Helpful advice for mechanic doing work",
+    "Tool recommendations or best practices"
+  ],
+  "warnings": [
+    "Things to watch for during job",
+    "If X found, may need Y (with cost estimate)"
+  ]
 }
 
-Customer: ${customer.name}
-Vehicle: ${vehicle || 'N/A'}
-Job: ${description}
+🚨 CRITICAL RULES:
+1. Return ONLY valid JSON, no markdown backticks
+2. laborRate MUST be ${effectiveRate} exactly
+3. If SYMPTOM → Diagnosis job, empty parts array, list possible causes
+4. If SPECIFIC REPAIR → Quote with parts, detailed steps
+5. Work steps = Goldilocks detail (not basic, not excessive)
+6. Tips = for mechanic (tools, techniques, safety)
+7. Warnings = possible complications ranked by probability
+8. Filter out irrelevant issues (don't list water pump for starter problem)
+9. Be conservative with labor hours - mobile mechanics work faster
+10. Parts should be aftermarket pricing (not OEM dealer prices)
 
-Return ONLY valid JSON:`;
+CUSTOMER: ${customer.name}
+VEHICLE: ${vehicle || 'Not specified'}
+JOB DESCRIPTION: ${description}
+
+Generate estimate now (JSON only, no other text):`;
 }
 
+// ========================================
+// END SECTION 4
+// ========================================
 // ========================================
 // VALIDATION SCHEMAS
 // ========================================
