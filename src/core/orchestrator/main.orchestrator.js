@@ -10,7 +10,7 @@ const evidenceVerifier = require('../evidence/evidence.verifier');
 const economicEngine = require('../economic/economic.engine');
 const { applyCompletedWorkGuard } = require('./completed.work.guard');
 const { decodeVinNhtsa } = require('../../services/vin');
-const { scrapeLEMONManuals } = require('../../services/lemon');
+const { collectVehicleEvidence } = require('../../services/vehicle.evidence');
 
 class SKSKOrchestrator {
   constructor() {
@@ -21,6 +21,10 @@ class SKSKOrchestrator {
       evidenceCollected: 0,
       scraperCacheHits: 0,
       scraperLiveScrapes: 0,
+      nhtsaLookups: 0,
+      tsbMatches: 0,
+      knownIssueMatches: 0,
+      recallMatches: 0,
       evidenceRejected: 0,
       economicAnalyzed: 0,
       completedWorkFiltered: 0,
@@ -45,11 +49,15 @@ class SKSKOrchestrator {
 
       const safetyConstraints = (deterministicResult.overrides || []).filter(o => o.severity === 'CRITICAL');
 
-      console.log('[ORCHESTRATOR] Step 2: Collecting vehicle/factory evidence...');
+      console.log('[ORCHESTRATOR] Step 2: Collecting OEM/TSB/known-issue evidence...');
       const evidenceContext = await this._collectEvidence(vehicleProfile, context);
       this.pipelineStats.evidenceCollected++;
       if (evidenceContext.manualData?.fromCache) this.pipelineStats.scraperCacheHits++;
       else if (evidenceContext.manualData?.scraped) this.pipelineStats.scraperLiveScrapes++;
+      if (evidenceContext.vehicleEvidence?.sources?.includes('NHTSA_ODI')) this.pipelineStats.nhtsaLookups++;
+      this.pipelineStats.tsbMatches += evidenceContext.vehicleEvidence?.tsbs?.references?.length || 0;
+      this.pipelineStats.knownIssueMatches += evidenceContext.vehicleEvidence?.knownIssues?.length || 0;
+      this.pipelineStats.recallMatches += evidenceContext.vehicleEvidence?.recalls?.length || 0;
 
       const enrichedContext = {
         ...context,
@@ -76,8 +84,6 @@ class SKSKOrchestrator {
         aiOutput = await this._executeChain(routingResult.suggestedChain, input, enrichedContext, vehicleProfile);
       }
 
-      // Prompt rules are advisory; enforce completed technician work deterministically
-      // before evidence verification and economic analysis can turn it into new work.
       const completedWorkGuard = this._applyCompletedWorkGuard(aiOutput, enrichedContext.mechanicNotices);
       aiOutput = completedWorkGuard.output;
       if (completedWorkGuard.changed) {
@@ -154,11 +160,18 @@ class SKSKOrchestrator {
           specialist: targetSpecialistName,
           aiOutput: verifiedOutputText,
           economicAnalysis: economicResult,
-          completedWorkExcluded: completedWorkGuard.completedWork || []
+          completedWorkExcluded: completedWorkGuard.completedWork || [],
+          evidenceSummary: {
+            oemReferences: evidenceContext.vehicleEvidence?.oem?.references?.length || 0,
+            tsbCandidates: evidenceContext.vehicleEvidence?.tsbs?.references?.length || 0,
+            recalls: evidenceContext.vehicleEvidence?.recalls?.length || 0,
+            knownIssues: evidenceContext.vehicleEvidence?.knownIssues?.length || 0,
+            sources: evidenceContext.vehicleEvidence?.sources || []
+          }
         },
         metadata: {
           latencyMs: Date.now() - startTime,
-          pipelineVersion: '1.2.0-completed-work-guard',
+          pipelineVersion: '1.3.0-vehicle-evidence',
           requestId: this._generateRequestId(),
           timestamp: new Date().toISOString()
         }
@@ -213,25 +226,46 @@ class SKSKOrchestrator {
       }
     }
 
-    let manualData = { items: [], error: 'Vehicle data unavailable for LEMON scrape' };
+    let vehicleEvidence = {
+      available: false,
+      error: 'Vehicle data unavailable for evidence collection',
+      oem: { references: [] },
+      tsbs: { references: [], status: 'not_available' },
+      recalls: [],
+      knownIssues: [],
+      sources: []
+    };
+
     if (resolvedVehicle.make && resolvedVehicle.year && resolvedVehicle.model) {
       try {
-        manualData = await scrapeLEMONManuals(resolvedVehicle);
-        manualData = { ...manualData, scraped: !manualData.fromCache && !manualData.error };
-        console.log(`[ORCHESTRATOR] LEMON evidence: ${manualData.fromCache ? 'CACHE HIT' : manualData.scraped ? 'LIVE SCRAPE' : 'UNAVAILABLE'} (${manualData.items?.length || 0} items)`);
+        vehicleEvidence = await collectVehicleEvidence(resolvedVehicle);
+        console.log(`[ORCHESTRATOR] Vehicle evidence: sources=${vehicleEvidence.sources?.join(',') || 'none'} oem=${vehicleEvidence.oem?.references?.length || 0} tsb=${vehicleEvidence.tsbs?.references?.length || 0} recalls=${vehicleEvidence.recalls?.length || 0} knownIssues=${vehicleEvidence.knownIssues?.length || 0}`);
       } catch (error) {
-        console.warn('[ORCHESTRATOR] LEMON evidence collection failed:', error.message);
-        manualData = { items: [], error: error.message, fromCache: false, scraped: false };
+        console.warn('[ORCHESTRATOR] Vehicle evidence collection failed:', error.message);
+        vehicleEvidence.error = error.message;
       }
     }
 
+    const manualItems = vehicleEvidence.oem?.references || [];
+    const manualData = {
+      items: manualItems,
+      fromCache: !!vehicleEvidence.oem?.fromCache,
+      scraped: !!vehicleEvidence.oem?.scraped,
+      error: vehicleEvidence.error || null
+    };
+
     return {
       vehicleData: resolvedVehicle,
+      vehicleEvidence,
       manualData,
       evidence: {
-        factoryManuals: manualData.items || [],
-        source: manualData.fromCache ? 'lemon_cache' : 'lemon_live',
-        available: (manualData.items || []).length > 0
+        factoryManuals: manualItems,
+        oemReferences: vehicleEvidence.oem?.references || [],
+        tsbs: vehicleEvidence.tsbs?.references || [],
+        recalls: vehicleEvidence.recalls || [],
+        knownIssues: vehicleEvidence.knownIssues || [],
+        sources: vehicleEvidence.sources || [],
+        available: !!vehicleEvidence.available
       },
       evidenceVehicleProfile: resolvedVehicle,
       ...(context || {})
