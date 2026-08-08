@@ -2,8 +2,8 @@
  * Deterministic Completed Work Guard
  *
  * Prevents the AI from turning technician history into a duplicate repair
- * recommendation. This is intentionally deterministic: prompt instructions
- * are helpful, but they are not a safety/control boundary.
+ * recommendation. Prompt instructions are helpful, but they are not a
+ * deterministic control boundary.
  */
 
 const WORK_ALIASES = [
@@ -83,11 +83,30 @@ function guardJson(data, completedWork) {
     data[key] = kept;
   }
 
-  if (Array.isArray(data.parts)) {
-    data.parts = data.parts.filter(item => !itemMatchesCompletedWork(item, completedWork));
+  return { data, removed };
+}
+
+function guardText(text, completedWork) {
+  const original = String(text || '');
+  const removed = [];
+  const patterns = completedWork.map(work => {
+    if (work === 'cv axle') return /(?:replace|replacement|install|change)\b[^.\n]*(?:cv\s+(?:axle|axles|joint|joints)|constant velocity)[^.\n]*[.\n]?/gi;
+    return new RegExp(`(?:replace|replacement|install|change)\\b[^.\\n]*\\b${work.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b[^.\\n]*[.\\n]?`, 'gi');
+  });
+
+  let guarded = original;
+  for (const pattern of patterns) {
+    guarded = guarded.replace(pattern, match => {
+      removed.push(match.trim());
+      return '';
+    });
   }
 
-  return { data, removed };
+  if (removed.length) {
+    guarded = `${guarded.trim()}\n\nPreviously completed work excluded from new repair recommendations: ${completedWork.join(', ')}. Reinspect/rework only if evidence shows the prior repair failed or was incorrect.`.trim();
+  }
+
+  return { output: guarded, removed };
 }
 
 function applyCompletedWorkGuard(output, mechanicNotices = []) {
@@ -99,13 +118,14 @@ function applyCompletedWorkGuard(output, mechanicNotices = []) {
     try {
       parsed = JSON.parse(output);
     } catch (_) {
+      const textResult = guardText(output, completedWork);
       return {
-        output,
+        output: textResult.output,
         completedWork,
-        removed: [],
-        changed: false,
-        needsReinspection: false,
-        note: 'Completed-work history detected; non-JSON specialist output left intact for evidence review.'
+        removed: textResult.removed,
+        changed: textResult.removed.length > 0,
+        needsReinspection: textResult.removed.length > 0,
+        note: 'Completed-work history enforced on non-JSON specialist output.'
       };
     }
   }
@@ -120,7 +140,8 @@ function applyCompletedWorkGuard(output, mechanicNotices = []) {
     output: typeof output === 'string' ? JSON.stringify(result.data) : result.data,
     completedWork,
     removed: result.removed,
-    changed: result.removed.length > 0
+    changed: result.removed.length > 0,
+    needsReinspection: result.removed.length > 0
   };
 }
 
