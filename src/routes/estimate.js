@@ -50,6 +50,7 @@ router.post('/', async (req, res) => {
       obdCodes = [],
       customerStates = [],
       mechanicNotices = [],
+      keywords = [],
       laborRate = 65,
       partsCost = 0,
       mileage = 0,
@@ -113,12 +114,15 @@ RULES:
 - All array values must be strings
 - Output raw JSON only`;
 
+    const keywordsList = Array.isArray(keywords) ? keywords.filter(k => typeof k === 'string' && k.trim()) : [];
+
     const userPrompt = `Vehicle: ${vehicleStr}
 VIN: ${vin || 'N/A'}
 Shop Rate: $${laborRateNum}/hr | Parts Budget: $${partsCostNum} | Rust Multiplier: ${rustBeltMultiplier}x
 OBD Codes: ${obdCodes.join(', ') || 'None'}
 Customer Reports: ${customerStates.join(', ') || 'N/A'}
-Mechanic Notices: ${mechanicNotices.join(', ') || 'N/A'}`;
+Mechanic Notices: ${mechanicNotices.join(', ') || 'N/A'}${keywordsList.length ? `
+Technical Keywords (from symptom translation, use to sharpen diagnosis): ${keywordsList.join(', ')}` : ''}`;
 
     const groqRes = await groqChat([
       { role: 'system', content: systemPrompt },
