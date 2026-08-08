@@ -321,7 +321,25 @@ class EvidenceVerifier {
     const issues = [];
     let confidence = 0.9;
 
-    const data = typeof output === 'string' ? JSON.parse(output) : output;
+    // Guard against undefined/null output (e.g. AI provider call failed or
+    // returned an unexpected shape upstream) - previously this crashed the
+    // whole pipeline with a TypeError instead of failing evidence gracefully.
+    if (output === undefined || output === null) {
+      return {
+        name: 'SANITY_CHECKS',
+        passed: false,
+        confidence: 0,
+        issues: ['AI output was missing or empty - could not run sanity checks'],
+        detail: 'No output received from specialist'
+      };
+    }
+
+    let data;
+    try {
+      data = typeof output === 'string' ? JSON.parse(output) : output;
+    } catch (e) {
+      data = null;
+    }
     const outputStr = JSON.stringify(output).toLowerCase();
     
     const hallucinationPatterns = [
