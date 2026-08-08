@@ -1,6 +1,34 @@
 // services/groqPrompt.js
 // Locked down Groq system prompt — strict output, respects mechanic notes
 
+const Groq = require('groq-sdk');
+
+const apiKey = process.env.GROQ_API_KEY;
+const groqClient = apiKey ? new Groq({ apiKey }) : null;
+
+/**
+ * The actual Groq API call. This was referenced by diagnose.js,
+ * ai.specialist.router.js (the pipeline behind /api/full-estimate and
+ * /api/intelligence/*), and the provider layer - but never existed in
+ * this file. Every one of those callers has been silently failing
+ * (caught internally, falling back to quarantine/human-review) since
+ * there was nothing to call. Modeled on the same working groq-sdk usage
+ * already proven out in src/services/estimator.js.
+ */
+async function groqChat(messages, options = {}) {
+  if (!apiKey || !groqClient) {
+    throw new Error('GROQ_API_KEY is not configured. Cannot reach Groq.');
+  }
+
+  return groqClient.chat.completions.create({
+    messages,
+    model: options.model || 'llama-3.3-70b-versatile',
+    temperature: options.temperature ?? 0.2,
+    max_tokens: options.max_tokens,
+    ...(options.response_format ? { response_format: options.response_format } : {})
+  });
+}
+
 function buildSystemPrompt() {
   return `You are SKSK ProTech AI Shop Foreman. You generate structured auto repair estimates.
 
@@ -113,4 +141,4 @@ ${mechanicNotices?.length ? mechanicNotices.join('\n') : 'No mechanic notices'}
 Generate the repair estimate JSON now.`;
 }
 
-module.exports = { buildSystemPrompt, buildUserMessage };
+module.exports = { buildSystemPrompt, buildUserMessage, groqChat };

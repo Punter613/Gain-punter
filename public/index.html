@@ -1086,7 +1086,7 @@
             return (v || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
         }
 
-        async function fetchWithTimeout(url, opts = {}, ms = 20000) {
+        async function fetchWithTimeout(url, opts = {}, ms = 45000) {
             const ctrl = new AbortController();
             const t = setTimeout(() => ctrl.abort(), ms);
             try {

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { runDiagnosticPipeline } = require('../services/pipeline.engine');
+const { groqChat } = require('../services/groq');
 
 
 // Bracket-depth extraction logic to handle loose markdown text boundaries safely
@@ -119,7 +120,7 @@ OBD Codes: ${obdCodes.join(', ') || 'None'}
 Customer Reports: ${customerStates.join(', ') || 'N/A'}
 Mechanic Notices: ${mechanicNotices.join(', ') || 'N/A'}`;
 
-    const groqRes = await runDiagnosticPipeline([
+    const groqRes = await groqChat([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt }
     ], { max_tokens: 1400, temperature: 0.2 });
