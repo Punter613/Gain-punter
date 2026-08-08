@@ -15,11 +15,14 @@ async function fullEstimate(input) {
   const vinData = await decodeVinNhtsa(input.vin);
   const manualData = await scrapeLEMONManuals(vinData);
 
+  const mechanicNotices = Array.isArray(input.mechanicNotices) ? input.mechanicNotices : [];
+
   const context = {
     vinData,
     manualData,
     symptoms: input.symptoms,
-    mileage: input.mileage
+    mileage: input.mileage,
+    mechanicNotices
   };
 
   const raw = await runDiagnosticPipeline({
@@ -27,7 +30,10 @@ async function fullEstimate(input) {
     context
   });
 
-  return sanitizeEstimate(raw);
+  // mechanicNotices (free-text prior-work notes) are passed as history so
+  // already-addressed components get excluded from the new estimate, same
+  // as structured history entries.
+  return sanitizeEstimate(raw, mechanicNotices);
 }
 
 module.exports = { fullEstimate };

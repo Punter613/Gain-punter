@@ -3,7 +3,9 @@ const router = express.Router();
 const Stripe = require('stripe');
 const db = require('../db'); 
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'mock_stripe_key_placeholder');
+// api/server.js only mounts this router when STRIPE_SECRET_KEY is set,
+// so no fallback is needed here — a fallback would just hide that guard.
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const requireTenant = (req, res, next) => {
   const tenantId = req.headers['x-tenant-id'];

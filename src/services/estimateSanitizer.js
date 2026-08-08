@@ -80,6 +80,12 @@ function sanitizeEstimate(estimate, history = []) {
     ? clean.probability.filter(x => !isExcluded(x?.cause, excludedSet))
     : [];
 
+  // mechanicNotices previously bypassed exclusion filtering entirely —
+  // apply the same gate used for repairs/knownIssues/probability.
+  if (Array.isArray(clean.mechanicNotices)) {
+    clean.mechanicNotices = clean.mechanicNotices.filter(x => !isExcluded(x, excludedSet));
+  }
+
   clean.excludedComponents = uniqueStrings(history);
 
   if (Array.isArray(clean.recommendedInspection)) {
