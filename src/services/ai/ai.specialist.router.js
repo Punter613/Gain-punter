@@ -45,9 +45,9 @@ Mechanic notices are authoritative history for this estimate. NEVER quote, list,
         temperature: 0.1,
         maxTokens: 1500,
         jsonMode: false,
-        systemPrompt: `You are a TSB research specialist. Search the provided TSB database for matches.
-Return: TSB number, title, affected vehicles, symptoms, root cause, recommended fix, warranty status.
-If no exact match, suggest the closest related TSBs.`,
+        systemPrompt: `You are a TSB research specialist. Search the provided TSB evidence for matches.
+Only report a TSB as a match when the supplied evidence actually identifies it as a TSB or service bulletin. Do not invent bulletin numbers, titles, fixes, or warranty status.
+Return: TSB number/title if available, affected vehicles, symptoms, root cause, recommended fix, and source. If no verified TSB evidence is supplied, say so clearly.`,
         capabilities: ['tsb_search', 'symptom_matching', 'factory_fix_lookup', 'warranty_check']
       },
       parts: {
@@ -293,7 +293,7 @@ Do not source parts for work explicitly documented as already completed unless r
 
     const manualItems = Array.isArray(context.manualData?.items) ? context.manualData.items : [];
     if (manualItems.length) {
-      prompt += 'FACTORY MANUAL EVIDENCE (supporting evidence only; do not assume failure):\n';
+      prompt += 'FACTORY/OEM SERVICE REFERENCES (supporting evidence only; do not assume failure):\n';
       manualItems.slice(0, 8).forEach((item, index) => {
         const title = item.title || 'Untitled factory reference';
         const snippet = item.snippet || item.meta?.snippet || '';
@@ -302,13 +302,45 @@ Do not source parts for work explicitly documented as already completed unless r
       });
       prompt += '\n';
     } else {
-      prompt += 'FACTORY MANUAL EVIDENCE: None available for this vehicle/request. Do not invent factory documentation.\n\n';
+      prompt += 'FACTORY/OEM SERVICE REFERENCES: None available. Do not invent factory documentation.\n\n';
+    }
+
+    const vehicleEvidence = context.vehicleEvidence || {};
+    const tsbs = Array.isArray(vehicleEvidence.tsbs?.references) ? vehicleEvidence.tsbs.references : [];
+    const recalls = Array.isArray(vehicleEvidence.recalls) ? vehicleEvidence.recalls : [];
+    const knownIssues = Array.isArray(vehicleEvidence.knownIssues) ? vehicleEvidence.knownIssues : [];
+
+    if (tsbs.length) {
+      prompt += 'VERIFIED TSB / SERVICE-BULLETIN CANDIDATES — use only as supporting evidence:\n';
+      tsbs.slice(0, 8).forEach((item, index) => {
+        prompt += `${index + 1}. ${item.title || 'TSB candidate'} [${item.url || 'source unavailable'}]\n`;
+      });
+      prompt += '\n';
+    } else {
+      prompt += 'VERIFIED TSB EVIDENCE: None found in the available public evidence sources. Do not invent TSB numbers or claims.\n\n';
+    }
+
+    if (recalls.length) {
+      prompt += 'NHTSA RECALL EVIDENCE — verify applicability before using it as a repair recommendation:\n';
+      recalls.slice(0, 8).forEach((item, index) => {
+        prompt += `${index + 1}. ${item.campaignNumber || 'Recall'} | ${item.component || 'Component unspecified'} | ${item.summary || ''} | Remedy: ${item.remedy || 'See source'}\n`;
+      });
+      prompt += '\n';
+    }
+
+    if (knownIssues.length) {
+      prompt += 'NHTSA ODI KNOWN-ISSUE SIGNALS — complaint frequency is evidence of a pattern, NOT proof of failure:\n';
+      knownIssues.slice(0, 8).forEach((item, index) => {
+        prompt += `${index + 1}. ${item.system} / ${item.component}: ${item.reports} complaint report(s)\n`;
+      });
+      prompt += '\n';
     }
 
     if (context.previousOutput) {
       prompt += `PREVIOUS SPECIALIST OUTPUT (use as context; verify independently):\n${String(context.previousOutput)}\n\n`;
     }
 
+    prompt += `EVIDENCE RULE: Rank verified OEM/TSB/recall/history evidence above generic model knowledge. Never turn a complaint count, manual page, or TSB candidate into proof that a component has failed.\n\n`;
     prompt += `Provide your analysis now.`;
     return prompt;
   }
