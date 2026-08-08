@@ -1,6 +1,6 @@
 /**
  * SKSK Main Orchestrator
- * Integrates all layers: Deterministic → AI Router → Evidence → Economic → Output
+ * Integrates all layers: Deterministic → Evidence Collection → AI Router → Evidence → Economic → Output
  * This is the single entry point for all SKSK intelligence requests
  */
 
@@ -8,6 +8,8 @@ const deterministicOrchestrator = require('./deterministic.orchestrator');
 const aiRouter = require('../../services/ai/ai.specialist.router');
 const evidenceVerifier = require('../evidence/evidence.verifier');
 const economicEngine = require('../economic/economic.engine');
+const { decodeVinNhtsa } = require('../../services/vin');
+const { scrapeLEMONManuals } = require('../../services/lemon');
 
 class SKSKOrchestrator {
   constructor() {
@@ -15,6 +17,9 @@ class SKSKOrchestrator {
       totalRequests: 0,
       deterministicOverrides: 0,
       aiProcessed: 0,
+      evidenceCollected: 0,
+      scraperCacheHits: 0,
+      scraperLiveScrapes: 0,
       evidenceRejected: 0,
       economicAnalyzed: 0,
       errors: 0
@@ -24,89 +29,101 @@ class SKSKOrchestrator {
   async process(request) {
     const startTime = Date.now();
     this.pipelineStats.totalRequests++;
-    
+
     try {
-      const { input, vehicleProfile, context = {} } = request;
-      
+      const { input, vehicleProfile = {}, context = {} } = request;
+
       console.log('[ORCHESTRATOR] Step 1: Running deterministic checks...');
       const deterministicResult = await deterministicOrchestrator.process(vehicleProfile, input);
-      
+
       if (!deterministicResult.approved) {
         this.pipelineStats.deterministicOverrides++;
         return this._buildDeterministicResponse(deterministicResult, vehicleProfile);
       }
-      
+
       const safetyConstraints = (deterministicResult.overrides || []).filter(o => o.severity === 'CRITICAL');
-      
-      console.log('[ORCHESTRATOR] Step 2: Running routing assignment to AI specialist...');
-      const routingResult = await aiRouter.route(input, { 
-        ...context, 
-        vehicleProfile,
-        forceSpecialist: context.forceSpecialist 
+
+      // Evidence collection happens before AI so factory documentation can ground the diagnosis.
+      console.log('[ORCHESTRATOR] Step 2: Collecting vehicle/factory evidence...');
+      const evidenceContext = await this._collectEvidence(vehicleProfile, context);
+      this.pipelineStats.evidenceCollected++;
+      if (evidenceContext.manualData?.fromCache) this.pipelineStats.scraperCacheHits++;
+      else if (evidenceContext.manualData?.scraped) this.pipelineStats.scraperLiveScrapes++;
+
+      const enrichedContext = {
+        ...context,
+        ...evidenceContext,
+        vehicleProfile
+      };
+
+      console.log('[ORCHESTRATOR] Step 3: Running routing assignment to AI specialist...');
+      const routingResult = await aiRouter.route(input, {
+        ...enrichedContext,
+        forceSpecialist: context.forceSpecialist
       });
-      
-      console.log(`[ORCHESTRATOR] Step 3: Executing ${(routingResult && routingResult.specialist) || 'general'} specialist...`);
-      let aiOutput = await aiRouter.execute(routingResult, input, { 
-        ...context, 
-        vehicleProfile,
-        safetyConstraints 
+
+      console.log(`[ORCHESTRATOR] Step 4: Executing ${(routingResult && routingResult.specialist) || 'general'} specialist...`);
+      let aiOutput = await aiRouter.execute(routingResult, input, {
+        ...enrichedContext,
+        safetyConstraints
       });
-      
+
       this.pipelineStats.aiProcessed++;
-      
+
       if (routingResult && routingResult.suggestedChain) {
         console.log(`[ORCHESTRATOR] Multi-intent detected: ${routingResult.suggestedChain.join(' → ')}`);
-        aiOutput = await this._executeChain(routingResult.suggestedChain, input, context, vehicleProfile);
+        aiOutput = await this._executeChain(routingResult.suggestedChain, input, enrichedContext, vehicleProfile);
       }
-      
+
       const targetPayloadText = typeof aiOutput === 'object' && aiOutput !== null ? aiOutput.output : aiOutput;
       const targetSpecialistKey = (routingResult && routingResult.specialist) || 'general';
 
-      console.log('[ORCHESTRATOR] Step 4: Running evidence verification protocols...');
+      console.log('[ORCHESTRATOR] Step 5: Running evidence verification protocols...');
       const evidenceResult = await evidenceVerifier.verify(
-        targetPayloadText, 
-        targetSpecialistKey, 
+        targetPayloadText,
+        targetSpecialistKey,
         vehicleProfile
       );
-      
+
       if (!evidenceResult.approved) {
         this.pipelineStats.evidenceRejected++;
-        
+
         if (evidenceResult.quarantine) {
           return this._buildQuarantineResponse(evidenceResult, aiOutput, vehicleProfile);
         }
-        
+
         console.log('[ORCHESTRATOR] Evidence failed validation tests, dropping back to fallback runner...');
-        const fallbackRouting = await aiRouter.route(input, { 
-          ...context, 
+        const fallbackRouting = await aiRouter.route(input, {
+          ...enrichedContext,
           vehicleProfile,
-          forceSpecialist: 'receptionist' 
+          forceSpecialist: 'receptionist'
         });
-        aiOutput = await aiRouter.execute(fallbackRouting, input, { 
-          ...context, 
+        aiOutput = await aiRouter.execute(fallbackRouting, input, {
+          ...enrichedContext,
           vehicleProfile,
-          fallback: true 
+          fallback: true
         });
       }
-      
-      console.log('[ORCHESTRATOR] Step 5: Dispatched parsing control loop to economic engine...');
+
+      console.log('[ORCHESTRATOR] Step 6: Dispatched parsing control loop to economic engine...');
       const verifiedOutputText = typeof aiOutput === 'object' && aiOutput !== null ? aiOutput.output : aiOutput;
       const recommendation = this._parseAIOutput(verifiedOutputText, targetSpecialistKey);
       recommendation.component = recommendation.component || this._inferComponent(input);
-      
+
       const economicResult = await economicEngine.analyze(recommendation, vehicleProfile);
       this.pipelineStats.economicAnalyzed++;
-      
-      console.log('[ORCHESTRATOR] Step 6: Packaging dynamic runtime execution tracking frame...');
-      
-      const targetSpecialistName = routingResult && routingResult.config && routingResult.config.name 
-        ? routingResult.config.name 
+
+      console.log('[ORCHESTRATOR] Step 7: Packaging dynamic runtime execution tracking frame...');
+
+      const targetSpecialistName = routingResult && routingResult.config && routingResult.config.name
+        ? routingResult.config.name
         : targetSpecialistKey;
 
       const finalDecision = {
         status: 'SUCCESS',
         pipeline: {
           deterministic: deterministicResult,
+          evidenceCollection: evidenceContext,
           routing: routingResult,
           ai: aiOutput,
           evidence: evidenceResult,
@@ -123,19 +140,19 @@ class SKSKOrchestrator {
         },
         metadata: {
           latencyMs: Date.now() - startTime,
-          pipelineVersion: '1.0.0',
+          pipelineVersion: '1.1.0-lemon-evidence',
           requestId: this._generateRequestId(),
           timestamp: new Date().toISOString()
         }
       };
-      
+
       console.log(`[ORCHESTRATOR] Complete. Latency: ${finalDecision.metadata.latencyMs}ms`);
       return finalDecision;
-      
+
     } catch (error) {
       this.pipelineStats.errors++;
       console.error('[ORCHESTRATOR] Pipeline error:', error);
-      
+
       return {
         status: 'ERROR',
         error: error.message,
@@ -154,10 +171,48 @@ class SKSKOrchestrator {
     }
   }
 
+  async _collectEvidence(vehicleProfile, context = {}) {
+    let resolvedVehicle = { ...vehicleProfile };
+
+    // Prefer supplied decoded vehicle data; otherwise decode the VIN once here.
+    if ((!resolvedVehicle.make || !resolvedVehicle.model || !resolvedVehicle.year) && resolvedVehicle.vin) {
+      try {
+        const decoded = await decodeVinNhtsa(resolvedVehicle.vin);
+        if (decoded) resolvedVehicle = { ...resolvedVehicle, ...decoded };
+      } catch (error) {
+        console.warn('[ORCHESTRATOR] VIN evidence lookup failed:', error.message);
+      }
+    }
+
+    let manualData = { items: [], error: 'Vehicle data unavailable for LEMON scrape' };
+    if (resolvedVehicle.make && resolvedVehicle.year && resolvedVehicle.model) {
+      try {
+        manualData = await scrapeLEMONManuals(resolvedVehicle);
+        manualData = { ...manualData, scraped: !manualData.fromCache && !manualData.error };
+        console.log(`[ORCHESTRATOR] LEMON evidence: ${manualData.fromCache ? 'CACHE HIT' : manualData.scraped ? 'LIVE SCRAPE' : 'UNAVAILABLE'} (${manualData.items?.length || 0} items)`);
+      } catch (error) {
+        console.warn('[ORCHESTRATOR] LEMON evidence collection failed:', error.message);
+        manualData = { items: [], error: error.message, fromCache: false, scraped: false };
+      }
+    }
+
+    return {
+      vehicleData: resolvedVehicle,
+      manualData,
+      evidence: {
+        factoryManuals: manualData.items || [],
+        source: manualData.fromCache ? 'lemon_cache' : 'lemon_live',
+        available: (manualData.items || []).length > 0
+      },
+      evidenceVehicleProfile: resolvedVehicle,
+      ...(context || {})
+    };
+  }
+
   _buildDeterministicResponse(deterministicResult, vehicleProfile) {
     const overrides = deterministicResult.overrides || [];
     const critical = overrides.filter(o => o.severity === 'CRITICAL');
-    
+
     return {
       status: 'DETERMINISTIC_OVERRIDE',
       decision: {
@@ -206,25 +261,25 @@ class SKSKOrchestrator {
   async _executeChain(chain, input, context, vehicleProfile) {
     let currentOutput = null;
     const chainResults = [];
-    
+
     for (const specialistKey of chain) {
-      const routing = await aiRouter.route(input, { 
-        ...context, 
+      const routing = await aiRouter.route(input, {
+        ...context,
         vehicleProfile,
-        forceSpecialist: specialistKey 
+        forceSpecialist: specialistKey
       });
-      
+
       const enrichedContext = {
         ...context,
         vehicleProfile,
         previousOutput: currentOutput
       };
-      
+
       const result = await aiRouter.execute(routing, input, enrichedContext);
       chainResults.push({ specialist: specialistKey, result });
       currentOutput = result && result.output ? result.output : result;
     }
-    
+
     return {
       success: true,
       chainResults,
@@ -236,7 +291,7 @@ class SKSKOrchestrator {
   _parseAIOutput(output, specialist) {
     try {
       const data = typeof output === 'string' ? JSON.parse(output) : output;
-      
+
       let computedPartsCost = 0;
       if (Array.isArray(data.parts)) {
         computedPartsCost = data.parts.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 1)), 0);
@@ -287,4 +342,3 @@ class SKSKOrchestrator {
 }
 
 module.exports = SKSKOrchestrator;
-
