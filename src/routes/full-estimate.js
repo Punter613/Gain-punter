@@ -10,7 +10,7 @@ try {
   console.log('[SKSK Route] Main orchestrator mounted successfully.');
 } catch (err) {
   console.warn('[SKSK Route Warning] Main orchestrator failed to compile, activating inline rescue engine:', err.message);
-  
+
   // 🛡️ EMERGENCY INLINE RESCUE ENGINE SINGLETON
   orchestrator = {
     process: async (request) => {
@@ -50,6 +50,8 @@ router.post('/', async (req, res) => {
       laborRate = 125,
       partsCost = 0,
       mileage = 0,
+      customer = {},
+      history = [],
       context = {}
     } = req.body;
 
@@ -63,15 +65,28 @@ router.post('/', async (req, res) => {
 
     logs.push(`[1/2] Processing pipeline context for VIN: ${vin}`);
 
+    // Keep the request contract intact while making all mechanic/customer evidence
+    // available to the live orchestrator. The orchestrator will decode the VIN and
+    // collect LEMON factory evidence before the AI specialist runs.
     const requestPayload = {
-      input: `Customer: ${customerStates.join(', ') || 'None'}. OBD: ${obdCodes.join(', ') || 'None'}.`,
+      input: [
+        customerStates.length ? `Customer: ${customerStates.join(', ')}` : 'Customer: None',
+        obdCodes.length ? `OBD: ${obdCodes.join(', ')}` : 'OBD: None'
+      ].join('. '),
       vehicleProfile: {
         vin,
         mileage: Number(mileage),
         laborRate: Number(laborRate),
         partsCostOverride: Number(partsCost)
       },
-      context
+      context: {
+        ...context,
+        customerStates,
+        obdCodes,
+        mechanicNotices,
+        history,
+        customer
+      }
     };
 
     const pipelineResult = await orchestrator.process(requestPayload);
@@ -86,7 +101,8 @@ router.post('/', async (req, res) => {
         requestId: pipelineResult.metadata?.requestId,
         logs: [...logs, `Execution completed inside runtime container framework.`]
       },
-      decision: pipelineResult.decision
+      decision: pipelineResult.decision,
+      pipeline: pipelineResult.pipeline
     });
 
   } catch (error) {
