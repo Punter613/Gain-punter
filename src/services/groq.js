@@ -20,13 +20,60 @@ async function groqChat(messages, options = {}) {
     throw new Error('GROQ_API_KEY is not configured. Cannot reach Groq.');
   }
 
-  return groqClient.chat.completions.create({
+  const requestBody = {
     messages,
     model: options.model || 'llama-3.3-70b-versatile',
     temperature: options.temperature ?? 0.2,
     max_tokens: options.max_tokens,
     ...(options.response_format ? { response_format: options.response_format } : {})
+  };
+
+  // Phase 2 instrumentation — visibility into the request/response shape
+  // without ever logging the API key or full message/response content.
+  console.log('[groqChat] request:', {
+    model: requestBody.model,
+    temperature: requestBody.temperature,
+    max_tokens: requestBody.max_tokens,
+    response_format: requestBody.response_format || null,
+    messageCount: messages.length,
+    messageRoles: messages.map(m => m.role),
+    lastUserMessageLength: messages[messages.length - 1]?.content?.length ?? 0
   });
+
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await groqClient.chat.completions.create(requestBody);
+  } catch (err) {
+    console.error('[groqChat] request FAILED after', Date.now() - startedAt, 'ms:', err.message);
+    throw err;
+  }
+  const latencyMs = Date.now() - startedAt;
+
+  const choice = response?.choices?.[0];
+  const content = choice?.message?.content;
+
+  console.log('[groqChat] response:', {
+    latencyMs,
+    choicesCount: response?.choices?.length ?? 0,
+    finish_reason: choice?.finish_reason ?? null,
+    contentLength: typeof content === 'string' ? content.length : 0,
+    contentIsEmpty: !content || content.trim().length === 0,
+    usage: response?.usage ?? null
+  });
+
+  if (!content || content.trim().length === 0) {
+    console.warn(
+      '[groqChat] WARNING: Groq returned an empty content string. ' +
+      'finish_reason=' + (choice?.finish_reason ?? 'unknown') +
+      ' — check for finish_reason "length" (truncated by max_tokens) ' +
+      'or "content_filter" (blocked).'
+    );
+  }
+
+  // Attach latency for callers (e.g. ai.specialist.router.js reads response._latency)
+  response._latency = latencyMs;
+  return response;
 }
 
 function buildSystemPrompt() {
