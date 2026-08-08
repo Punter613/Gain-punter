@@ -69,7 +69,7 @@ document.getElementById('translateBtn')?.addEventListener('click', async () => {
   try {
     if (previewBox) previewBox.innerText = 'Translating...';
 
-    const res = await fetch('/translate', {
+    const res = await fetch('/api/translate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: raw })
@@ -152,7 +152,7 @@ async function runEstimate() {
     manualUrl: common.url || ''
   };
 
-  const estimate = await fetch('/api/skskprotech/estimate', {
+  const estimate = await fetch('/api/full-estimate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
