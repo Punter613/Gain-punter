@@ -11,13 +11,15 @@ class AISpecialistRouter {
         maxTokens: 2000,
         jsonMode: false,
         systemPrompt: `You are an expert automotive diagnostic technician with 20+ years experience.
-Analyze the provided symptoms, fault codes, vehicle data, and factory evidence. Provide:
+Analyze the provided symptoms, fault codes, vehicle data, factory evidence, and technician history. Provide:
 1. Probable root cause(s) ranked by likelihood
 2. Recommended diagnostic steps
 3. Related components to inspect
 4. Confidence level (0-100)
 Be concise, technical, and accurate. Never guess. Treat factory documentation as supporting evidence, not as proof that a component has failed.
-Respect mechanic-notice history: do not recommend a component as new work when the mechanic says it was already replaced, unless there is evidence the repair failed.`,
+
+CRITICAL WORK-HISTORY RULE:
+Mechanic notices are authoritative history for this request. If the technician says a component/work item was already replaced, repaired, or serviced, DO NOT recommend that same work as new work. Instead, diagnose what could still explain the symptom, including adjacent components, installation/torque issues, related systems, or a failed replacement. Only recommend rework of completed work when the evidence supports a failed or incorrect repair.`,
         capabilities: ['symptom_analysis', 'fault_code_interpretation', 'telemetry_reading', 'root_cause_ranking']
       },
       estimate: {
@@ -30,7 +32,10 @@ Respect mechanic-notice history: do not recommend a component as new work when t
         systemPrompt: `You are an automotive estimator. Generate a detailed repair estimate in strict JSON format.
 Include: parts (with part numbers, prices, source), labor (hours, rate, subtotal), fluids/supplies, tax, total.
 Use OEM parts as default. Mark aftermarket alternatives. Include labor guide references.
-Use factory evidence when available, but do not treat a manual link as proof of component failure. Respect mechanic-notice history and exclude work already completed unless failure/rework is supported.`,
+Use factory evidence when available, but do not treat a manual link as proof of component failure.
+
+CRITICAL WORK-HISTORY RULE:
+Mechanic notices are authoritative history for this estimate. NEVER quote, list, or recommend as NEW repair work anything explicitly marked as already replaced, repaired, or serviced. If completed work appears related to the symptom, estimate only the additional diagnostic/rework needed when there is evidence it failed. Do not blindly repeat the technician's completed-work list as repairs needed.`,
         capabilities: ['parts_pricing', 'labor_calculation', 'tax_computation', 'oem_reference']
       },
       tsb: {
@@ -68,7 +73,8 @@ If no exact match, suggest the closest related TSBs.`,
   ],
   "compatibility_verified": boolean,
   "total_cost": number
-}`,
+}
+Do not source parts for work explicitly documented as already completed unless rework is justified.`,
         capabilities: ['catalog_search', 'fitment_verification', 'pricing_lookup', 'availability_check', 'alternative_sourcing']
       },
       fleet: {
@@ -202,7 +208,7 @@ If no exact match, suggest the closest related TSBs.`,
 
   _classifyIntent(input) {
     const scores = {};
-    const text = input.toLowerCase();
+    const text = String(input || '').toLowerCase();
 
     for (const [intent, patterns] of Object.entries(this.INTENT_PATTERNS)) {
       let score = 0;
@@ -272,7 +278,13 @@ If no exact match, suggest the closest related TSBs.`,
     }
 
     if (context.mechanicNotices?.length) {
-      prompt += `MECHANIC_NOTICES (work already performed / technician observations): ${JSON.stringify(context.mechanicNotices)}\n\n`;
+      const notices = context.mechanicNotices
+        .map(value => String(value).replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+      if (notices.length) {
+        prompt += `MECHANIC_NOTICES — ALREADY COMPLETED WORK / TECHNICIAN OBSERVATIONS:\n${JSON.stringify(notices)}\n`;
+        prompt += `DO NOT RECOMMEND COMPLETED WORK AS NEW WORK. If a completed component is suspected again, state that reinspection/rework is required and explain why.\n\n`;
+      }
     }
 
     if (context.history?.length) {
@@ -291,6 +303,10 @@ If no exact match, suggest the closest related TSBs.`,
       prompt += '\n';
     } else {
       prompt += 'FACTORY MANUAL EVIDENCE: None available for this vehicle/request. Do not invent factory documentation.\n\n';
+    }
+
+    if (context.previousOutput) {
+      prompt += `PREVIOUS SPECIALIST OUTPUT (use as context; verify independently):\n${String(context.previousOutput)}\n\n`;
     }
 
     prompt += `Provide your analysis now.`;
