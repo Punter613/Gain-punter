@@ -8,6 +8,7 @@ const deterministicOrchestrator = require('./deterministic.orchestrator');
 const aiRouter = require('../../services/ai/ai.specialist.router');
 const evidenceVerifier = require('../evidence/evidence.verifier');
 const economicEngine = require('../economic/economic.engine');
+const { applyCompletedWorkGuard } = require('./completed.work.guard');
 const { decodeVinNhtsa } = require('../../services/vin');
 const { scrapeLEMONManuals } = require('../../services/lemon');
 
@@ -22,6 +23,7 @@ class SKSKOrchestrator {
       scraperLiveScrapes: 0,
       evidenceRejected: 0,
       economicAnalyzed: 0,
+      completedWorkFiltered: 0,
       errors: 0
     };
   }
@@ -43,7 +45,6 @@ class SKSKOrchestrator {
 
       const safetyConstraints = (deterministicResult.overrides || []).filter(o => o.severity === 'CRITICAL');
 
-      // Evidence collection happens before AI so factory documentation can ground the diagnosis.
       console.log('[ORCHESTRATOR] Step 2: Collecting vehicle/factory evidence...');
       const evidenceContext = await this._collectEvidence(vehicleProfile, context);
       this.pipelineStats.evidenceCollected++;
@@ -75,6 +76,15 @@ class SKSKOrchestrator {
         aiOutput = await this._executeChain(routingResult.suggestedChain, input, enrichedContext, vehicleProfile);
       }
 
+      // Prompt rules are advisory; enforce completed technician work deterministically
+      // before evidence verification and economic analysis can turn it into new work.
+      const completedWorkGuard = this._applyCompletedWorkGuard(aiOutput, enrichedContext.mechanicNotices);
+      aiOutput = completedWorkGuard.output;
+      if (completedWorkGuard.changed) {
+        this.pipelineStats.completedWorkFiltered += completedWorkGuard.removed.length;
+        console.log(`[ORCHESTRATOR] Completed-work guard removed ${completedWorkGuard.removed.length} duplicate recommendation(s).`);
+      }
+
       const targetPayloadText = typeof aiOutput === 'object' && aiOutput !== null ? aiOutput.output : aiOutput;
       const targetSpecialistKey = (routingResult && routingResult.specialist) || 'general';
 
@@ -103,6 +113,12 @@ class SKSKOrchestrator {
           vehicleProfile,
           fallback: true
         });
+
+        const fallbackGuard = this._applyCompletedWorkGuard(aiOutput, enrichedContext.mechanicNotices);
+        aiOutput = fallbackGuard.output;
+        if (fallbackGuard.changed) {
+          this.pipelineStats.completedWorkFiltered += fallbackGuard.removed.length;
+        }
       }
 
       console.log('[ORCHESTRATOR] Step 6: Dispatched parsing control loop to economic engine...');
@@ -127,7 +143,8 @@ class SKSKOrchestrator {
           routing: routingResult,
           ai: aiOutput,
           evidence: evidenceResult,
-          economic: economicResult
+          economic: economicResult,
+          completedWorkGuard
         },
         decision: {
           action: economicResult.recommendation?.optimalAction || 'MONITOR',
@@ -136,11 +153,12 @@ class SKSKOrchestrator {
           reasoning: economicResult.recommendation?.reasoning || recommendation.description,
           specialist: targetSpecialistName,
           aiOutput: verifiedOutputText,
-          economicAnalysis: economicResult
+          economicAnalysis: economicResult,
+          completedWorkExcluded: completedWorkGuard.completedWork || []
         },
         metadata: {
           latencyMs: Date.now() - startTime,
-          pipelineVersion: '1.1.0-lemon-evidence',
+          pipelineVersion: '1.2.0-completed-work-guard',
           requestId: this._generateRequestId(),
           timestamp: new Date().toISOString()
         }
@@ -171,10 +189,21 @@ class SKSKOrchestrator {
     }
   }
 
+  _applyCompletedWorkGuard(aiOutput, mechanicNotices) {
+    const source = aiOutput && typeof aiOutput === 'object' && aiOutput.output
+      ? aiOutput.output
+      : aiOutput;
+    const guarded = applyCompletedWorkGuard(source, mechanicNotices || []);
+
+    if (aiOutput && typeof aiOutput === 'object' && aiOutput.output) {
+      return { ...guarded, output: { ...aiOutput, output: guarded.output } };
+    }
+    return guarded;
+  }
+
   async _collectEvidence(vehicleProfile, context = {}) {
     let resolvedVehicle = { ...vehicleProfile };
 
-    // Prefer supplied decoded vehicle data; otherwise decode the VIN once here.
     if ((!resolvedVehicle.make || !resolvedVehicle.model || !resolvedVehicle.year) && resolvedVehicle.vin) {
       try {
         const decoded = await decodeVinNhtsa(resolvedVehicle.vin);
