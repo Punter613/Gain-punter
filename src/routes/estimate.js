@@ -14,9 +14,7 @@ function extractJSON(text) {
     if (text[i] === '{') depth++;
     else if (text[i] === '}') {
       depth--;
-      if (depth === 0) {
-        try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
-      }
+      if (depth === 0) { try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; } }
     }
   }
   return null;
@@ -24,21 +22,10 @@ function extractJSON(text) {
 
 function safeEstimate(laborRate, partsCost, overrides = {}) {
   return {
-    priority: 'medium',
-    diagnosis: 'Manual inspection required',
-    laborCost: laborRate,
-    partsCost,
-    total: laborRate + partsCost,
-    repairs: ['Diagnostic inspection required'],
-    probability: [],
-    knownIssues: [],
-    repairSteps: [],
-    proTips: [],
-    additionalChecks: [],
-    notes: '',
-    estimatedHours: 1,
-    evidence: { oem: [], tsbs: [], recalls: [], knownIssues: [], sources: [] },
-    ...overrides
+    priority: 'medium', diagnosis: 'Manual inspection required', laborCost: laborRate, partsCost,
+    total: laborRate + partsCost, repairs: ['Diagnostic inspection required'], probability: [], knownIssues: [],
+    repairSteps: [], proTips: [], additionalChecks: [], notes: '', estimatedHours: 1,
+    evidence: { oem: [], tsbs: [], recalls: [], knownIssues: [], sources: [] }, ...overrides
   };
 }
 
@@ -64,39 +51,24 @@ function filterCompletedRepairs(repairs, completedWork) {
 
 router.post('/', async (req, res) => {
   try {
-    const {
-      vehicle = {}, obdCodes = [], customerStates = [], mechanicNotices = [], keywords = [],
-      laborRate = 65, partsCost = 0, mileage = 0, vin = '', customer = {}
-    } = req.body;
-
+    const { vehicle = {}, obdCodes = [], customerStates = [], mechanicNotices = [], keywords = [], laborRate = 65, partsCost = 0, mileage = 0, vin = '', customer = {} } = req.body;
     const laborRateNum = Math.max(0, Number(laborRate));
     const partsCostNum = Math.max(0, Number(partsCost));
 
     let pipelineResults = {};
     let rustBeltMultiplier = 1.0;
     try {
-      pipelineResults = runDiagnosticPipeline({
-        vehicle, vin, symptoms: [...customerStates, ...mechanicNotices], codes: obdCodes,
-        mileage, laborRate: laborRateNum
-      }, { log: () => {} });
+      pipelineResults = runDiagnosticPipeline({ vehicle, vin, symptoms: [...customerStates, ...mechanicNotices], codes: obdCodes, mileage, laborRate: laborRateNum }, { log: () => {} });
       if (pipelineResults.profile?.rustMultiplier > 1.0) rustBeltMultiplier = pipelineResults.profile.rustMultiplier;
-    } catch (e) {
-      console.warn('[Estimate Engine] Pipeline background pass skipped:', e.message);
-    }
+    } catch (e) { console.warn('[Estimate Engine] Pipeline background pass skipped:', e.message); }
 
-    let vehicleEvidence = {
-      available: false, oem: { references: [] }, tsbs: { references: [] }, recalls: [],
-      knownIssues: [], sources: [], errors: []
-    };
+    let vehicleEvidence = { available: false, oem: { references: [] }, tsbs: { references: [] }, recalls: [], knownIssues: [], sources: [], errors: [] };
     try {
       vehicleEvidence = await collectVehicleEvidence({
-        ...vehicle,
-        vin,
-        year: vehicle.year,
-        make: vehicle.make,
-        model: vehicle.model,
-        trim: vehicle.trim,
-        engine: vehicle.engine || vehicle.trim
+        ...vehicle, vin, year: vehicle.year, make: vehicle.make, model: vehicle.model,
+        trim: vehicle.trim, engine: vehicle.engine || vehicle.trim
+      }, {
+        symptoms: customerStates.join(' '), mechanicNotices, obdCodes, keywords
       });
     } catch (e) {
       console.warn('[Estimate Evidence] Collection failed:', e.message);
@@ -105,10 +77,9 @@ router.post('/', async (req, res) => {
 
     const completedWork = normalizeCompletedWork(mechanicNotices);
     const vehicleStr = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' ') || 'Unknown Vehicle';
-
     const evidenceText = JSON.stringify({
-      OEM_FACTORY_REFERENCES: (vehicleEvidence.oem?.references || []).slice(0, 8).map(x => ({ title: x.title, url: x.url, type: x.evidenceType })),
-      TSB_CANDIDATES: (vehicleEvidence.tsbs?.references || []).slice(0, 8).map(x => ({ title: x.title, url: x.url })),
+      OEM_FACTORY_REFERENCES: (vehicleEvidence.oem?.references || []).slice(0, 12).map(x => ({ title: x.title, url: x.url, type: x.evidenceType, facts: x.extractedFacts })),
+      TSB_CANDIDATES: (vehicleEvidence.tsbs?.references || []).slice(0, 10).map(x => ({ title: x.title, url: x.url, facts: x.extractedFacts })),
       NHTSA_RECALLS: (vehicleEvidence.recalls || []).slice(0, 10),
       KNOWN_ISSUE_PATTERNS: (vehicleEvidence.knownIssues || []).slice(0, 10),
       EVIDENCE_SOURCES: vehicleEvidence.sources || []
@@ -124,75 +95,57 @@ RULES:
 - priority exactly high, medium, or low.
 - laborCost = estimatedHours x ${laborRateNum} x ${rustBeltMultiplier}; total = laborCost + partsCost.
 - All array values must be strings.
-- Use OEM/factory references and verified TSB candidates as higher-authority evidence than generic AI guesses.
+- OEM/factory manual facts are primary technical evidence for procedures, construction, torque, inspections, and component identification.
+- TSB candidates must be labeled as candidates unless a real bulletin identity is verified. Never invent a TSB number.
 - Use NHTSA recalls as vehicle-specific safety evidence.
-- Treat NHTSA complaint frequency as a pattern signal, NOT proof that a component failed.
-- Never invent a TSB number, campaign number, OEM procedure, or known issue.
-- If no verified TSB candidate exists, do not claim a TSB exists.
+- Use NHTSA complaint frequency only as a pattern signal, NOT proof of failure.
+- Never invent an OEM procedure, torque value, bulletin number, campaign number, or known issue.
 - Never recommend replacing a component explicitly documented as already replaced by the mechanic.
 - Prefer a confirmation test before replacement when evidence is inconclusive.
+- If factory evidence says a part is bolt-in, press-in, riveted, integral, etc., use that construction fact in the repair plan when relevant.
 - Evidence must change the diagnosis/ranking when relevant.
 - Output raw JSON only.`;
 
     const keywordsList = Array.isArray(keywords) ? keywords.filter(k => typeof k === 'string' && k.trim()) : [];
     const userPrompt = `Vehicle: ${vehicleStr}\nVIN: ${vin || 'N/A'}\nShop Rate: $${laborRateNum}/hr | Parts Budget: $${partsCostNum} | Rust Multiplier: ${rustBeltMultiplier}x\nOBD Codes: ${obdCodes.join(', ') || 'None'}\nCustomer Reports: ${customerStates.join(', ') || 'N/A'}\nMechanic Notices: ${mechanicNotices.join(', ') || 'N/A'}\nCompleted Work Detected: ${completedWork.join(', ') || 'None'}${keywordsList.length ? `\nTechnical Keywords: ${keywordsList.join(', ')}` : ''}\n\nVEHICLE EVIDENCE:\n${evidenceText}`;
 
-    const groqRes = await groqChat([
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ], { max_tokens: 1400, temperature: 0.2 });
-
+    const groqRes = await groqChat([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], { max_tokens: 1400, temperature: 0.2 });
     const aiText = typeof groqRes === 'string' ? groqRes : (groqRes?.choices?.[0]?.message?.content || '');
     if (!aiText) throw new Error('Groq returned empty response strings');
 
     let parsed = extractJSON(aiText);
-    if (!parsed) {
-      console.warn('[Estimate Engine] JSON extract failed. Falling back.');
-      parsed = safeEstimate(laborRateNum, partsCostNum, { notes: 'AI parse failed — output falling back to safety defaults.' });
-    }
-
+    if (!parsed) parsed = safeEstimate(laborRateNum, partsCostNum, { notes: 'AI parse failed — output falling back to safety defaults.' });
     const finalEstimate = { ...safeEstimate(laborRateNum, partsCostNum), ...parsed };
     finalEstimate.repairs = filterCompletedRepairs(finalEstimate.repairs, completedWork);
     if (!finalEstimate.repairs.length) finalEstimate.repairs = ['Perform targeted confirmation tests before replacement'];
 
-    // Surface evidence in the existing Known Issues panel so the current mobile UI
-    // visibly proves that the scraper was consumed by the estimate engine.
     const evidenceKnownIssues = [];
-    for (const x of (vehicleEvidence.tsbs?.references || []).slice(0, 3)) {
-      evidenceKnownIssues.push(`TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
-    }
-    for (const x of (vehicleEvidence.recalls || []).slice(0, 3)) {
-      evidenceKnownIssues.push(`NHTSA recall ${x.campaignNumber || 'reference'}: ${x.component || 'vehicle component'} — ${x.summary || 'see recall remedy'}`);
-    }
-    for (const x of (vehicleEvidence.knownIssues || []).slice(0, 5)) {
-      evidenceKnownIssues.push(`${x.component || 'Vehicle component'} — ${x.reports} NHTSA complaint pattern report${x.reports === 1 ? '' : 's'}`);
-    }
-    for (const x of (vehicleEvidence.oem?.references || []).filter(x => x.evidenceType === 'FACTORY_SERVICE_REFERENCE').slice(0, 3)) {
-      evidenceKnownIssues.push(`OEM/factory reference: ${x.title || 'Service procedure'}${x.url ? ` — ${x.url}` : ''}`);
+    for (const x of (vehicleEvidence.tsbs?.references || []).slice(0, 3)) evidenceKnownIssues.push(`TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
+    for (const x of (vehicleEvidence.recalls || []).slice(0, 3)) evidenceKnownIssues.push(`NHTSA recall ${x.campaignNumber || 'reference'}: ${x.component || 'vehicle component'} — ${x.summary || 'see recall remedy'}`);
+    for (const x of (vehicleEvidence.knownIssues || []).slice(0, 5)) evidenceKnownIssues.push(`${x.component || 'Vehicle component'} — ${x.reports} NHTSA complaint pattern report${x.reports === 1 ? '' : 's'}`);
+    for (const x of (vehicleEvidence.oem?.references || []).filter(x => x.evidenceType === 'FACTORY_SERVICE_REFERENCE').slice(0, 5)) {
+      const facts = x.extractedFacts || {};
+      const construction = (facts.construction || []).slice(0, 1).join(' ');
+      evidenceKnownIssues.push(`OEM/factory reference: ${x.title || 'Service procedure'}${construction ? ` — ${construction}` : ''}${x.url ? ` — ${x.url}` : ''}`);
     }
     finalEstimate.knownIssues = evidenceKnownIssues.length ? evidenceKnownIssues : (finalEstimate.knownIssues || []);
 
     const sourceLabel = (vehicleEvidence.sources || []).join(', ') || 'No external evidence source returned';
-    finalEstimate.notes = [finalEstimate.notes, `Evidence used: ${sourceLabel}. Completed repairs excluded: ${completedWork.join(', ') || 'none'}.`]
-      .filter(Boolean).join(' ');
-
+    finalEstimate.notes = [finalEstimate.notes, `Evidence used: ${sourceLabel}. Completed repairs excluded: ${completedWork.join(', ') || 'none'}.`].filter(Boolean).join(' ');
     finalEstimate.evidence = {
-      oem: (vehicleEvidence.oem?.references || []).slice(0, 8),
-      tsbs: (vehicleEvidence.tsbs?.references || []).slice(0, 8),
+      oem: (vehicleEvidence.oem?.references || []).slice(0, 12),
+      tsbs: (vehicleEvidence.tsbs?.references || []).slice(0, 10),
       recalls: (vehicleEvidence.recalls || []).slice(0, 10),
       knownIssues: (vehicleEvidence.knownIssues || []).slice(0, 10),
-      sources: vehicleEvidence.sources || [],
-      available: !!vehicleEvidence.available,
+      sources: vehicleEvidence.sources || [], available: !!vehicleEvidence.available,
       completedWorkExcluded: completedWork
     };
 
     if (!['high', 'medium', 'low'].includes(finalEstimate.priority)) finalEstimate.priority = 'medium';
-
     try {
       const db = require('../services/db');
       if (db) await db.from('estimates').insert({ total: finalEstimate.total, details: { ...finalEstimate, customer, vehicle } });
     } catch (e) { /* DB target optional */ }
-
     res.json({ success: true, appliedRustPenalty: rustBeltMultiplier > 1.0, estimate: finalEstimate });
   } catch (err) {
     console.error('[Estimate System Fault]:', err.message);
