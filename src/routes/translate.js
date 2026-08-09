@@ -34,8 +34,9 @@ Respond with JSON ONLY:
 
     const aiRes = await aiChat({
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 300,
+      max_tokens: 800,
       temperature: 0.2,
+      reasoning_effort: 'low',
       response_format: { type: 'json_object' }
     });
 

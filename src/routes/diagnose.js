@@ -209,7 +209,7 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
     const groqRes = await groqChat([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt }
-    ], { max_tokens: 1500, temperature: 0.15, response_format: { type: 'json_object' } });
+    ], { max_tokens: 2500, temperature: 0.15, reasoning_effort: 'low', response_format: { type: 'json_object' } });
 
     const aiText = typeof groqRes === 'string'
       ? groqRes
