@@ -74,6 +74,7 @@ router.post('/', async (req, res) => {
       mechanicNotices = [],
       obdCodes = [],
       notes = [],
+      keywords = [],
       vehicle = {},
       laborRate = 65,
       axleCode = ''
@@ -183,7 +184,8 @@ router.post('/', async (req, res) => {
       systemPrompt += `\n\nLABOR: ${JSON.stringify(assemblyData.breakdowns, null, 2)}\nPARTS: ${JSON.stringify(assemblyData.partsRisks, null, 2)}`;
     }
 
-    const userPrompt = `Vehicle: ${vehicle.make || 'N/A'} ${vehicle.model || 'N/A'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | Symptoms: ${targetSymptoms.join(', ') || 'N/A'} | Tech Notes: ${notes.join(', ') || 'N/A'}`;
+    const keywordsList = Array.isArray(keywords) ? keywords.filter(k => typeof k === 'string' && k.trim()) : [];
+    const userPrompt = `Vehicle: ${vehicle.make || 'N/A'} ${vehicle.model || 'N/A'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | Symptoms: ${targetSymptoms.join(', ') || 'N/A'} | Tech Notes: ${notes.join(', ') || 'N/A'}${keywordsList.length ? ` | Technical Keywords: ${keywordsList.join(', ')}` : ''}`;
 
     executionTrace.log('GROQ_DISPATCH', 'Sending to Groq...');
 
