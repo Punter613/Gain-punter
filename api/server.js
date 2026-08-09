@@ -7,8 +7,42 @@ const cors = require('cors');
 const app = express();
 
 // 1. GLOBAL ACCESS CONTROL & SECURITY HEADERS
+// Allow known SKSK browser clients while keeping environment-driven expansion easy.
+// CORS_ORIGINS accepts a comma-separated list. CORS_ORIGIN remains supported for
+// backward compatibility with the existing Render configuration.
+const defaultAllowedOrigins = [
+  'https://skskprotech.pages.dev',
+  'https://p613-backend.onrender.com',
+  'http://localhost:3000'
+];
+
+const configuredOrigins = [
+  ...(process.env.CORS_ORIGINS || '').split(','),
+  ...(process.env.CORS_ORIGIN || '').split(',')
+].map(origin => origin.trim()).filter(Boolean);
+
+const allowedOrigins = new Set([...defaultAllowedOrigins, ...configuredOrigins]);
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // curl, server-to-server, same-origin requests without Origin
+  if (allowedOrigins.has(origin)) return true;
+
+  // Cloudflare Pages branch/deployment previews for this project.
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'https:' &&
+      (url.hostname === 'skskprotech.pages.dev' || url.hostname.endsWith('.skskprotech.pages.dev'));
+  } catch {
+    return false;
+  }
+}
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin(origin, callback) {
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    console.warn(`[CORS] Blocked origin: ${origin}`);
+    return callback(new Error('Origin not allowed by CORS'));
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
