@@ -15,7 +15,8 @@
 - Exercise every route, worker, lifecycle hook, or background service materially affected by the change.
 - For estimate/diagnostic changes, hit the real HTTP routes rather than only importing modules or checking syntax.
 - For background services such as Supabase keep-awake or workers, confirm startup behavior and at least one real execution path when practical.
-- Record the commands/routes exercised and the observed result in the PR description or a PR comment before merge.
+- Runtime proof must be concrete and reproducible: paste the actual command(s) executed and the actual relevant output/response into the PR description or a PR comment. For HTTP verification, include the `curl` (or equivalent) command plus the returned status/body. For background services, include the invocation plus the relevant startup/execution log output.
+- A checkbox, `tested ✅`, or an unsubstantiated statement that testing passed is not runtime proof and does not satisfy the merge gate.
 - A clean boot plus green syntax/static checks is necessary but not sufficient; runtime behavior is the merge criterion.
 - If the runtime environment or required credentials are unavailable, do not merge. Document what is blocked instead.
 
