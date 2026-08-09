@@ -26,6 +26,7 @@ Removed non-runtime artifacts:
 - `-d` — captured JSON error response
 - `changes.diff` — stale loose patch artifact retained in Git history
 - `new modules ` — generated Python workbench/scratch file targeting `/mnt/agents/output/sksk_modules`
+- `src/core/orchestrator/estimate.js` — zero-byte placeholder with no discovered references
 
 Updated `.gitignore` to discourage recommitting generated Rust output, checked-in scraper binaries, and loose diff artifacts.
 
@@ -61,7 +62,6 @@ The following require import/deployment tracing before deletion because they may
 - Multiple stress-test entry files remain outside the exact-duplicate set (`stress.test.js`, `stresstest.js`, `tests/stress.test.js`). Compare intent and choose one test home.
 - Database migrations include two files beginning with `002_`; normalize migration sequencing only after confirming production migration history.
 - Checked-in scraper binaries remain tracked in Git history/current tree; ignore rules prevent new accidental additions, but removing/replacing tracked binaries should be coordinated with deployment behavior.
-- `src/core/orchestrator/estimate.js` is zero bytes and is a deletion candidate after confirming no imports.
 - Root documentation (`ARCHITECTURE_ANALYSIS.md`, `MASTER_PLAN.md`, `CLEANUP.md`) overlaps in purpose; consolidate documentation only after extracting still-valid decisions.
 
 ## Cleanup rule
