@@ -22,11 +22,15 @@ Canonical runtime spine remains:
 
 - Moved the self-contained eBay OAuth provider from `services/ebayAuth.js` to `src/services/parts/ebayAuth.js`.
 - Moved the eBay Browse provider from `services/ebayBrowse.js` to `src/services/parts/ebayBrowse.js`.
+- Fixed a real cached-token contract bug during the move: cache hits now return `{ token, marketplace }`, matching fresh OAuth responses. Previously the cache-hit branch returned only the bare token string, while `searchEbayParts()` destructures `{ token, marketplace }`.
 - This collapses the root shadow `services/` tree without discarding future eBay integration code.
 
 ### Knowledge tree
 
-- Removed root `knowledge/parts.accuracy.js` after confirming the canonical `src/knowledge/parts.accuracy.js` contains the same intelligence data and is the version consumed by the core parts assembler.
+- Removed stale root `knowledge/parts.accuracy.js`.
+- The root file was not equivalent to the canonical implementation: it carried stale placeholder-style constants such as `TRITON_PLUG: 'TRITON_PLUG'` and a reduced `SOURCE_TIERS` definition.
+- Canonical failure/source identifiers live in `src/knowledge/constants.js`, including values such as `TRITON_PLUG: 'spark_plug_separation'` and `GM_LIFTER: 'afm_lifter_collapse'`.
+- `src/knowledge/parts.accuracy.js` imports those canonical constants, while `src/knowledge/labor.matrix.js` and `src/core/pattern.assembler.js` also consume the same active constant source. Removing the root copy therefore eliminates a stale landmine rather than losing active data.
 
 ## Intentionally deferred
 
