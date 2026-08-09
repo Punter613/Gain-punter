@@ -4,3 +4,9 @@ node_modules/
 dist/
 build/
 *.log
+
+# Generated build output / local artifacts
+tools/lemon_scraper/target/
+/bin/lemon_scraper
+tools/lemon_scraper/bin/lemon_scraper
+changes.diff
