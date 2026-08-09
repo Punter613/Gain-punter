@@ -3,6 +3,7 @@ const router = express.Router();
 const { runDiagnosticPipeline } = require('../services/pipeline.engine');
 const { groqChat } = require('../services/groq');
 const { collectVehicleEvidence } = require('../services/vehicle.evidence');
+const { supabase } = require('../db');
 
 function extractJSON(text) {
   if (!text) return null;
@@ -143,8 +144,7 @@ RULES:
 
     if (!['high', 'medium', 'low'].includes(finalEstimate.priority)) finalEstimate.priority = 'medium';
     try {
-      const db = require('../services/db');
-      if (db) await db.from('estimates').insert({ total: finalEstimate.total, details: { ...finalEstimate, customer, vehicle } });
+      if (supabase) await supabase.from('estimates').insert({ total: finalEstimate.total, details: { ...finalEstimate, customer, vehicle } });
     } catch (e) { /* DB target optional */ }
     res.json({ success: true, appliedRustPenalty: rustBeltMultiplier > 1.0, estimate: finalEstimate });
   } catch (err) {

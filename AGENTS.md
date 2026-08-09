@@ -2,12 +2,22 @@
 
 ## Database Access
 - Use `src/db.js` as the primary interface for Supabase.
-- If you need the raw Supabase client, import it from `src/db.js` using `const { supabase } = require('./db')`.
+- If you need the raw Supabase client, import it from `src/db.js` using the correct relative path and destructure `{ supabase }`.
 - Do not create new Supabase client instances in other files.
 
 ## Testing
 - Use `scripts/generate_random_test.js` to run randomized end-to-end tests on the `/api/full-estimate` pipeline.
 - Use `tests/testForemanPipeline.js` for AI structure validation.
+
+## Merge Gate — Runtime Verification Required
+- Nothing merges to `main` based on diff review alone.
+- Before merge, boot the exact PR/branch code in a real runtime environment.
+- Exercise every route, worker, lifecycle hook, or background service materially affected by the change.
+- For estimate/diagnostic changes, hit the real HTTP routes rather than only importing modules or checking syntax.
+- For background services such as Supabase keep-awake or workers, confirm startup behavior and at least one real execution path when practical.
+- Record the commands/routes exercised and the observed result in the PR description or a PR comment before merge.
+- A clean boot plus green syntax/static checks is necessary but not sufficient; runtime behavior is the merge criterion.
+- If the runtime environment or required credentials are unavailable, do not merge. Document what is blocked instead.
 
 ## Manual Scraping
 - The Rust scraper is located in `tools/lemon_scraper`.

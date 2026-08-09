@@ -1,4 +1,4 @@
-const supabase = require('./db');
+const { supabase } = require('../db');
 
 /**
  * Throws a lightweight query at Supabase to force the container to stay active.
