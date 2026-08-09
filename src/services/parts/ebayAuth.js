@@ -3,7 +3,9 @@ let tokenExpiresAt = 0;
 
 async function getEbayToken() {
   const now = Date.now();
-  if (cachedToken && now < tokenExpiresAt - 60000) return cachedToken;
+  if (cachedToken && now < tokenExpiresAt - 60000) {
+    return { token: cachedToken, marketplace: process.env.EBAY_MARKETPLACE_ID || 'EBAY_US' };
+  }
 
   const clientId = process.env.EBAY_CLIENT_ID;
   const clientSecret = process.env.EBAY_CLIENT_SECRET;
@@ -14,7 +16,6 @@ async function getEbayToken() {
   }
 
   const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-
   const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
     method: 'POST',
     headers: {
@@ -35,6 +36,7 @@ async function getEbayToken() {
   const data = await response.json();
   cachedToken = data.access_token;
   tokenExpiresAt = now + (data.expires_in * 1000);
+
   return { token: cachedToken, marketplace };
 }
 
