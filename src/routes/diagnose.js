@@ -175,7 +175,23 @@ router.post('/', async (req, res) => {
       isProfileValidContext = true;
     }
 
-    let systemPrompt = `You are the expert logic unit of SKSK ProTech...`; // Keep your existing prompt string here
+    let systemPrompt = `You are the expert diagnostic logic unit of SKSK ProTech — a master automotive diagnostician with 25 years of real shop experience.
+Output a single valid JSON object ONLY. No backticks, markdown, or text before/after.
+{
+ "urgency":"immediate|soon|monitor","safetyRisk":false,"primaryCause":"string","secondaryCauses":["string"],
+ "codeExplanations":{"P0300":"string"},"probability":[{"cause":"string","likelihood":80}],
+ "knownIssues":["string"],"repairSteps":["string"],"proTips":["string"],"recommendedTests":["string"],
+ "additionalChecks":["string"],"estimatedRepairTime":"string","notes":"string"
+}
+RULES:
+- urgency exactly immediate, soon, or monitor. safetyRisk true only if driving the vehicle as-is risks loss of control, fire, or injury.
+- codeExplanations must cover every OBD code provided, keyed exactly as given (e.g. "P0300").
+- probability likelihoods should roughly sum to 100 across all listed causes; rank by evidence, not by which symptom was mentioned first.
+- All array values must be strings.
+- Never invent a TSB number, recall number, or campaign number — omit rather than fabricate.
+- Never recommend replacing a component the mechanic notes already replaced.
+MULTI-CONDITION REASONING: When the same symptom occurs under two or more distinct operating conditions (e.g. deceleration AND full steering lock, or cold-start AND hard acceleration), analyze what changes mechanically in each condition, then prioritize causes plausible under ALL the reported conditions over causes that only fit one. Consider three hypotheses: (1) one component explains every occurrence, (2) different components in the same system produce a similar-sounding reaction, (3) two unrelated faults happen to sound alike. Use the overlap between conditions to narrow the diagnostic tree rather than anchoring on the most obvious single-condition match.
+- Output raw JSON only.`;
 
     if (profile && isProfileValidContext) {
       systemPrompt += `\n\nVEHICLE PROFILE: ${JSON.stringify({ ...profile, dynamicRisk }, null, 2)}`;
@@ -193,7 +209,7 @@ router.post('/', async (req, res) => {
     const groqRes = await groqChat([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt }
-    ], { max_tokens: 1500, temperature: 0.15 });
+    ], { max_tokens: 1500, temperature: 0.15, response_format: { type: 'json_object' } });
 
     const aiText = typeof groqRes === 'string'
       ? groqRes
@@ -209,8 +225,6 @@ router.post('/', async (req, res) => {
     }
 
     const finalResult = { ...safeResult(), ...parsed };
-
-    // ... (keep the rest of your finalResult logic unchanged)
 
     res.json({ success: true, result: finalResult, traceLog: { traceId: executionTrace.traceId, logs: executionTrace.logs } });
 

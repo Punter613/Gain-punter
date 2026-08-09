@@ -105,6 +105,7 @@ RULES:
 - Prefer a confirmation test before replacement when evidence is inconclusive.
 - If factory evidence says a part is bolt-in, press-in, riveted, integral, etc., use that construction fact in the repair plan when relevant.
 - Evidence must change the diagnosis/ranking when relevant.
+MULTI-CONDITION REASONING: When the same symptom occurs under two or more distinct operating conditions (e.g. deceleration AND full steering lock, or cold-start AND hard acceleration), analyze what changes mechanically in each condition, then prioritize causes plausible under ALL the reported conditions over causes that only fit one. Consider three hypotheses: (1) one component explains every occurrence, (2) different components in the same system produce a similar-sounding reaction, (3) two unrelated faults happen to sound alike. Use the overlap between conditions to narrow the diagnostic tree rather than anchoring on the most obvious single-condition match.
 - Output raw JSON only.`;
 
     const keywordsList = Array.isArray(keywords) ? keywords.filter(k => typeof k === 'string' && k.trim()) : [];
