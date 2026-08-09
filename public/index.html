@@ -773,6 +773,43 @@
         }
 
         /* ── FOOTER ── */
+        /* ── CLEAR / NEW JOB ── */
+        .clear-job-wrap {
+            max-width: 780px;
+            margin: -6px auto 16px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .btn-clear-job {
+            appearance: none;
+            border: 1px solid rgba(255, 82, 82, 0.35);
+            border-radius: 12px;
+            padding: 10px 14px;
+            background: rgba(255, 82, 82, 0.08);
+            color: #ff8a8a;
+            font: 700 0.82rem 'Inter', system-ui, sans-serif;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-clear-job:hover {
+            background: rgba(255, 82, 82, 0.16);
+            border-color: rgba(255, 82, 82, 0.65);
+            transform: translateY(-1px);
+        }
+
+        @media (max-width: 600px) {
+            .clear-job-wrap {
+                margin-top: -4px;
+            }
+
+            .btn-clear-job {
+                width: 100%;
+                min-height: 44px;
+            }
+        }
+
         .footer {
             max-width: 780px;
             margin: 16px auto 0;
@@ -865,6 +902,10 @@
             <button class="tab" data-tab="shareTab">
                 <span class="tab-icon">📤</span>Share
             </button>
+        </div>
+
+        <div class="clear-job-wrap">
+            <button type="button" class="btn-clear-job" id="btnClearJob">🧹 Clear / New Job</button>
         </div>
 
         <section class="panel active" id="estimateTab">
@@ -1752,6 +1793,72 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').catch(() => {});
         }
+
+        // ── CLEAR / NEW JOB ──
+        // Wipes the persisted form, current estimate/diagnosis results, and
+        // translation metadata (aiTranslated/aiKeywords) for a fresh job, while
+        // restoring the app's actual defaults ($65 labor, $80 parts, $200 invoice
+        // starting point) rather than leaving those fields blank.
+        function resetField(id, value = '') {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = value;
+            if (el.dataset) {
+                el.dataset.aiTranslated = '';
+                el.dataset.aiKeywords = '';
+            }
+        }
+
+        function clearResultCard(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.className = 'result-card';
+            el.innerHTML = '';
+        }
+
+        function clearCurrentJob() {
+            if (!confirm('Clear the current Estimate, Diagnosis, and Invoice and start a new job?')) return;
+
+            try {
+                localStorage.removeItem('sksk_form');
+            } catch (_) {}
+
+            [
+                'customerName', 'customerPhone', 'customerEmail', 'vehicleYear', 'vehicleMake', 'vehicleModel', 'vehicleTrim',
+                'vin', 'customerStates', 'mechanicNotices', 'obdCodes',
+                'diagVin', 'diagMileage', 'diagCodes', 'diagSymptoms', 'diagNotes',
+                'invoiceCustomer', 'invoiceNumber', 'invoiceNotes'
+            ].forEach(id => resetField(id));
+
+            resetField('laborRate', '65');
+            resetField('partsCost', '80');
+            resetField('invoiceTotal', '200');
+
+            clearResultCard('estimateResult');
+            clearResultCard('diagnoseResult');
+
+            const invoiceStatus = document.getElementById('invoiceStatus');
+            if (invoiceStatus) {
+                invoiceStatus.className = 'status-simple';
+                invoiceStatus.textContent = 'Ready to generate.';
+            }
+
+            lastEstimate = null;
+
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
+            const estimateTabButton = document.querySelector('.tab[data-tab="estimateTab"]');
+            const estimatePanel = document.getElementById('estimateTab');
+            if (estimateTabButton) estimateTabButton.classList.add('active');
+            if (estimatePanel) estimatePanel.classList.add('active');
+
+            saveForm();
+
+            const first = document.getElementById('customerName');
+            if (first) first.focus();
+        }
+
+        document.getElementById('btnClearJob').addEventListener('click', clearCurrentJob);
 
         restoreForm();
     </script>
