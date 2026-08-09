@@ -20,12 +20,19 @@ async function groqChat(messages, options = {}) {
     throw new Error('GROQ_API_KEY is not configured. Cannot reach Groq.');
   }
 
+  const resolvedModel = options.model || 'openai/gpt-oss-120b';
   const requestBody = {
     messages,
-    model: options.model || 'llama-3.3-70b-versatile',
+    model: resolvedModel,
     temperature: options.temperature ?? 0.2,
     max_tokens: options.max_tokens,
-    ...(options.response_format ? { response_format: options.response_format } : {})
+    ...(options.response_format ? { response_format: options.response_format } : {}),
+    // gpt-oss models are reasoning models — they spend tokens on internal
+    // chain-of-thought before writing the actual answer. 'low' keeps that
+    // overhead small so max_tokens isn't eaten by reasoning instead of the
+    // JSON output. Only meaningful for gpt-oss models; gated defensively
+    // so it's a no-op if a non-gpt-oss model is ever passed in.
+    ...(options.reasoning_effort && /gpt-oss/.test(resolvedModel) ? { reasoning_effort: options.reasoning_effort } : {})
   };
 
   // Phase 2 instrumentation — visibility into the request/response shape
@@ -34,6 +41,7 @@ async function groqChat(messages, options = {}) {
     model: requestBody.model,
     temperature: requestBody.temperature,
     max_tokens: requestBody.max_tokens,
+    reasoning_effort: requestBody.reasoning_effort || null,
     response_format: requestBody.response_format || null,
     messageCount: messages.length,
     messageRoles: messages.map(m => m.role),

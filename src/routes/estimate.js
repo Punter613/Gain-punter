@@ -111,7 +111,7 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
     const keywordsList = Array.isArray(keywords) ? keywords.filter(k => typeof k === 'string' && k.trim()) : [];
     const userPrompt = `Vehicle: ${vehicleStr}\nVIN: ${vin || 'N/A'}\nShop Rate: $${laborRateNum}/hr | Parts Budget: $${partsCostNum} | Rust Multiplier: ${rustBeltMultiplier}x\nOBD Codes: ${obdCodes.join(', ') || 'None'}\nCustomer Reports: ${customerStates.join(', ') || 'N/A'}\nMechanic Notices: ${mechanicNotices.join(', ') || 'N/A'}\nCompleted Work Detected: ${completedWork.join(', ') || 'None'}${keywordsList.length ? `\nTechnical Keywords: ${keywordsList.join(', ')}` : ''}\n\nVEHICLE EVIDENCE:\n${evidenceText}`;
 
-    const groqRes = await groqChat([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], { max_tokens: 1400, temperature: 0.2 });
+    const groqRes = await groqChat([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], { max_tokens: 2500, temperature: 0.2, reasoning_effort: 'low' });
     const aiText = typeof groqRes === 'string' ? groqRes : (groqRes?.choices?.[0]?.message?.content || '');
     if (!aiText) throw new Error('Groq returned empty response strings');
 

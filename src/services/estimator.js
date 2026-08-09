@@ -20,8 +20,10 @@ const processSingleEstimate = async ({ vehicle, notes }) => {
       { role: 'system', content: prompts.system },
       { role: 'user', content: prompts.user }
     ],
-    model: 'llama-3.3-70b-versatile',
+    model: 'openai/gpt-oss-120b',
     temperature: 0.1,
+    max_tokens: 2000,
+    reasoning_effort: 'low',
     response_format: { type: "json_object" }
   });
 

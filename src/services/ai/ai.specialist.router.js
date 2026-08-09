@@ -6,7 +6,7 @@ class AISpecialistRouter {
       diagnostic: {
         name: 'Diagnostic AI',
         description: 'Analyzes symptoms, fault codes, and vehicle telemetry to identify root causes',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.2,
         maxTokens: 2000,
         jsonMode: false,
@@ -25,7 +25,7 @@ Mechanic notices are authoritative history for this request. If the technician s
       estimate: {
         name: 'Estimate AI',
         description: 'Generates structured cost breakdowns for parts and labor',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.1,
         maxTokens: 3000,
         jsonMode: true,
@@ -41,7 +41,7 @@ Mechanic notices are authoritative history for this estimate. NEVER quote, list,
       tsb: {
         name: 'TSB AI',
         description: 'Searches Technical Service Bulletins for known issues and factory fixes',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.1,
         maxTokens: 1500,
         jsonMode: false,
@@ -53,7 +53,7 @@ Return: TSB number/title if available, affected vehicles, symptoms, root cause, 
       parts: {
         name: 'Parts AI',
         description: 'Cross-references catalogs for availability, pricing, and fitment',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.1,
         maxTokens: 2000,
         jsonMode: true,
@@ -80,7 +80,7 @@ Do not source parts for work explicitly documented as already completed unless r
       fleet: {
         name: 'Fleet AI',
         description: 'Optimizes fleet uptime, scheduling, and operational windows',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.2,
         maxTokens: 1500,
         jsonMode: true,
@@ -90,7 +90,7 @@ Do not source parts for work explicitly documented as already completed unless r
       buyer: {
         name: 'Buyer AI',
         description: 'Automates part procurement and vendor negotiation',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.3,
         maxTokens: 1500,
         jsonMode: true,
@@ -100,7 +100,7 @@ Do not source parts for work explicitly documented as already completed unless r
       receptionist: {
         name: 'Receptionist AI',
         description: 'Customer-facing communication, booking, and onboarding',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.7,
         maxTokens: 1500,
         jsonMode: false,
@@ -110,7 +110,7 @@ Do not source parts for work explicitly documented as already completed unless r
       scheduling: {
         name: 'Scheduling AI',
         description: 'Manages shop capacity, technician assignments, and customer appointments',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.2,
         maxTokens: 1500,
         jsonMode: true,
@@ -120,7 +120,7 @@ Do not source parts for work explicitly documented as already completed unless r
       prediction: {
         name: 'Prediction AI',
         description: 'Forecasts likely maintenance needs from vehicle history and mileage',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         temperature: 0.2,
         maxTokens: 1800,
         jsonMode: true,
@@ -185,6 +185,7 @@ Do not source parts for work explicitly documented as already completed unless r
         model: config.model,
         temperature: config.temperature,
         max_tokens: config.maxTokens,
+        reasoning_effort: 'low',
         response_format: config.jsonMode ? { type: 'json_object' } : undefined
       });
 

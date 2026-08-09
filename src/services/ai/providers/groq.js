@@ -13,7 +13,7 @@ const { groqChat } = require('../../groq');
  * call through aiClient -> providerRouter -> groq.
  */
 async function chat(payload = {}) {
-  const { messages, model, temperature, max_tokens, response_format } = payload;
+  const { messages, model, temperature, max_tokens, response_format, reasoning_effort } = payload;
 
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error(
@@ -22,7 +22,7 @@ async function chat(payload = {}) {
     );
   }
 
-  return groqChat(messages, { model, temperature, max_tokens, response_format });
+  return groqChat(messages, { model, temperature, max_tokens, response_format, reasoning_effort });
 }
 
 module.exports = { chat };
