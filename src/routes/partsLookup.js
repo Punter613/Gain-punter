@@ -1,33 +1,44 @@
 const express = require('express');
 const router = express.Router();
+const { lookupPart } = require('../services/partsLookup');
 
 router.post('/', async (req, res) => {
-  const { part_number, name, vehicle, vin } = req.body || {};
+  try {
+    const { part_number, name, vehicle, vin } = req.body || {};
+    const query = part_number || name;
 
-  if (!part_number && !name) {
-    return res.status(400).json({ success: false, error: 'part_number or name required' });
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'part_number or name required'
+      });
+    }
+
+    const vehicleText = typeof vehicle === 'string'
+      ? vehicle
+      : [vehicle?.year, vehicle?.make, vehicle?.model, vehicle?.trim]
+          .filter(Boolean)
+          .join(' ');
+
+    const result = await lookupPart(query, vin || '', vehicleText || '');
+
+    return res.json({
+      success: true,
+      ...result,
+      meta: {
+        part_number: part_number || null,
+        name: name || null,
+        vehicle: vehicle || null,
+        vin: vin || null
+      }
+    });
+  } catch (error) {
+    console.error('[Parts Lookup Route Error]', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to look up part availability.'
+    });
   }
-
-  return res.json({
-    success: true,
-    local: [
-      {
-        source: 'Local Auto Store',
-        price: 49.99,
-        pickup_eta: 'Immediate pickup',
-        order_url: 'https://www.autozone.com'
-      }
-    ],
-    online: [
-      {
-        source: 'Online Distributor',
-        price: 44.99,
-        shipping_eta: '2-3 business days',
-        order_url: 'https://www.napaonline.com'
-      }
-    ],
-    meta: { part_number, name, vehicle, vin }
-  });
 });
 
 module.exports = router;
