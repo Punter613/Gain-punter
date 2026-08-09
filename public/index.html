@@ -1577,12 +1577,28 @@
             const card = document.getElementById('diagnoseResult');
             card.className = 'result-card';
             try {
+                // Force-translate before submit if the mechanic never hit Translate or
+                // Voice — same fallback as the Estimate tab. translateCustomerSpeak is
+                // one-hit-only, so this is a no-op if translation already happened.
+                const dsField = document.getElementById('diagSymptoms');
+                if (dsField && dsField.value.trim() && dsField.dataset.aiTranslated !== '1') {
+                    await translateCustomerSpeak('diagSymptoms', document.getElementById('btnTranslateDiag'), { silent: true });
+                }
+
+                let keywords = [];
+                try {
+                    keywords = JSON.parse(dsField?.dataset.aiKeywords || '[]');
+                } catch (e) {
+                    keywords = [];
+                }
+
                 const payload = {
                     vin: document.getElementById('diagVin').value.trim(),
                     mileage: Number(document.getElementById('diagMileage').value || 0),
                     symptoms: splitLines(document.getElementById('diagSymptoms').value),
                     codes: splitList(document.getElementById('diagCodes').value),
-                    notes: splitLines(document.getElementById('diagNotes').value)
+                    notes: splitLines(document.getElementById('diagNotes').value),
+                    keywords
                 };
 
                 const res = await fetchWithTimeout(`${API_BASE}/api/diagnose`, {
