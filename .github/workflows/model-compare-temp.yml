@@ -1,0 +1,51 @@
+name: Temporary Diagnose Model Comparison
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/model-compare-temp.yml'
+      - 'api/server.js'
+      - 'src/routes/model-compare-result.js'
+      - 'scripts/compare-diagnose-models.js'
+  workflow_dispatch:
+
+jobs:
+  collect-render-result:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll Render for one-time comparison result
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://p613-backend.onrender.com/api/internal/model-compare-result'
+          echo "Polling Render result endpoint..."
+          for attempt in $(seq 1 40); do
+            body=$(curl -sS "$URL" || true)
+            status=$(printf '%s' "$body" | jq -r '.status // "unavailable"' 2>/dev/null || echo unavailable)
+            echo "Attempt $attempt: $status"
+
+            if [ "$status" = "complete" ]; then
+              printf '%s\n' "$body" | jq .
+              printf '%s\n' "$body" > model-comparison-result.json
+              exit 0
+            fi
+
+            if [ "$status" = "error" ]; then
+              printf '%s\n' "$body" | jq .
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo 'Comparison result did not become available during this workflow run.'
+          exit 1
+
+      - name: Upload comparison result
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnose-model-comparison
+          path: model-comparison-result.json
+          retention-days: 1
