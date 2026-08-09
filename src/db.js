@@ -8,21 +8,14 @@ if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
 }
 
-/**
- * Builds a stable cache key for a vehicle so repeat lookups
- * (same year/make/model/engine) hit the same row.
- */
+const CURRENT_MANUAL_SCHEMA = 2;
+
 function buildVehicleCacheKey({ year, make, model, engine }) {
   return [year, make, model, engine || 'base']
     .map(v => String(v || '').toLowerCase().trim().replace(/\s+/g, '-'))
     .join('|');
 }
 
-/**
- * Checks scraped_manuals for a cached result for this vehicle.
- * Returns null on cache miss OR if Supabase isn't configured
- * (never throws - a cache lookup failing should never block a real scrape).
- */
 async function getCachedManual(vehicle) {
   if (!supabase) return null;
   const cacheKey = buildVehicleCacheKey(vehicle);
@@ -38,6 +31,14 @@ async function getCachedManual(vehicle) {
       console.warn('[DB] getCachedManual lookup failed, treating as cache miss:', error.message);
       return null;
     }
+
+    // Force one refresh of rows created by the old title/URL-only scraper.
+    // New rows contain schemaVersion=2 and preserve actual manual text/facts.
+    if (data?.data?.schemaVersion !== CURRENT_MANUAL_SCHEMA) {
+      console.log(`[DB] Legacy Lemon cache detected for ${cacheKey}; refreshing with schema v${CURRENT_MANUAL_SCHEMA}`);
+      return null;
+    }
+
     return data || null;
   } catch (err) {
     console.warn('[DB] getCachedManual threw, treating as cache miss:', err.message);
@@ -45,11 +46,6 @@ async function getCachedManual(vehicle) {
   }
 }
 
-/**
- * Saves a freshly-scraped manual result so next time the same
- * vehicle is asked about, we hit the cache instead of scraping again.
- * Never throws - a failed cache write should never break the estimate flow.
- */
 async function saveScrapedManual(vehicle, manualData) {
   if (!supabase) return null;
   const cacheKey = buildVehicleCacheKey(vehicle);
@@ -75,4 +71,4 @@ async function saveScrapedManual(vehicle, manualData) {
   }
 }
 
-module.exports = { supabase, getCachedManual, saveScrapedManual, buildVehicleCacheKey };
+module.exports = { supabase, getCachedManual, saveScrapedManual, buildVehicleCacheKey, CURRENT_MANUAL_SCHEMA };
