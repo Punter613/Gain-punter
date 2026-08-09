@@ -1,4 +1,4 @@
-const CACHE_BUSTER = 'sksk-clear-job-v1';
+const CACHE_BUSTER = 'sksk-clear-job-v2';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -114,7 +114,7 @@ self.addEventListener('fetch', event => {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountClearButton);
   else mountClearButton();
 })();
-<\/script>
+</script>
 `;
 
     html = html.replace('</body>', injection + '\n</body>');
