@@ -1244,12 +1244,20 @@
         // so the estimate submit step can forward them to the backend.
         async function translateCustomerSpeak(textareaId, btnEl, { silent = false } = {}) {
             const el = document.getElementById(textareaId);
-            const raw = el.value.trim();
+            const currentValue = el.value.trim();
 
-            if (!raw) {
+            if (!currentValue) {
                 if (!silent) alert('Type what the customer said first.');
                 return;
             }
+
+            // If the box currently holds our own fallback wrapper from a previous
+            // failed attempt, pull the true original customer text back out of it
+            // instead of treating the wrapper itself as new raw input. Without this,
+            // a second failed attempt wraps the wrapper: "[CUSTOMER SAID]: [CUSTOMER
+            // SAID]: ... [TECH NOTE]: ... [TECH NOTE]: ...", stacking on every retry.
+            const fallbackMatch = currentValue.match(/^\[CUSTOMER SAID\]:\s*([\s\S]*?)\n\[TECH NOTE\]:/);
+            const raw = fallbackMatch ? fallbackMatch[1].trim() : currentValue;
 
             if (el.dataset.aiTranslated === '1' || btnEl.disabled) {
                 // Already translated this exact content, or a request is already
@@ -1276,9 +1284,10 @@
                 el.dataset.aiKeywords = JSON.stringify(Array.isArray(data.keywords) ? data.keywords : []);
                 saveForm();
             } catch (e) {
-                // Fallback: do it client-side with a note. Don't mark as translated —
-                // this is a degraded fallback, not a real AI translation, so a retry
-                // should be allowed once connectivity/the API recovers.
+                // Fallback: do it client-side with a note, always built from the true
+                // original raw text (never from a previously-wrapped fallback value).
+                // Don't mark as translated — this is a degraded fallback, not a real
+                // AI translation, so a retry is allowed once the API is reachable again.
                 el.value = `[CUSTOMER SAID]: ${raw}\n[TECH NOTE]: Needs inspection to confirm`;
             } finally {
                 btnEl.textContent = orig;
