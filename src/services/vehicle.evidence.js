@@ -72,13 +72,34 @@ function buildKnownIssues(complaints) {
 
 function classifyFactoryItems(items) {
   return (items || []).map(item => {
-    const text = `${item.title || ''} ${item.url || ''}`.toLowerCase();
+    const meta = item.meta || {};
+    const text = [
+      item.title,
+      item.url,
+      meta.headings,
+      meta.snippet,
+      meta.matchedKeywords,
+      meta.facts
+    ].filter(Boolean).join(' ').toLowerCase();
+
     const type = /\btsb\b|technical.?service.?bulletin|service.?bulletin/.test(text)
       ? 'TSB_CANDIDATE'
-      : /repair|diagnos|service|maintenance|specification|procedure/.test(text)
+      : /repair|diagnos|service|maintenance|specification|procedure|inspection|torque|removal|installation/.test(text)
         ? 'FACTORY_SERVICE_REFERENCE'
         : 'FACTORY_REFERENCE';
-    return { ...item, evidenceType: type, sourceAuthority: 'LEMON_MANUALS' };
+
+    let facts = null;
+    if (meta.facts) {
+      try { facts = JSON.parse(meta.facts); } catch (_) {}
+    }
+
+    return {
+      ...item,
+      evidenceType: type,
+      sourceAuthority: 'LEMON_MANUALS',
+      extractedFacts: facts,
+      relevanceScore: Number(meta.relevanceScore || 0)
+    };
   });
 }
 
@@ -152,12 +173,16 @@ async function collectVehicleEvidence(vehicle) {
 
   if (manualResult.status === 'fulfilled') {
     const manual = manualResult.value || {};
-    const references = classifyFactoryItems(manual.items || []);
+    const references = classifyFactoryItems(manual.items || [])
+      .sort((a, b) => b.relevanceScore - a.relevanceScore);
+
     result.oem = {
-      references: references.slice(0, 12),
+      references: references.slice(0, 20),
       source: 'LEMON_MANUALS',
       fromCache: !!manual.fromCache,
-      scraped: !!manual.scraped
+      scraped: !!manual.scraped,
+      schemaVersion: manual.schemaVersion || 1,
+      crawledUrls: manual.crawled_urls || 0
     };
     result.tsbs.references = references.filter(item => item.evidenceType === 'TSB_CANDIDATE').slice(0, 10);
     if (references.length) result.sources.push('LEMON_MANUALS');
