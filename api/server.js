@@ -80,6 +80,7 @@ const fullEstimateRouter = require('../src/routes/full-estimate');
 const jobsRouter = require('../src/routes/jobs');
 const partsLookupRouter = require('../src/routes/partsLookup');
 const fleetRouter = require('../src/routes/fleet');
+const vehicleRouter = require('../src/routes/vehicle');
 
 app.use('/api/scrape', scrapeRouter);
 app.use('/api/parts', partsRouter);
@@ -91,6 +92,7 @@ app.use('/api/invoice', invoice);
 app.use('/api/translate', require('../src/routes/translate'));
 app.use('/api/parts-lookup', partsLookupRouter);
 app.use('/api/fleet', fleetRouter);
+app.use('/api/vehicle', vehicleRouter);
 app.use(oemRouter);
 
 // TEMPORARY: Render executes the head-to-head once at boot using its existing

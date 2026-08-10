@@ -1,4 +1,5 @@
 const NodeCache = require('node-cache');
+const crypto = require('crypto');
 const { scrapeLEMONManuals } = require('./lemon');
 const { harvestVehicleTsbs } = require('./tsb.harvester');
 
@@ -15,6 +16,52 @@ function vehicleKey(vehicle) {
     vehicle.engine,
     vehicle.drivetrain || vehicle.driveType || vehicle.drive
   ].map(clean).join('|').toLowerCase();
+}
+
+function evidenceContextKey(context = {}) {
+  const payload = JSON.stringify({
+    symptoms: clean(context.symptoms),
+    mechanicNotices: Array.isArray(context.mechanicNotices) ? context.mechanicNotices.map(clean) : clean(context.mechanicNotices),
+    obdCodes: Array.isArray(context.obdCodes) ? context.obdCodes.map(clean) : clean(context.obdCodes),
+    keywords: Array.isArray(context.keywords) ? context.keywords.map(clean) : clean(context.keywords)
+  });
+  return crypto.createHash('sha1').update(payload).digest('hex').slice(0, 16);
+}
+
+function tsbContextEligible(reference, context = {}) {
+  const symptomText = clean([
+    context.symptoms,
+    ...(Array.isArray(context.mechanicNotices) ? context.mechanicNotices : []),
+    ...(Array.isArray(context.keywords) ? context.keywords : [])
+  ].filter(Boolean).join(' ')).toLowerCase();
+  const bulletinText = clean([
+    reference.title,
+    reference.subject,
+    reference.groupName,
+    reference.snippet,
+    JSON.stringify(reference.extractedFacts || {})
+  ].filter(Boolean).join(' ')).toLowerCase();
+  const codes = (Array.isArray(context.obdCodes) ? context.obdCodes : [])
+    .map(code => String(code || '').trim().toLowerCase())
+    .filter(Boolean);
+  const codeMatch = codes.some(code => bulletinText.includes(code));
+
+  const symptomNoise = /clunk|noise|chatter|vibration|knock|thud|bump/.test(symptomText);
+  const bulletinNoise = /clunk|noise|chatter|vibration|knock|thud|bump|ping|creak/.test(bulletinText);
+  const steeringOverlap = /steering|full lock|tie rod|rack/.test(symptomText) && /steering|full lock|tie rod|rack/.test(bulletinText);
+  const drivelineOverlap = /driveline|driveshaft|propeller shaft|u joint|universal joint|transfer case|differential|torque reversal/.test(symptomText) && /driveline|driveshaft|propeller shaft|u joint|universal joint|transfer case|differential|torque reversal/.test(bulletinText);
+  const loadOverlap = /deceler|throttle release|accelerator[^.]{0,20}release|load change|torque reversal|reverse|neutral[^.]{0,20}drive/.test(symptomText) && /deceler|throttle release|accelerator[^.]{0,20}release|load change|torque reversal|reverse|neutral[^.]{0,20}drive/.test(bulletinText);
+
+  if (codeMatch) return true;
+  if (symptomNoise) return bulletinNoise && (steeringOverlap || drivelineOverlap || loadOverlap);
+  return steeringOverlap || drivelineOverlap || loadOverlap || Number(reference.relevanceScore || 0) >= 24;
+}
+
+function selectRelevantTsbs(vehicleEvidence, context = {}, minScore = 12) {
+  return (vehicleEvidence?.tsbs?.references || [])
+    .filter(ref => Number(ref.relevanceScore || 0) >= Number(minScore || 0))
+    .filter(ref => tsbContextEligible(ref, context))
+    .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0));
 }
 
 async function getJson(url, timeoutMs = 8000) {
@@ -102,10 +149,10 @@ async function scrapeNhtsa(vehicle) {
   };
 }
 
-async function collectVehicleEvidence(vehicle, context = {}) {
+async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
   if (!vehicle?.make || !vehicle?.model || !vehicle?.year) return { available: false, error: 'Vehicle year, make, and model are required' };
 
-  const key = vehicleKey(vehicle);
+  const key = `${vehicleKey(vehicle)}|${evidenceContextKey(context)}`;
   const cached = cache.get(key);
   if (cached) return { ...cached, fromCache: true };
 
@@ -134,7 +181,7 @@ async function collectVehicleEvidence(vehicle, context = {}) {
   const [manualResult, tsbResult, nhtsaResult] = await Promise.allSettled([
     scrapeLEMONManuals(vehicle, context),
     harvestVehicleTsbs(vehicle, { ...context, keywords: context.keywords || [] }),
-    scrapeNhtsa(vehicle)
+    options.includeNhtsa === false ? Promise.resolve(null) : scrapeNhtsa(vehicle)
   ]);
 
   if (manualResult.status === 'fulfilled') {
@@ -166,17 +213,19 @@ async function collectVehicleEvidence(vehicle, context = {}) {
     if (corpus.error) result.errors.push(`LEMON TSB corpus: ${corpus.error}`);
   } else result.errors.push(`LEMON TSB corpus: ${tsbResult.reason?.message || 'harvest failed'}`);
 
-  if (nhtsaResult.status === 'fulfilled') {
-    const nhtsa = nhtsaResult.value || {};
-    result.recalls = nhtsa.recalls || [];
-    result.knownIssues = nhtsa.knownIssues || [];
-    result.complaintCount = nhtsa.complaintCount || 0;
-    if (result.recalls.length || result.knownIssues.length) result.sources.push('NHTSA_ODI');
-  } else result.errors.push(`NHTSA: ${nhtsaResult.reason?.message || 'lookup failed'}`);
+  if (options.includeNhtsa !== false) {
+    if (nhtsaResult.status === 'fulfilled') {
+      const nhtsa = nhtsaResult.value || {};
+      result.recalls = nhtsa.recalls || [];
+      result.knownIssues = nhtsa.knownIssues || [];
+      result.complaintCount = nhtsa.complaintCount || 0;
+      if (result.recalls.length || result.knownIssues.length) result.sources.push('NHTSA_ODI');
+    } else result.errors.push(`NHTSA: ${nhtsaResult.reason?.message || 'lookup failed'}`);
+  }
 
   result.available = result.sources.length > 0;
   cache.set(key, result);
   return result;
 }
 
-module.exports = { collectVehicleEvidence };
+module.exports = { collectVehicleEvidence, selectRelevantTsbs, tsbContextEligible, evidenceContextKey };
