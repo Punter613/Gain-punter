@@ -26,7 +26,7 @@ function safeEstimate(laborRate, partsCost, overrides = {}) {
     priority: 'medium', diagnosis: 'Manual inspection required', laborCost: laborRate, partsCost,
     total: laborRate + partsCost, repairs: ['Diagnostic inspection required'], probability: [], knownIssues: [],
     repairSteps: [], proTips: [], additionalChecks: [], notes: '', estimatedHours: 1,
-    evidence: { oem: [], tsbs: [], recalls: [], knownIssues: [], sources: [] }, ...overrides
+    evidence: { oem: [], tsbs: [], sources: [] }, ...overrides
   };
 }
 
@@ -63,6 +63,8 @@ router.post('/', async (req, res) => {
       if (pipelineResults.profile?.rustMultiplier > 1.0) rustBeltMultiplier = pipelineResults.profile.rustMultiplier;
     } catch (e) { console.warn('[Estimate Engine] Pipeline background pass skipped:', e.message); }
 
+    // collectVehicleEvidence may still collect NHTSA for shared/cache use, but Estimate intentionally
+    // consumes and returns only OEM/TSB evidence. NHTSA presentation stays in the VIN Decode flow.
     let vehicleEvidence = { available: false, oem: { references: [] }, tsbs: { references: [] }, recalls: [], knownIssues: [], sources: [], errors: [] };
     try {
       vehicleEvidence = await collectVehicleEvidence({
@@ -78,12 +80,11 @@ router.post('/', async (req, res) => {
 
     const completedWork = normalizeCompletedWork(mechanicNotices);
     const vehicleStr = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' ') || 'Unknown Vehicle';
+    const estimateSources = (vehicleEvidence.sources || []).filter(source => source !== 'NHTSA_ODI' && source !== 'NHTSA ODI');
     const evidenceText = JSON.stringify({
       OEM_FACTORY_REFERENCES: (vehicleEvidence.oem?.references || []).slice(0, 12).map(x => ({ title: x.title, url: x.url, type: x.evidenceType, facts: x.extractedFacts })),
       TSB_CANDIDATES: (vehicleEvidence.tsbs?.references || []).slice(0, 10).map(x => ({ title: x.title, url: x.url, facts: x.extractedFacts })),
-      NHTSA_RECALLS: (vehicleEvidence.recalls || []).slice(0, 10),
-      KNOWN_ISSUE_PATTERNS: (vehicleEvidence.knownIssues || []).slice(0, 10),
-      EVIDENCE_SOURCES: vehicleEvidence.sources || []
+      EVIDENCE_SOURCES: estimateSources
     });
 
     const systemPrompt = `You are the expert estimation module of SKSK ProTech — a master automotive mechanic with 25 years of real shop experience.
@@ -96,13 +97,11 @@ RULES:
 - priority exactly high, medium, or low.
 - laborCost = estimatedHours x ${laborRateNum} x ${rustBeltMultiplier}; total = laborCost + partsCost.
 - All array values must be strings.
-- EVIDENCE HIERARCHY: measured/verified technical facts and supplied OEM/TSB/NHTSA evidence outrank mechanic observations; mechanic observations outrank customer-translated symptom wording. Treat translated customer wording as no more than ~5% directional influence: use it to preserve WHEN/WHERE/HOW the symptom occurs, not to select a component merely because a component/system word appears in the translation.
+- EVIDENCE HIERARCHY: measured/verified technical facts and supplied OEM/TSB evidence outrank mechanic observations; mechanic observations outrank customer-translated symptom wording. Treat translated customer wording as no more than ~5% directional influence: use it to preserve WHEN/WHERE/HOW the symptom occurs, not to select a component merely because a component/system word appears in the translation.
 - MECHANIC NOTICES are high-value context. Completed work, observed play, leaks, measured values, failed tests, noise location, installation history, and technician observations must materially affect ranking when relevant.
 - RETRIEVAL KEYWORDS are search hints only. Do not use translator-generated keywords as diagnostic evidence or as a reason to favor a component. The AI is intentionally not shown those keywords; reason from the symptom facts, mechanic notices, and retrieved evidence instead.
 - OEM/factory manual facts are primary technical evidence for procedures, construction, torque, inspections, and component identification.
 - TSB candidates must be labeled as candidates unless a real bulletin identity is verified. Never invent a TSB number.
-- Use NHTSA recalls as vehicle-specific safety evidence.
-- Use NHTSA complaint frequency only as a pattern signal, NOT proof of failure.
 - Never invent an OEM procedure, torque value, bulletin number, campaign number, or known issue.
 - Never recommend replacing a component explicitly documented as already replaced by the mechanic.
 - Prefer a confirmation test before replacement when evidence is inconclusive.
@@ -123,25 +122,25 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
     finalEstimate.repairs = filterCompletedRepairs(finalEstimate.repairs, completedWork);
     if (!finalEstimate.repairs.length) finalEstimate.repairs = ['Perform targeted confirmation tests before replacement'];
 
+    // Estimate's visible evidence block is OEM/TSB only. Full NHTSA data remains available
+    // through the existing VIN Decode popup and is deliberately not duplicated here.
     const evidenceKnownIssues = [];
     for (const x of (vehicleEvidence.tsbs?.references || []).slice(0, 3)) evidenceKnownIssues.push(`TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
-    for (const x of (vehicleEvidence.recalls || []).slice(0, 3)) evidenceKnownIssues.push(`NHTSA recall ${x.campaignNumber || 'reference'}: ${x.component || 'vehicle component'} — ${x.summary || 'see recall remedy'}`);
-    for (const x of (vehicleEvidence.knownIssues || []).slice(0, 5)) evidenceKnownIssues.push(`${x.component || 'Vehicle component'} — ${x.reports} NHTSA complaint pattern report${x.reports === 1 ? '' : 's'}`);
     for (const x of (vehicleEvidence.oem?.references || []).filter(x => x.evidenceType === 'FACTORY_SERVICE_REFERENCE').slice(0, 5)) {
       const facts = x.extractedFacts || {};
       const construction = (facts.construction || []).slice(0, 1).join(' ');
       evidenceKnownIssues.push(`OEM/factory reference: ${x.title || 'Service procedure'}${construction ? ` — ${construction}` : ''}${x.url ? ` — ${x.url}` : ''}`);
     }
-    finalEstimate.knownIssues = evidenceKnownIssues.length ? evidenceKnownIssues : (finalEstimate.knownIssues || []);
+    // Never fall back to model-invented known issues. If SKSK did not retrieve evidence, show none.
+    finalEstimate.knownIssues = evidenceKnownIssues;
 
-    const sourceLabel = (vehicleEvidence.sources || []).join(', ') || 'No external evidence source returned';
+    const sourceLabel = estimateSources.join(', ') || 'No external OEM/TSB evidence source returned';
     finalEstimate.notes = [finalEstimate.notes, `Evidence used: ${sourceLabel}. Completed repairs excluded: ${completedWork.join(', ') || 'none'}.`].filter(Boolean).join(' ');
     finalEstimate.evidence = {
       oem: (vehicleEvidence.oem?.references || []).slice(0, 12),
       tsbs: (vehicleEvidence.tsbs?.references || []).slice(0, 10),
-      recalls: (vehicleEvidence.recalls || []).slice(0, 10),
-      knownIssues: (vehicleEvidence.knownIssues || []).slice(0, 10),
-      sources: vehicleEvidence.sources || [], available: !!vehicleEvidence.available,
+      sources: estimateSources,
+      available: !!((vehicleEvidence.oem?.references || []).length || (vehicleEvidence.tsbs?.references || []).length),
       completedWorkExcluded: completedWork
     };
 
