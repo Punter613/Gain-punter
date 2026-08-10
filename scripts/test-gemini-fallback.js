@@ -27,6 +27,7 @@ assert.equal(request.body.generationConfig.maxOutputTokens, 800);
 assert.equal(request.body.generationConfig.temperature, 0.15);
 assert.equal(request.body.generationConfig.responseFormat.text.mimeType, 'APPLICATION_JSON');
 assert.equal(request.body.generationConfig.responseFormat.text.schema, undefined);
+assert.equal(request.schemaVariant, 'none');
 assert.equal(request.body.generationConfig.responseMimeType, undefined);
 assert.equal(request.body.generationConfig.responseJsonSchema, undefined);
 
@@ -42,6 +43,7 @@ const schemaRequest = gemini.buildRequest(
     response_format: {
       type: 'json_schema',
       json_schema: {
+        name: 'simple_boolean_test',
         schema: {
           type: 'object',
           properties: { ok: { type: 'boolean' } },
@@ -55,22 +57,34 @@ const schemaRequest = gemini.buildRequest(
 assert.equal(schemaRequest.body.generationConfig.responseFormat.text.mimeType, 'APPLICATION_JSON');
 assert.equal(schemaRequest.body.generationConfig.responseFormat.text.schema.type, 'object');
 assert.equal(schemaRequest.body.generationConfig.responseFormat.text.schema.properties.ok.type, 'boolean');
+assert.equal(schemaRequest.schemaVariant, 'provider-shared');
 assert.equal(schemaRequest.body.generationConfig.responseMimeType, undefined);
 assert.equal(schemaRequest.body.generationConfig.responseJsonSchema, undefined);
 
-// Exercise the exact Estimate contract through the Gemini adapter so CI catches
-// provider-wire drift even when no live Gemini key is available in GitHub Actions.
+// Gemini rejects very large/deep schemas. The Estimate fallback keeps the
+// reasoning/evidence/authorization core schema-enforced and drops presentation-
+// only branches that SKSK rebuilds deterministically after inference.
 const estimateSchemaRequest = gemini.buildRequest(
   [{ role: 'user', content: 'return estimate object' }],
   { model: 'gemini-3.6-flash', response_format: ESTIMATE_RESPONSE_FORMAT }
 );
 assert.equal(estimateSchemaRequest.body.generationConfig.responseFormat.text.mimeType, 'APPLICATION_JSON');
+assert.equal(estimateSchemaRequest.schemaVariant, 'estimate-compact-v1');
 const estimateSchema = estimateSchemaRequest.body.generationConfig.responseFormat.text.schema;
+const originalSchema = ESTIMATE_RESPONSE_FORMAT.json_schema.schema;
 assert.equal(estimateSchema.type, 'object');
 assert.equal(estimateSchema.additionalProperties, false);
 assert.equal(estimateSchema.properties.candidates.items.properties.confirmed.type, 'boolean');
 assert.equal(estimateSchema.properties.candidates.items.properties.repairAuthorized.type, 'boolean');
 assert.equal(estimateSchema.properties.candidates.items.properties.modelConfidence.maximum, 100);
+assert.equal(estimateSchema.properties.candidates.items.properties.factorySupported, undefined);
+assert.equal(estimateSchema.properties.candidates.items.properties.mechanicSupported, undefined);
+assert.equal(estimateSchema.properties.proTips, undefined);
+assert.equal(estimateSchema.properties.repairSteps, undefined);
+assert.ok(
+  JSON.stringify(estimateSchema).length < JSON.stringify(originalSchema).length * 0.7,
+  'Gemini Estimate schema should be materially smaller than the shared strict schema'
+);
 
 const normalized = gemini.normalizeResponse({
   responseId: 'gemini_test',
@@ -84,7 +98,7 @@ const normalized = gemini.normalizeResponse({
     totalTokenCount: 17,
     thoughtsTokenCount: 2
   }
-}, 'gemini-3.6-flash', 123, 'RATE_LIMIT_EXCEEDED_429');
+}, 'gemini-3.6-flash', 123, 'RATE_LIMIT_EXCEEDED_429', 'estimate-compact-v1');
 
 assert.equal(normalized.choices[0].message.content, '{"ok":true}');
 assert.equal(normalized.choices[0].finish_reason, 'stop');
@@ -94,6 +108,7 @@ assert.equal(normalized.usage.total_tokens, 17);
 assert.equal(normalized.usage.completion_tokens_details.reasoning_tokens, 2);
 assert.equal(normalized._provider, 'gemini');
 assert.equal(normalized._fallbackReason, 'RATE_LIMIT_EXCEEDED_429');
+assert.equal(normalized._schemaVariant, 'estimate-compact-v1');
 
 const rateLimit = Object.assign(new Error('Rate limit reached'), { status: 429, code: 'rate_limit_exceeded' });
 assert.equal(isRetryableProviderError(rateLimit), true);
