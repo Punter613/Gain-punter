@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { runDiagnosticPipeline } = require('../services/pipeline.engine');
-const { groqChat } = require('../services/groq'); // Ensure this is the correct AI service import
+const { groqChat } = require('../services/groq');
 const { calibrateProbabilityArray } = require('../core/metrics/index');
 const { getVehicleRiskProfile } = require('../knowledge/vehicle.risk.table');
 const { findKnownPatterns } = require('../knowledge/failure.patterns');
@@ -83,11 +83,18 @@ router.post('/', async (req, res) => {
     } = req.body;
 
     const targetCodes = Array.isArray(codes) && codes.length ? codes : (Array.isArray(obdCodes) ? obdCodes : []);
-    const targetSymptoms = [
+    const customerSymptomContext = [
       ...(Array.isArray(symptoms) ? symptoms : []),
-      ...(Array.isArray(customerStates) ? customerStates : []),
+      ...(Array.isArray(customerStates) ? customerStates : [])
+    ].map(s => String(s).toLowerCase().trim()).filter(Boolean);
+    const mechanicContext = [
+      ...(Array.isArray(mechanicNotices) ? mechanicNotices : []),
+      ...(Array.isArray(notes) ? notes : [])
+    ].map(s => String(s).trim()).filter(Boolean);
+    const targetSymptoms = [
+      ...customerSymptomContext,
       ...(Array.isArray(mechanicNotices) ? mechanicNotices : [])
-    ].map(s => String(s).toLowerCase().trim());
+    ].map(s => String(s).toLowerCase().trim()).filter(Boolean);
 
     let compiledData = {
       profile: null,
@@ -127,18 +134,18 @@ router.post('/', async (req, res) => {
     if (platformHits && platformHits.length > 0) {
       const hit = platformHits[0];
       const procedureSpecs = getLocalProcedure(hit.linkProtocol);
-      
+
       executionTrace.log('LOCAL_MATCH', `Deterministic hit: ${hit.patternName}`);
-      
+
       const rawTips = procedureSpecs && procedureSpecs.criticalSpecs ? [
         procedureSpecs.criticalSpecs.torqueSequence,
         procedureSpecs.criticalSpecs.antiseizeNote
       ] : [];
       const cleanTips = rawTips.filter(Boolean);
       if (cleanTips.length === 0) {
-        cleanTips.push("Always verify clearance specifications against factory block data prior to teardown.");
+        cleanTips.push('Always verify clearance specifications against factory block data prior to teardown.');
       }
-      
+
       const localResult = safeResult({
         urgency: 'immediate',
         safetyRisk: true,
@@ -150,7 +157,7 @@ router.post('/', async (req, res) => {
         repairSteps: procedureSpecs ? procedureSpecs.clearanceSteps : [],
         proTips: cleanTips
       });
-      
+
       return res.json({ success: true, result: localResult, traceLog: { traceId: executionTrace.traceId, logs: executionTrace.logs } });
     }
 
@@ -158,8 +165,8 @@ router.post('/', async (req, res) => {
       executionTrace.log('FATAL', 'Cloud key missing during local database miss.');
       return res.status(503).json({
         success: false,
-        error: "Diagnosis failed",
-        details: "Local pattern database miss and cloud GROQ_API_KEY is not configured.",
+        error: 'Diagnosis failed',
+        details: 'Local pattern database miss and cloud GROQ_API_KEY is not configured.',
         trace: executionTrace.traceId
       });
     }
@@ -190,6 +197,9 @@ RULES:
 - codeExplanations must cover every OBD code provided, keyed exactly as given (e.g. "P0300").
 - probability likelihoods should roughly sum to 100 across all listed causes; rank by evidence, not by which symptom was mentioned first.
 - All array values must be strings.
+- EVIDENCE HIERARCHY: verified/measured facts and deterministic knowledge outrank mechanic observations; mechanic observations outrank customer-translated symptom wording. Treat translated customer wording as no more than ~5% directional influence: use it to understand the observed symptom and operating conditions, never as proof that a component/system named by the translator is the cause.
+- MECHANIC NOTICES / TECH NOTES are high-value diagnostic context. Completed repairs, measured play, leaks, readings, inspection results, noise location, and technician observations must materially affect ranking.
+- RETRIEVAL KEYWORDS are search-only metadata. They must never influence diagnostic ranking directly and are intentionally excluded from the AI prompt.
 - Never invent a TSB number, recall number, or campaign number — omit rather than fabricate.
 - KNOWN ISSUES / VEHICLE-SPECIFIC CLAIMS: never state that a condition is common, known, frequent, or specific to this model/year/manufacturer unless that claim is directly supported by evidence actually supplied in this prompt. Do not rely on general model memory for knownIssues. If no supplied evidence supports a known-issue claim, return knownIssues as an empty array rather than writing a plausible-sounding one.
 - Never recommend replacing a component the mechanic notes already replaced.
@@ -203,12 +213,10 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
       systemPrompt += `\n\nLABOR: ${JSON.stringify(assemblyData.breakdowns, null, 2)}\nPARTS: ${JSON.stringify(assemblyData.partsRisks, null, 2)}`;
     }
 
-    const keywordsList = Array.isArray(keywords) ? keywords.filter(k => typeof k === 'string' && k.trim()) : [];
-    const userPrompt = `Vehicle: ${vehicle.make || 'N/A'} ${vehicle.model || 'N/A'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | Symptoms: ${targetSymptoms.join(', ') || 'N/A'} | Tech Notes: ${notes.join(', ') || 'N/A'}${keywordsList.length ? ` | Technical Keywords: ${keywordsList.join(', ')}` : ''}`;
+    const userPrompt = `Vehicle: ${vehicle.make || 'N/A'} ${vehicle.model || 'N/A'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | LOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerSymptomContext.join(', ') || 'N/A'} | HIGH-WEIGHT MECHANIC / TECH OBSERVATIONS: ${mechanicContext.join(', ') || 'N/A'}`;
 
     executionTrace.log('GROQ_DISPATCH', 'Sending to Groq...');
 
-    // UPDATED: Use groqChat instead of the diagnostic engine for the API call
     const groqRes = await groqChat([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt }
@@ -227,14 +235,15 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
       parsed = safeResult({ notes: 'AI returned unparseable response — please retry' });
     }
 
-    const guardResult = applyCompletedWorkGuard(parsed, notes);
+    const completedWorkContext = [
+      ...(Array.isArray(notes) ? notes : []),
+      ...(Array.isArray(mechanicNotices) ? mechanicNotices : [])
+    ];
+    const guardResult = applyCompletedWorkGuard(parsed, completedWorkContext);
     if (guardResult.changed) {
       executionTrace.log('COMPLETED_WORK_GUARD', `Removed ${guardResult.removed.length} recommendation(s) already completed: ${guardResult.removed.join(' | ')}`);
       console.log(`[Diagnose] Completed-work guard filtered ${guardResult.removed.length} item(s):`, guardResult.removed);
 
-      // Fire-and-forget: queue for mechanic verification. Never let a
-      // logging/persistence failure here affect the actual diagnosis
-      // response the mechanic is waiting on.
       recordGuardCatch({
         requestId: executionTrace.traceId,
         route: '/api/diagnose',
