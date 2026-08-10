@@ -26,6 +26,7 @@ const COMPLETION_RE = /\b(?:replaced|replace|installed|install|changed|change|sw
 const NEGATED_COMPLETION_RE = /\b(?:(?:not|never)\s+(?:been\s+)?(?:replaced|replace|installed|install|changed|change|swapped|swap|renewed|renew|repaired|repair)|(?:did\s+not|didn't|was\s+not|wasn't|were\s+not|weren't|has\s+not|hasn't|have\s+not|haven't)\s+(?:been\s+)?(?:replaced|replace|installed|install|changed|change|swapped|swap|renewed|renew|repaired|repair))\b/i;
 const FUTURE_WORK_RE = /\b(?:need(?:s)?\s+to|should|recommend(?:ed)?\s+to|plan(?:ned)?\s+to|will|must|requires?\s+to)\s+(?:replace|install|change|swap|renew|repair)\b/i;
 const INSPECTION_ONLY_RE = /\b(?:inspect(?:ed|ing|ion)?|check(?:ed|ing)?|test(?:ed|ing)?|verify|verified|measur(?:e|ed|ing)|observ(?:e|ed|ing)|found|shows?|noted)\b/i;
+const CURRENT_COMPONENT_AFTER_RE = /^(?:was|were|is|are|has|have|had|not|never|did|still|shows?|showing|replace(?:d)?|install(?:ed)?|chang(?:e|ed)|swap(?:ped)?|renew(?:ed)?|repair(?:ed)?|inspect(?:ed|ing)?|check(?:ed|ing)?|test(?:ed|ing)?|verified?)\b/i;
 
 function normalize(text) {
   return String(text || '')
@@ -60,8 +61,6 @@ function findAliasMentions(clause) {
     }
   }
 
-  // Prefer the longest alias at the same position so "cv axles" does not
-  // produce a second shorter mention for "cv axle".
   return mentions
     .sort((a, b) => a.index - b.index || b.alias.length - a.alias.length)
     .filter((mention, index, sorted) => {
@@ -84,29 +83,29 @@ function extractCompletedWork(notices = []) {
       const mention = mentions[i];
       const next = mentions[i + 1];
       const before = clause.slice(cursor, mention.index);
-      const after = clause.slice(mention.end, next ? next.index : clause.length);
-      const local = `${before} ${mention.alias} ${after}`;
+      const after = clause.slice(mention.end, next ? next.index : clause.length).trim();
+      const afterDescribesCurrent = !next || CURRENT_COMPONENT_AFTER_RE.test(after);
 
       if (NEGATED_COMPLETION_RE.test(before) || FUTURE_WORK_RE.test(before)) {
         activeCompletion = false;
       } else if (COMPLETION_RE.test(before)) {
         activeCompletion = true;
       } else if (INSPECTION_ONLY_RE.test(before)) {
-        // "replaced CV axle and inspected upper ball joint" must not let the
-        // earlier completion verb bleed into the inspected component.
+        // "replaced CV axle and inspected upper ball joint" resets the state
+        // before the upper ball joint without undoing the already-completed CV axle.
         activeCompletion = false;
       }
 
-      const explicitlyNotCompleted = NEGATED_COMPLETION_RE.test(local) || FUTURE_WORK_RE.test(local);
-      const explicitlyCompletedAfter = !explicitlyNotCompleted && COMPLETION_RE.test(after);
-      const inspectionOnlyAfter = INSPECTION_ONLY_RE.test(after) && !COMPLETION_RE.test(after);
+      const negatedAfter = afterDescribesCurrent && NEGATED_COMPLETION_RE.test(after);
+      const futureAfter = afterDescribesCurrent && FUTURE_WORK_RE.test(after);
+      const explicitlyNotCompleted = negatedAfter || futureAfter;
+      const explicitlyCompletedAfter = afterDescribesCurrent && !explicitlyNotCompleted && COMPLETION_RE.test(after);
+      const inspectionOnlyAfter = afterDescribesCurrent && INSPECTION_ONLY_RE.test(after) && !COMPLETION_RE.test(after);
 
       if (!explicitlyNotCompleted && (explicitlyCompletedAfter || (activeCompletion && !inspectionOnlyAfter))) {
         completed.add(mention.canonical);
       }
 
-      // A direct completion after the component becomes the active context for
-      // a following list; a negation/inspection resets it.
       if (explicitlyNotCompleted || inspectionOnlyAfter) activeCompletion = false;
       else if (explicitlyCompletedAfter) activeCompletion = true;
 
