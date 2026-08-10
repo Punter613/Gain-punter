@@ -1,0 +1,142 @@
+name: Finalize VIN evidence warmup
+
+on:
+  push:
+    branches: [ feature/vin-evidence-warmup ]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/vin-evidence-warmup
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci || npm install
+
+      - name: Make decode warmup TSB-corpus-only and cache VIN decode
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/services/vehicle.warmup.js')
+          s = p.read_text()
+          s = s.replace("const { scrapeLEMONManuals } = require('./lemon');\n", "")
+          s = s.replace("const warmups = new Map();\n", "const warmups = new Map();\nconst decodedVinCache = new Map();\n")
+          old = '''async function resolveVehicleProfile(vin = '', supplied = {}) {
+            const normalizedVin = clean(vin || supplied.vin);
+            if (normalizedVin.length === 17) {
+              const decoded = await decodeVinNhtsa(normalizedVin);
+              if (!decoded) throw new Error('VIN decoded without a usable vehicle profile');
+              return mergeVehicleProfile(decoded, supplied, normalizedVin);
+            }
+            return mergeVehicleProfile({}, supplied, normalizedVin);
+          }
+          '''.replace('          ', '')
+          new = '''async function resolveVehicleProfile(vin = '', supplied = {}) {
+            const normalizedVin = clean(vin || supplied.vin).toUpperCase();
+            if (normalizedVin.length === 17) {
+              let decoded = decodedVinCache.get(normalizedVin);
+              if (!decoded) {
+                decoded = await decodeVinNhtsa(normalizedVin);
+                if (!decoded) throw new Error('VIN decoded without a usable vehicle profile');
+                decodedVinCache.set(normalizedVin, decoded);
+              }
+              return mergeVehicleProfile(decoded, supplied, normalizedVin);
+            }
+            return mergeVehicleProfile({}, supplied, normalizedVin);
+          }
+          '''.replace('          ', '')
+          if old not in s:
+              raise SystemExit('resolveVehicleProfile anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  const entry = { status: 'PENDING', startedAt: Date.now(), finishedAt: null, promise: null };
+          entry.promise = Promise.allSettled([
+            scrapeLEMONManuals(vehicle, {}),
+            harvestVehicleTsbs(vehicle, {}, { maxPages: options.maxPages })
+          ]).then(results => {
+            entry.status = 'READY';
+            entry.finishedAt = Date.now();
+            entry.results = results;
+            console.log(`[Vehicle Warmup] READY ${key} in ${entry.finishedAt - entry.startedAt}ms`);
+            return results;
+          }).catch(error => {
+            entry.status = 'FAILED';
+            entry.finishedAt = Date.now();
+            entry.error = error.message;
+            console.warn(`[Vehicle Warmup] FAILED ${key}: ${error.message}`);
+            return null;
+          });
+          '''.replace('          ', '')
+          new = '''  const entry = { status: 'PENDING', startedAt: Date.now(), finishedAt: null, promise: null };
+          entry.promise = harvestVehicleTsbs(vehicle, {}, { maxPages: options.maxPages }).then(result => {
+            entry.finishedAt = Date.now();
+            entry.result = result;
+            if (result?.error) {
+              entry.status = 'FAILED';
+              entry.error = result.error;
+              console.warn(`[Vehicle Warmup] FAILED ${key}: ${result.error}`);
+            } else {
+              entry.status = 'READY';
+              console.log(`[Vehicle Warmup] READY ${key} in ${entry.finishedAt - entry.startedAt}ms (${Number(result?.total || 0)} TSBs)`);
+            }
+            return result;
+          }).catch(error => {
+            entry.status = 'FAILED';
+            entry.finishedAt = Date.now();
+            entry.error = error.message;
+            console.warn(`[Vehicle Warmup] FAILED ${key}: ${error.message}`);
+            return null;
+          });
+          '''.replace('          ', '')
+          if old not in s:
+              raise SystemExit('warmup promise anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('public/index.html')
+          s = p.read_text()
+          old = '📚 Factory/TSB evidence warmup: ${data.evidenceWarmup || \'started\'}'
+          new = '📚 TSB corpus warmup: ${data.evidenceWarmup || \'started\'}'
+          if old not in s:
+              raise SystemExit('frontend warmup label anchor not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Validate
+        run: |
+          node --check src/services/vehicle.warmup.js
+          node --check src/routes/vehicle.js
+          node --check src/services/vehicle.evidence.js
+          node --check src/routes/estimate.js
+          node --check src/routes/diagnose.js
+          node --check api/server.js
+          node - <<'NODE'
+          const fs = require('fs');
+          const html = fs.readFileSync('public/index.html', 'utf8');
+          const match = html.match(/<script>([\s\S]*?)<\/script>/);
+          if (!match) throw new Error('inline script not found');
+          new Function(match[1]);
+          console.log('browser inline script: PASS');
+          NODE
+          node scripts/test-evidence-selection.js
+          node scripts/test-vehicle-profile-merge.js
+          node scripts/test-completed-work-guard.js
+
+      - name: Self-remove and commit
+        run: |
+          rm .github/workflows/finalize-vin-evidence-warmup.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Keep VIN warmup broad and complaint-safe"
+          git push origin HEAD:feature/vin-evidence-warmup
