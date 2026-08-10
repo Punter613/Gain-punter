@@ -9,24 +9,33 @@ jobs:
   poll-render-result:
     runs-on: ubuntu-latest
     steps:
-      - name: Poll Render comparison result
+      - name: Poll Render for fresh Round 2 result
         shell: bash
         run: |
           set -euo pipefail
           URL="https://p613-backend.onrender.com/api/internal/model-compare-result"
-          for i in $(seq 1 30); do
+          for i in $(seq 1 36); do
             code=$(curl -sS -o /tmp/result.json -w "%{http_code}" "$URL" || true)
             echo "Attempt $i HTTP $code"
-            if [ "$code" = "200" ]; then
+            if [ "$code" = "200" ] && grep -q 'Round 2: strict schema corrected' /tmp/result.json; then
+              echo "Fresh Round 2 result detected"
               cat /tmp/result.json
               exit 0
             fi
-            if [ "$code" = "500" ]; then
+            if [ "$code" = "500" ] && grep -q 'Round 2: strict schema corrected' /tmp/result.json; then
               cat /tmp/result.json
               exit 1
             fi
             sleep 10
           done
-          echo "Timed out waiting for Render comparison result"
+          echo "Timed out waiting for fresh Round 2 result"
           cat /tmp/result.json || true
           exit 1
+
+      - name: Upload Round 2 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: round2-model-result
+          path: /tmp/result.json
+          if-no-files-found: warn
