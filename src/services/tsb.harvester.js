@@ -1,4 +1,5 @@
 const { supabase, buildVehicleCacheKey } = require('../db');
+const { resolveRepairDiagnosisUrl } = require('./lemon.path.resolver');
 
 const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy']);
 
@@ -69,13 +70,6 @@ function extractPage(html, url) {
   }
 
   return { title, headings, bodyText: stripTags(html), links };
-}
-
-function buildRepairDiagnosisUrl(vehicle) {
-  const make = encodeURIComponent(String(vehicle.make).trim());
-  const year = encodeURIComponent(String(vehicle.year).trim());
-  const model = encodeURIComponent(String(vehicle.model).trim());
-  return `https://lemon-manuals.la/${make}/${year}/${model}/Repair%20and%20Diagnosis/`;
 }
 
 function isTsbSectionLink(link) {
@@ -250,7 +244,14 @@ async function harvestVehicleTsbs(vehicle, context = {}, options = {}) {
     return { bulletins: ranked, fromStore: true, harvested: false, total: ranked.length };
   }
 
-  const repairUrl = buildRepairDiagnosisUrl(vehicle);
+  let resolution;
+  try {
+    resolution = await resolveRepairDiagnosisUrl(vehicle);
+  } catch (err) {
+    return { bulletins: [], error: `LEMON vehicle path resolution failed: ${err.message}` };
+  }
+
+  const repairUrl = resolution.url;
   let rootPage;
   try {
     rootPage = extractPage(await fetchHtml(repairUrl), repairUrl);
@@ -260,10 +261,11 @@ async function harvestVehicleTsbs(vehicle, context = {}, options = {}) {
 
   const sectionLink = rootPage.links.find(isTsbSectionLink);
   if (!sectionLink) {
-    return { bulletins: [], error: 'Technical Service Bulletins section not found for vehicle path' };
+    return { bulletins: [], error: 'Technical Service Bulletins section not found for resolved vehicle path' };
   }
 
   const tsbRootUrl = sectionLink.url;
+  console.log(`[TSB Corpus] Resolved vehicle path via ${resolution.method}: ${repairUrl}`);
   const queue = [tsbRootUrl];
   const queued = new Set(queue);
   const visited = new Set();
@@ -313,6 +315,8 @@ async function harvestVehicleTsbs(vehicle, context = {}, options = {}) {
     harvested: true,
     total: bulletins.length,
     crawledUrls: visited.size,
+    resolvedVehicleUrl: repairUrl,
+    pathResolution: resolution.method,
     tsbRootUrl,
     truncated: queue.length > 0
   };
