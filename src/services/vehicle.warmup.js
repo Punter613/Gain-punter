@@ -4,6 +4,7 @@ const { harvestVehicleTsbs } = require('./tsb.harvester');
 const { buildVehicleCacheKey } = require('../db');
 
 const warmups = new Map();
+const decodedVinCache = new Map();
 
 function clean(value) {
   return String(value || '').trim();
@@ -27,10 +28,14 @@ function mergeVehicleProfile(decoded = {}, supplied = {}, vin = '') {
 }
 
 async function resolveVehicleProfile(vin = '', supplied = {}) {
-  const normalizedVin = clean(vin || supplied.vin);
+  const normalizedVin = clean(vin || supplied.vin).toUpperCase();
   if (normalizedVin.length === 17) {
-    const decoded = await decodeVinNhtsa(normalizedVin);
-    if (!decoded) throw new Error('VIN decoded without a usable vehicle profile');
+    let decoded = decodedVinCache.get(normalizedVin);
+    if (!decoded) {
+      decoded = await decodeVinNhtsa(normalizedVin);
+      if (!decoded) throw new Error('VIN decoded without a usable vehicle profile');
+      decodedVinCache.set(normalizedVin, decoded);
+    }
     return mergeVehicleProfile(decoded, supplied, normalizedVin);
   }
   return mergeVehicleProfile({}, supplied, normalizedVin);
@@ -54,10 +59,19 @@ function warmVehicleEvidence(vehicle, options = {}) {
     scrapeLEMONManuals(vehicle, {}),
     harvestVehicleTsbs(vehicle, {}, { maxPages: options.maxPages })
   ]).then(results => {
-    entry.status = 'READY';
     entry.finishedAt = Date.now();
     entry.results = results;
-    console.log(`[Vehicle Warmup] READY ${key} in ${entry.finishedAt - entry.startedAt}ms`);
+
+    const successful = results.filter(result => result.status === 'fulfilled' && !result.value?.error).length;
+    const failed = results.length - successful;
+    entry.status = successful === results.length ? 'READY' : successful > 0 ? 'PARTIAL' : 'FAILED';
+
+    if (entry.status === 'READY') {
+      console.log(`[Vehicle Warmup] READY ${key} in ${entry.finishedAt - entry.startedAt}ms`);
+    } else {
+      entry.error = `${failed} of ${results.length} evidence warmup source(s) failed`;
+      console.warn(`[Vehicle Warmup] ${entry.status} ${key}: ${entry.error}`);
+    }
     return results;
   }).catch(error => {
     entry.status = 'FAILED';
