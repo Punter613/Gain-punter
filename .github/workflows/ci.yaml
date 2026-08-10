@@ -23,7 +23,11 @@ jobs:
     - name: Install Project Dependencies
       run: npm ci || npm install
 
+    - name: Structured Estimate Contract Checks
+      run: |
+        node --check src/contracts/estimate.ai.contract.js
+        node --check src/routes/estimate.js
+        node scripts/test-estimate-contract.js
+
     - name: Hardened OpenAPI Contract Lint
-      run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty 
-  
-   
+      run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
