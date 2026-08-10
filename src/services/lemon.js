@@ -2,6 +2,7 @@ const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { getCachedManual, saveScrapedManual } = require('../db');
+const { resolveRepairDiagnosisUrl } = require('./lemon.path.resolver');
 
 const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy']);
 
@@ -16,7 +17,7 @@ const DEFAULT_KEYWORDS = [
 ];
 
 function clean(value) {
-  return String(value || '').replace(/\\n/g, ' ').replace(/\\s+/g, ' ').trim();
+  return String(value || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function normalizeToken(value) {
@@ -38,13 +39,6 @@ async function scrapeLEMONManuals(vehicle, context = {}) {
   const freshResult = await scrapeLive(vehicle, context);
   if (freshResult && !freshResult.error && freshResult.items?.length > 0) await saveScrapedManual(vehicle, freshResult);
   return { ...freshResult, fromCache: false };
-}
-
-function buildBaseUrl(vehicle) {
-  const make = encodeURIComponent(String(vehicle.make).trim());
-  const year = encodeURIComponent(String(vehicle.year).trim());
-  const model = encodeURIComponent(String(vehicle.model).trim());
-  return `https://lemon-manuals.la/${make}/${year}/${model}/Repair%20and%20Diagnosis/`;
 }
 
 function decodeHtml(value) {
@@ -238,13 +232,22 @@ async function scrapeNative(baseUrl, vehicle, context = {}) {
     items,
     crawled_urls: visited.size,
     relevant_pages: ranked.length,
+    resolved_url: baseUrl,
     scraped: true,
     scraped_at: new Date().toISOString()
   };
 }
 
 async function scrapeLive(vehicle, context = {}) {
-  const baseUrl = buildBaseUrl(vehicle);
+  let resolution;
+  try {
+    resolution = await resolveRepairDiagnosisUrl(vehicle);
+  } catch (error) {
+    return { items: [], error: `LEMON vehicle path resolution failed: ${error.message}` };
+  }
+
+  const baseUrl = resolution.url;
+  console.log(`[Scraper] Resolved LEMON vehicle path via ${resolution.method}: ${baseUrl}`);
   const scraperPath = process.env.LEMON_PATH || path.join(process.cwd(), 'tools', 'lemon_scraper', 'target', 'release', 'lemon_scraper');
 
   if (process.env.LEMON_USE_RUST === 'true' && fs.existsSync(scraperPath)) {
@@ -253,16 +256,29 @@ async function scrapeLive(vehicle, context = {}) {
         if (!error) {
           try {
             const parsed = JSON.parse(stdout);
-            if (parsed?.items?.length) return resolve({ schemaVersion: 3, source: 'LEMON_MANUALS', items: parsed.items, crawled_urls: parsed.crawled_urls || parsed.items.length, scraped: true, scraped_at: new Date().toISOString() });
+            if (parsed?.items?.length) return resolve({
+              schemaVersion: 3,
+              source: 'LEMON_MANUALS',
+              items: parsed.items,
+              crawled_urls: parsed.crawled_urls || parsed.items.length,
+              resolved_url: baseUrl,
+              path_resolution: resolution.method,
+              scraped: true,
+              scraped_at: new Date().toISOString()
+            });
           } catch (_) {}
         }
-        scrapeNative(baseUrl, vehicle, context).then(resolve).catch(err => resolve({ items: [], error: err.message }));
+        scrapeNative(baseUrl, vehicle, context).then(result => resolve({ ...result, path_resolution: resolution.method })).catch(err => resolve({ items: [], error: err.message }));
       });
     });
   }
 
-  try { return await scrapeNative(baseUrl, vehicle, context); }
-  catch (error) { return { items: [], error: error.message }; }
+  try {
+    const result = await scrapeNative(baseUrl, vehicle, context);
+    return { ...result, path_resolution: resolution.method };
+  } catch (error) {
+    return { items: [], error: error.message };
+  }
 }
 
 module.exports = { scrapeLEMONManuals };
