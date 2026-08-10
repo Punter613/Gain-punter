@@ -1,9 +1,9 @@
 const groq = require('./providers/groq');
-const openai = require('./providers/openai');
+const gemini = require('./providers/gemini');
 
 const providers = {
   groq,
-  openai
+  gemini
 };
 
 let activeProvider = 'groq';
@@ -42,14 +42,14 @@ async function routeProvider(payload) {
   try {
     return await provider.chat(payload);
   } catch (error) {
-    const canFallback = activeProvider === 'groq' && openai.isConfigured() && isRetryableProviderError(error);
+    const canFallback = activeProvider === 'groq' && gemini.isConfigured() && isRetryableProviderError(error);
     if (!canFallback) throw error;
 
     const reason = fallbackReason(error);
-    console.warn(`[AI Router] Groq unavailable (${reason}); falling back to OpenAI.`);
-    return openai.chat({
+    console.warn(`[AI Router] Groq unavailable (${reason}); falling back to Gemini.`);
+    return gemini.chat({
       ...payload,
-      model: payload.openai_model || process.env.OPENAI_FALLBACK_MODEL || 'gpt-5-mini',
+      model: payload.gemini_model || process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash',
       fallbackReason: reason
     });
   }

@@ -2,7 +2,7 @@
 // Locked down Groq system prompt — strict output, respects mechanic notes
 
 const Groq = require('groq-sdk');
-const openaiProvider = require('./ai/providers/openai');
+const geminiProvider = require('./ai/providers/gemini');
 
 const apiKey = process.env.GROQ_API_KEY;
 const groqClient = apiKey ? new Groq({ apiKey }) : null;
@@ -25,16 +25,15 @@ function groqFallbackReason(error) {
   return 'GROQ_RETRYABLE_ERROR';
 }
 
-async function fallbackToOpenAI(messages, options, reason) {
-  if (!openaiProvider.isConfigured()) return null;
-  console.warn(`[groqChat] ${reason}; routing same prompt to OpenAI.`);
-  return openaiProvider.chat({
+async function fallbackToGemini(messages, options, reason) {
+  if (!geminiProvider.isConfigured()) return null;
+  console.warn(`[groqChat] ${reason}; routing same prompt to Gemini.`);
+  return geminiProvider.chat({
     messages,
     temperature: options.temperature,
     max_tokens: options.max_tokens,
-    reasoning_effort: options.reasoning_effort,
     response_format: options.response_format,
-    model: options.openai_model || process.env.OPENAI_FALLBACK_MODEL || 'gpt-5-mini',
+    model: options.gemini_model || process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash',
     fallbackReason: reason
   });
 }
@@ -52,7 +51,7 @@ async function groqChat(messages, options = {}) {
   if (!apiKey || !groqClient) {
     const fallback = options.disable_fallback === true
       ? null
-      : await fallbackToOpenAI(messages, options, 'GROQ_NOT_CONFIGURED');
+      : await fallbackToGemini(messages, options, 'GROQ_NOT_CONFIGURED');
     if (fallback) return fallback;
     throw new Error('GROQ_API_KEY is not configured. Cannot reach Groq.');
   }
@@ -92,7 +91,7 @@ async function groqChat(messages, options = {}) {
   } catch (err) {
     console.error('[groqChat] request FAILED after', Date.now() - startedAt, 'ms:', err.message);
     if (options.disable_fallback !== true && isRetryableGroqError(err)) {
-      const fallback = await fallbackToOpenAI(messages, options, groqFallbackReason(err));
+      const fallback = await fallbackToGemini(messages, options, groqFallbackReason(err));
       if (fallback) return fallback;
     }
     throw err;
