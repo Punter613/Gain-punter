@@ -3,6 +3,7 @@ const router = express.Router();
 const { runDiagnosticPipeline } = require('../services/pipeline.engine');
 const { groqChat } = require('../services/groq');
 const { collectVehicleEvidence } = require('../services/vehicle.evidence');
+const { extractCompletedWork } = require('../core/orchestrator/completed.work.guard');
 const { supabase } = require('../db');
 
 function extractJSON(text) {
@@ -31,15 +32,7 @@ function safeEstimate(laborRate, partsCost, overrides = {}) {
 }
 
 function normalizeCompletedWork(mechanicNotices) {
-  const text = (mechanicNotices || []).join(' ').toLowerCase();
-  const patterns = [
-    ['cv axle', /(?:replaced|replace|new|installed).{0,60}cv\s*axles?/i],
-    ['lower ball joint', /(?:replaced|replace|new|installed).{0,60}lower\s+ball\s+joints?/i],
-    ['upper ball joint', /(?:replaced|replace|new|installed).{0,60}upper\s+ball\s+joints?/i],
-    ['upper control arm', /(?:replaced|replace|new|installed).{0,60}upper\s+control\s+arms?/i],
-    ['lower control arm', /(?:replaced|replace|new|installed).{0,60}lower\s+control\s+arms?/i]
-  ];
-  return patterns.filter(([, re]) => re.test(text)).map(([name]) => name);
+  return extractCompletedWork(mechanicNotices);
 }
 
 function filterCompletedRepairs(repairs, completedWork) {
