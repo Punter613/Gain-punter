@@ -2,9 +2,42 @@
 // Locked down Groq system prompt — strict output, respects mechanic notes
 
 const Groq = require('groq-sdk');
+const openaiProvider = require('./ai/providers/openai');
 
 const apiKey = process.env.GROQ_API_KEY;
 const groqClient = apiKey ? new Groq({ apiKey }) : null;
+
+function isRetryableGroqError(error) {
+  const status = Number(error?.status || error?.statusCode || 0);
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+
+  if ([408, 409, 413, 429].includes(status) || status >= 500) return true;
+  if (['rate_limit_exceeded', 'request_timeout', 'server_error'].includes(code)) return true;
+  return /rate limit|too many requests|timeout|timed out|temporarily unavailable|overloaded|capacity/.test(message);
+}
+
+function groqFallbackReason(error) {
+  const status = Number(error?.status || error?.statusCode || 0);
+  const code = String(error?.code || '').trim();
+  if (code) return `${code}${status ? `_${status}` : ''}`.toUpperCase();
+  if (status) return `HTTP_${status}`;
+  return 'GROQ_RETRYABLE_ERROR';
+}
+
+async function fallbackToOpenAI(messages, options, reason) {
+  if (!openaiProvider.isConfigured()) return null;
+  console.warn(`[groqChat] ${reason}; routing same prompt to OpenAI.`);
+  return openaiProvider.chat({
+    messages,
+    temperature: options.temperature,
+    max_tokens: options.max_tokens,
+    reasoning_effort: options.reasoning_effort,
+    response_format: options.response_format,
+    model: options.openai_model || process.env.OPENAI_FALLBACK_MODEL || 'gpt-5-mini',
+    fallbackReason: reason
+  });
+}
 
 /**
  * The actual Groq API call. This was referenced by diagnose.js,
@@ -17,6 +50,10 @@ const groqClient = apiKey ? new Groq({ apiKey }) : null;
  */
 async function groqChat(messages, options = {}) {
   if (!apiKey || !groqClient) {
+    const fallback = options.disable_fallback === true
+      ? null
+      : await fallbackToOpenAI(messages, options, 'GROQ_NOT_CONFIGURED');
+    if (fallback) return fallback;
     throw new Error('GROQ_API_KEY is not configured. Cannot reach Groq.');
   }
 
@@ -54,6 +91,10 @@ async function groqChat(messages, options = {}) {
     response = await groqClient.chat.completions.create(requestBody);
   } catch (err) {
     console.error('[groqChat] request FAILED after', Date.now() - startedAt, 'ms:', err.message);
+    if (options.disable_fallback !== true && isRetryableGroqError(err)) {
+      const fallback = await fallbackToOpenAI(messages, options, groqFallbackReason(err));
+      if (fallback) return fallback;
+    }
     throw err;
   }
   const latencyMs = Date.now() - startedAt;
@@ -79,8 +120,11 @@ async function groqChat(messages, options = {}) {
     );
   }
 
-  // Attach latency for callers (e.g. ai.specialist.router.js reads response._latency)
+  // Attach latency/provider metadata for callers without changing the
+  // existing ChatCompletion-compatible response contract.
   response._latency = latencyMs;
+  response._provider = 'groq';
+  response._fallbackReason = null;
   return response;
 }
 
@@ -196,4 +240,4 @@ ${mechanicNotices?.length ? mechanicNotices.join('\n') : 'No mechanic notices'}
 Generate the repair estimate JSON now.`;
 }
 
-module.exports = { buildSystemPrompt, buildUserMessage, groqChat };
+module.exports = { buildSystemPrompt, buildUserMessage, groqChat, isRetryableGroqError, groqFallbackReason };
