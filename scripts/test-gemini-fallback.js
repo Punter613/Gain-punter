@@ -25,7 +25,7 @@ assert.equal(request.body.contents[1].role, 'model');
 assert.equal(request.body.contents[2].role, 'user');
 assert.equal(request.body.generationConfig.maxOutputTokens, 800);
 assert.equal(request.body.generationConfig.temperature, 0.15);
-assert.equal(request.body.generationConfig.responseFormat.text.mimeType, 'application/json');
+assert.equal(request.body.generationConfig.responseFormat.text.mimeType, 'APPLICATION_JSON');
 assert.equal(request.body.generationConfig.responseFormat.text.schema, undefined);
 assert.equal(request.body.generationConfig.responseMimeType, undefined);
 assert.equal(request.body.generationConfig.responseJsonSchema, undefined);
@@ -52,7 +52,7 @@ const schemaRequest = gemini.buildRequest(
     }
   }
 );
-assert.equal(schemaRequest.body.generationConfig.responseFormat.text.mimeType, 'application/json');
+assert.equal(schemaRequest.body.generationConfig.responseFormat.text.mimeType, 'APPLICATION_JSON');
 assert.equal(schemaRequest.body.generationConfig.responseFormat.text.schema.type, 'object');
 assert.equal(schemaRequest.body.generationConfig.responseFormat.text.schema.properties.ok.type, 'boolean');
 assert.equal(schemaRequest.body.generationConfig.responseMimeType, undefined);
@@ -64,6 +64,7 @@ const estimateSchemaRequest = gemini.buildRequest(
   [{ role: 'user', content: 'return estimate object' }],
   { model: 'gemini-3.6-flash', response_format: ESTIMATE_RESPONSE_FORMAT }
 );
+assert.equal(estimateSchemaRequest.body.generationConfig.responseFormat.text.mimeType, 'APPLICATION_JSON');
 const estimateSchema = estimateSchemaRequest.body.generationConfig.responseFormat.text.schema;
 assert.equal(estimateSchema.type, 'object');
 assert.equal(estimateSchema.additionalProperties, false);
