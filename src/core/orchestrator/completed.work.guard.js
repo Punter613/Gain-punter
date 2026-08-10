@@ -17,9 +17,15 @@ const WORK_ALIASES = [
   ['rack and pinion', 'rack & pinion', 'steering rack'],
   ['tie rod', 'tie rods', 'tie-rod'],
   ['wheel bearing', 'wheel bearings'],
+  ['rear axle assembly', 'rear axle assemblies'],
   ['engine mount', 'engine mounts', 'motor mount', 'motor mounts'],
   ['transmission mount', 'transmission mounts']
 ];
+
+const COMPLETION_RE = /\b(?:replaced|replace|installed|install|changed|change|swapped|swap|renewed|renew|repaired|repair)\b/i;
+const NEGATED_COMPLETION_RE = /\b(?:(?:not|never)\s+(?:been\s+)?(?:replaced|replace|installed|install|changed|change|swapped|swap|renewed|renew|repaired|repair)|(?:did\s+not|didn't|was\s+not|wasn't|were\s+not|weren't|has\s+not|hasn't|have\s+not|haven't)\s+(?:been\s+)?(?:replaced|replace|installed|install|changed|change|swapped|swap|renewed|renew|repaired|repair))\b/i;
+const FUTURE_WORK_RE = /\b(?:need(?:s)?\s+to|should|recommend(?:ed)?\s+to|plan(?:ned)?\s+to|will|must|requires?\s+to)\s+(?:replace|install|change|swap|renew|repair)\b/i;
+const INSPECTION_ONLY_RE = /\b(?:inspect(?:ed|ing|ion)?|check(?:ed|ing)?|test(?:ed|ing)?|verify|verified|measur(?:e|ed|ing)|observ(?:e|ed|ing)|found|shows?|noted)\b/i;
 
 function normalize(text) {
   return String(text || '')
@@ -30,13 +36,85 @@ function normalize(text) {
     .trim();
 }
 
-function extractCompletedWork(notices = []) {
-  const text = normalize(Array.isArray(notices) ? notices.join(' ') : notices);
-  if (!text) return [];
+function splitNoticeClauses(notices = []) {
+  const raw = Array.isArray(notices) ? notices.join('\n') : String(notices || '');
+  return raw
+    .split(/[.!?;\n]+/)
+    .map(normalize)
+    .filter(Boolean);
+}
 
-  return WORK_ALIASES
-    .filter(aliases => aliases.some(alias => text.includes(alias)))
-    .map(aliases => aliases[0]);
+function findAliasMentions(clause) {
+  const mentions = [];
+
+  for (const aliases of WORK_ALIASES) {
+    const canonical = aliases[0];
+    for (const alias of aliases) {
+      let from = 0;
+      while (from < clause.length) {
+        const index = clause.indexOf(alias, from);
+        if (index === -1) break;
+        mentions.push({ canonical, alias, index, end: index + alias.length });
+        from = index + alias.length;
+      }
+    }
+  }
+
+  // Prefer the longest alias at the same position so "cv axles" does not
+  // produce a second shorter mention for "cv axle".
+  return mentions
+    .sort((a, b) => a.index - b.index || b.alias.length - a.alias.length)
+    .filter((mention, index, sorted) => {
+      const previous = sorted[index - 1];
+      return !(previous && previous.index === mention.index && previous.canonical === mention.canonical);
+    });
+}
+
+function extractCompletedWork(notices = []) {
+  const completed = new Set();
+
+  for (const clause of splitNoticeClauses(notices)) {
+    const mentions = findAliasMentions(clause);
+    if (!mentions.length) continue;
+
+    let activeCompletion = false;
+    let cursor = 0;
+
+    for (let i = 0; i < mentions.length; i++) {
+      const mention = mentions[i];
+      const next = mentions[i + 1];
+      const before = clause.slice(cursor, mention.index);
+      const after = clause.slice(mention.end, next ? next.index : clause.length);
+      const local = `${before} ${mention.alias} ${after}`;
+
+      if (NEGATED_COMPLETION_RE.test(before) || FUTURE_WORK_RE.test(before)) {
+        activeCompletion = false;
+      } else if (COMPLETION_RE.test(before)) {
+        activeCompletion = true;
+      } else if (INSPECTION_ONLY_RE.test(before)) {
+        // "replaced CV axle and inspected upper ball joint" must not let the
+        // earlier completion verb bleed into the inspected component.
+        activeCompletion = false;
+      }
+
+      const explicitlyNotCompleted = NEGATED_COMPLETION_RE.test(local) || FUTURE_WORK_RE.test(local);
+      const explicitlyCompletedAfter = !explicitlyNotCompleted && COMPLETION_RE.test(after);
+      const inspectionOnlyAfter = INSPECTION_ONLY_RE.test(after) && !COMPLETION_RE.test(after);
+
+      if (!explicitlyNotCompleted && (explicitlyCompletedAfter || (activeCompletion && !inspectionOnlyAfter))) {
+        completed.add(mention.canonical);
+      }
+
+      // A direct completion after the component becomes the active context for
+      // a following list; a negation/inspection resets it.
+      if (explicitlyNotCompleted || inspectionOnlyAfter) activeCompletion = false;
+      else if (explicitlyCompletedAfter) activeCompletion = true;
+
+      cursor = mention.end;
+    }
+  }
+
+  return [...completed];
 }
 
 function itemMatchesCompletedWork(item, completedWork) {
@@ -66,10 +144,6 @@ function guardJson(data, completedWork) {
   const arrayKeys = [
     'repairs', 'repairsNeeded', 'recommendedRepairs', 'recommendations',
     'parts', 'requiredRepairs', 'repairItems', 'actions',
-    // Diagnose-shaped output (src/routes/diagnose.js) uses a different
-    // field set than the estimate pipeline. Missing these meant the guard
-    // was a no-op for every /api/diagnose call - it only ever ran on
-    // /api/full-estimate.
     'secondaryCauses', 'knownIssues', 'repairSteps', 'proTips',
     'recommendedTests', 'additionalChecks', 'probability'
   ];
@@ -89,11 +163,6 @@ function guardJson(data, completedWork) {
     data[key] = kept;
   }
 
-  // primaryCause is a single string, not a list - can't just drop it like
-  // an array item without leaving the diagnosis empty. If the AI's main
-  // answer itself is just already-completed work restated (the exact
-  // failure the guard exists to catch), demote it to a review flag
-  // instead of silently presenting a stale answer as confident fact.
   if (typeof data.primaryCause === 'string' && itemMatchesCompletedWork(data.primaryCause, completedWork)) {
     removed.push(data.primaryCause);
     data.primaryCause = 'AI proposed already-completed work as the primary cause — flagged for mechanic re-evaluation rather than shown as a confident diagnosis.';
