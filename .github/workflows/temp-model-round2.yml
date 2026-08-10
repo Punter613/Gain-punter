@@ -1,0 +1,32 @@
+name: Temporary Model Round 2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  poll-render-result:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll Render comparison result
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://p613-backend.onrender.com/api/internal/model-compare-result"
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /tmp/result.json -w "%{http_code}" "$URL" || true)
+            echo "Attempt $i HTTP $code"
+            if [ "$code" = "200" ]; then
+              cat /tmp/result.json
+              exit 0
+            fi
+            if [ "$code" = "500" ]; then
+              cat /tmp/result.json
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for Render comparison result"
+          cat /tmp/result.json || true
+          exit 1
