@@ -15,18 +15,35 @@ function resolveModel(requestedModel) {
   return requested;
 }
 
+// Gemini 3.6 Flash uses the current GenerateContent structured-output shape:
+// generationConfig.responseFormat.text.{mimeType,schema}.
+// Keep SKSK's provider-neutral response_format contract at the router boundary and
+// translate it here instead of leaking Gemini-specific wire fields into callers.
 function jsonGenerationConfig(responseFormat) {
   if (!responseFormat) return {};
+
   if (responseFormat.type === 'json_object') {
-    return { responseMimeType: 'application/json' };
+    return {
+      responseFormat: {
+        text: {
+          mimeType: 'application/json'
+        }
+      }
+    };
   }
+
   if (responseFormat.type === 'json_schema') {
     const schemaConfig = responseFormat.json_schema || responseFormat;
     return {
-      responseMimeType: 'application/json',
-      ...(schemaConfig.schema ? { responseJsonSchema: schemaConfig.schema } : {})
+      responseFormat: {
+        text: {
+          mimeType: 'application/json',
+          ...(schemaConfig.schema ? { schema: schemaConfig.schema } : {})
+        }
+      }
     };
   }
+
   return {};
 }
 
@@ -96,6 +113,16 @@ function normalizeResponse(response, model, latencyMs, fallbackReason = null) {
   };
 }
 
+function compactErrorDetails(details) {
+  if (!details) return null;
+  try {
+    const text = JSON.stringify(details);
+    return text.length > 4000 ? `${text.slice(0, 4000)}…` : text;
+  } catch (_) {
+    return String(details).slice(0, 4000);
+  }
+}
+
 async function chat(payload = {}) {
   const { messages, fallbackReason = null } = payload;
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -107,12 +134,18 @@ async function chat(payload = {}) {
 
   const request = buildRequest(messages, payload);
   const url = `${API_BASE}/${encodeURIComponent(request.model)}:generateContent`;
+  const textFormat = request.body.generationConfig?.responseFormat?.text || null;
 
   console.log('[geminiChat] request:', {
     model: request.model,
     temperature: request.body.generationConfig?.temperature ?? null,
     maxOutputTokens: request.body.generationConfig?.maxOutputTokens ?? null,
-    responseMimeType: request.body.generationConfig?.responseMimeType || null,
+    responseFormat: textFormat
+      ? {
+          mimeType: textFormat.mimeType || null,
+          hasSchema: Boolean(textFormat.schema)
+        }
+      : null,
     messageCount: messages.length,
     fallbackReason
   });
@@ -140,10 +173,16 @@ async function chat(payload = {}) {
       error.status = httpResponse.status;
       error.code = response?.error?.status || response?.error?.code || null;
       error.provider = 'gemini';
+      error.details = response?.error?.details || null;
       throw error;
     }
   } catch (error) {
-    console.error('[geminiChat] request FAILED after', Date.now() - startedAt, 'ms:', error.message);
+    console.error('[geminiChat] request FAILED after', Date.now() - startedAt, 'ms:', {
+      message: error.message,
+      status: error.status || null,
+      code: error.code || null,
+      details: compactErrorDetails(error.details)
+    });
     throw error;
   }
 
@@ -171,6 +210,7 @@ module.exports = {
   isConfigured,
   apiKey,
   resolveModel,
+  jsonGenerationConfig,
   buildRequest,
   extractOutputText,
   normalizeResponse
