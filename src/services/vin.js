@@ -12,7 +12,11 @@ async function decodeVinNhtsa(vin) {
     make: v.Make || '',
     model: v.Model || '',
     trim: v.Trim || '',
-    engine: v.DisplacementL ? `${v.DisplacementL}L` : (v.EngineModel || '')
+    engine: v.DisplacementL ? `${v.DisplacementL}L` : (v.EngineModel || ''),
+    engineCylinders: v.EngineCylinders || '',
+    driveType: v.DriveType || '',
+    bodyClass: v.BodyClass || '',
+    transmissionStyle: v.TransmissionStyle || ''
   };
 }
 
