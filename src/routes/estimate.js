@@ -96,6 +96,9 @@ RULES:
 - priority exactly high, medium, or low.
 - laborCost = estimatedHours x ${laborRateNum} x ${rustBeltMultiplier}; total = laborCost + partsCost.
 - All array values must be strings.
+- EVIDENCE HIERARCHY: measured/verified technical facts and supplied OEM/TSB/NHTSA evidence outrank mechanic observations; mechanic observations outrank customer-translated symptom wording. Treat translated customer wording as no more than ~5% directional influence: use it to preserve WHEN/WHERE/HOW the symptom occurs, not to select a component merely because a component/system word appears in the translation.
+- MECHANIC NOTICES are high-value context. Completed work, observed play, leaks, measured values, failed tests, noise location, installation history, and technician observations must materially affect ranking when relevant.
+- RETRIEVAL KEYWORDS are search hints only. Do not use translator-generated keywords as diagnostic evidence or as a reason to favor a component. The AI is intentionally not shown those keywords; reason from the symptom facts, mechanic notices, and retrieved evidence instead.
 - OEM/factory manual facts are primary technical evidence for procedures, construction, torque, inspections, and component identification.
 - TSB candidates must be labeled as candidates unless a real bulletin identity is verified. Never invent a TSB number.
 - Use NHTSA recalls as vehicle-specific safety evidence.
@@ -108,8 +111,7 @@ RULES:
 MULTI-CONDITION REASONING: When the same symptom occurs under two or more distinct operating conditions (e.g. deceleration AND full steering lock, or cold-start AND hard acceleration), analyze what changes mechanically in each condition, then prioritize causes plausible under ALL the reported conditions over causes that only fit one. Consider three hypotheses: (1) one component explains every occurrence, (2) different components in the same system produce a similar-sounding reaction, (3) two unrelated faults happen to sound alike. Use the overlap between conditions to narrow the diagnostic tree rather than anchoring on the most obvious single-condition match.
 - Output raw JSON only.`;
 
-    const keywordsList = Array.isArray(keywords) ? keywords.filter(k => typeof k === 'string' && k.trim()) : [];
-    const userPrompt = `Vehicle: ${vehicleStr}\nVIN: ${vin || 'N/A'}\nShop Rate: $${laborRateNum}/hr | Parts Budget: $${partsCostNum} | Rust Multiplier: ${rustBeltMultiplier}x\nOBD Codes: ${obdCodes.join(', ') || 'None'}\nCustomer Reports: ${customerStates.join(', ') || 'N/A'}\nMechanic Notices: ${mechanicNotices.join(', ') || 'N/A'}\nCompleted Work Detected: ${completedWork.join(', ') || 'None'}${keywordsList.length ? `\nTechnical Keywords: ${keywordsList.join(', ')}` : ''}\n\nVEHICLE EVIDENCE:\n${evidenceText}`;
+    const userPrompt = `Vehicle: ${vehicleStr}\nVIN: ${vin || 'N/A'}\nShop Rate: $${laborRateNum}/hr | Parts Budget: $${partsCostNum} | Rust Multiplier: ${rustBeltMultiplier}x\nOBD Codes: ${obdCodes.join(', ') || 'None'}\nLOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerStates.join(', ') || 'N/A'}\nHIGH-WEIGHT MECHANIC NOTICES: ${mechanicNotices.join(', ') || 'N/A'}\nCompleted Work Detected: ${completedWork.join(', ') || 'None'}\n\nVEHICLE EVIDENCE:\n${evidenceText}`;
 
     const groqRes = await groqChat([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], { max_tokens: 2500, temperature: 0.2, reasoning_effort: 'low' });
     const aiText = typeof groqRes === 'string' ? groqRes : (groqRes?.choices?.[0]?.message?.content || '');
