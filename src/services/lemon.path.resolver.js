@@ -15,11 +15,22 @@ function titleCase(value) {
     .replace(/(^|\s|-)([a-z])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
 }
 
+function classifyDrivetrain(value) {
+  const source = String(value || '');
+  if (/\b4wd\b|\b4x4\b|four[ -]?wheel drive/i.test(source)) return '4wd';
+  if (/\bawd\b|all[ -]?wheel drive/i.test(source)) return 'awd';
+  if (/\bfwd\b|front[ -]?wheel drive/i.test(source)) return 'fwd';
+  if (/\brwd\b|rear[ -]?wheel drive/i.test(source)) return 'rwd';
+  if (/\b2wd\b|two[ -]?wheel drive/i.test(source)) return '2wd';
+  return '';
+}
+
 function getVehicleSignals(vehicle = {}) {
   const source = [
     vehicle.model,
     vehicle.trim,
     vehicle.engine,
+    vehicle.engineCylinders,
     vehicle.drivetrain,
     vehicle.driveType,
     vehicle.drive,
@@ -30,25 +41,39 @@ function getVehicleSignals(vehicle = {}) {
   const displacement = String(source).match(/\b(\d(?:\.\d)?)\s*l\b/i)?.[1] || '';
   const cylinderMatch = String(source).match(/\b(?:v\s*)?(4|6|8|10|12)\s*(?:cyl(?:inder)?s?)?\b/i);
   const cylinders = cylinderMatch?.[1] || '';
-  const drivetrain = /\b4wd\b|\b4x4\b|four wheel drive/i.test(source) ? '4wd'
-    : /\bawd\b|all wheel drive/i.test(source) ? 'awd'
-      : /\bfwd\b|front wheel drive/i.test(source) ? 'fwd'
-        : /\brwd\b|rear wheel drive/i.test(source) ? 'rwd'
-          : '';
 
   return {
     model: normalize(vehicle.model),
     displacement,
     cylinders,
-    drivetrain,
+    drivetrain: classifyDrivetrain(source),
     raw: normalized
   };
 }
 
+function drivetrainsConflict(requested, candidate) {
+  if (!requested || !candidate) return false;
+  if (requested === candidate) return false;
+
+  // 2WD is a broad class; FWD/RWD are compatible with a generic 2WD signal.
+  if (requested === '2wd' && (candidate === 'fwd' || candidate === 'rwd')) return false;
+  if (candidate === '2wd' && (requested === 'fwd' || requested === 'rwd')) return false;
+
+  return true;
+}
+
 function scoreVehicleFolderCandidate(candidate, vehicle) {
   const signals = getVehicleSignals(vehicle);
-  const text = normalize(`${candidate.text || ''} ${candidate.url || ''}`);
+  const decoded = `${candidate.text || ''} ${decodeURIComponentSafe(candidate.url || '')}`;
+  const text = normalize(decoded);
   if (!signals.model || !text.includes(signals.model)) return -1000;
+
+  const candidateDrivetrain = classifyDrivetrain(decoded);
+  if (drivetrainsConflict(signals.drivetrain, candidateDrivetrain)) {
+    // Vehicle applicability is a control boundary, not a soft ranking hint.
+    // If VIN/profile says 4WD, a folder explicitly labeled 2WD must never win.
+    return -1000;
+  }
 
   let score = 100;
   const modelTokens = signals.model.split(' ').filter(Boolean);
@@ -56,22 +81,18 @@ function scoreVehicleFolderCandidate(candidate, vehicle) {
 
   if (signals.displacement) {
     const displacementPattern = new RegExp(`\\b${signals.displacement.replace('.', '[ .]?')}\\s*l?\\b`, 'i');
-    if (displacementPattern.test(`${candidate.text || ''} ${decodeURIComponentSafe(candidate.url || '')}`)) score += 45;
-    else score -= 15;
+    if (displacementPattern.test(decoded)) score += 45;
+    else score -= 20;
   }
 
   if (signals.cylinders) {
-    const raw = `${candidate.text || ''} ${decodeURIComponentSafe(candidate.url || '')}`;
-    if (new RegExp(`\\bv?${signals.cylinders}\\b`, 'i').test(raw)) score += 30;
+    if (new RegExp(`\\bv?${signals.cylinders}\\b`, 'i').test(decoded)) score += 30;
+    else score -= 10;
   }
 
   if (signals.drivetrain) {
-    const aliases = signals.drivetrain === '4wd' ? /\b4wd\b|\b4x4\b|four wheel drive/i
-      : signals.drivetrain === 'awd' ? /\bawd\b|all wheel drive/i
-        : signals.drivetrain === 'fwd' ? /\bfwd\b|front wheel drive/i
-          : /\brwd\b|rear wheel drive/i;
-    if (aliases.test(`${candidate.text || ''} ${decodeURIComponentSafe(candidate.url || '')}`)) score += 35;
-    else score -= 10;
+    if (candidateDrivetrain === signals.drivetrain) score += 60;
+    else if (!candidateDrivetrain) score -= 20;
   }
 
   return score;
@@ -107,7 +128,7 @@ async function fetchHtml(url, timeoutMs = 9000) {
       signal: controller.signal,
       headers: {
         Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.4; lemon-path-resolver)'
+        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.5; lemon-path-resolver)'
       }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -128,16 +149,18 @@ function buildDirectCandidates(vehicle) {
   const year = clean(vehicle.year);
   const model = clean(vehicle.model);
   const signals = getVehicleSignals(vehicle);
-  const labels = new Set([model]);
+  const labels = [];
 
-  if (signals.cylinders && signals.displacement) {
-    labels.add(`${model} V${signals.cylinders}-${signals.displacement}L`);
-    if (signals.drivetrain) labels.add(`${model} ${signals.drivetrain.toUpperCase()} V${signals.cylinders}-${signals.displacement}L`);
+  // Most-specific candidates first. A known drivetrain must not lose to a
+  // generic/sibling variant merely because that URL responds first.
+  if (signals.cylinders && signals.displacement && signals.drivetrain) {
+    labels.push(`${model} ${signals.drivetrain.toUpperCase()} V${signals.cylinders}-${signals.displacement}L`);
   }
+  if (signals.cylinders && signals.displacement) labels.push(`${model} V${signals.cylinders}-${signals.displacement}L`);
+  if (vehicle.trim) labels.push(`${model} ${clean(vehicle.trim)}`);
+  labels.push(model);
 
-  if (vehicle.trim) labels.add(`${model} ${clean(vehicle.trim)}`);
-
-  return [...labels].map(label => ({
+  return [...new Set(labels)].map(label => ({
     label,
     url: `https://lemon-manuals.la/${encodeURIComponent(make)}/${encodeURIComponent(year)}/${encodeURIComponent(label)}/Repair%20and%20Diagnosis/`
   }));
@@ -157,9 +180,11 @@ async function resolveLemonVehiclePathUncached(vehicle = {}) {
     throw new Error('Vehicle make, year, and model are required for LEMON path resolution');
   }
 
+  const signals = getVehicleSignals(vehicle);
   for (const candidate of buildDirectCandidates(vehicle)) {
+    if (signals.drivetrain && drivetrainsConflict(signals.drivetrain, classifyDrivetrain(candidate.label))) continue;
     if (await probeRepairUrl(candidate.url)) {
-      return { url: candidate.url, method: 'direct-candidate', candidate: candidate.label };
+      return { url: candidate.url, method: 'direct-candidate', candidate: candidate.label, drivetrain: signals.drivetrain };
     }
   }
 
@@ -182,6 +207,7 @@ async function resolveLemonVehiclePathUncached(vehicle = {}) {
         method: 'year-index-discovery',
         candidate: clean(candidate.text) || decodeURIComponentSafe(candidate.url),
         score: candidate.score,
+        drivetrain: signals.drivetrain,
         yearIndexUrl: yearUrl
       };
     }
@@ -191,7 +217,7 @@ async function resolveLemonVehiclePathUncached(vehicle = {}) {
 }
 
 async function resolveRepairDiagnosisUrl(vehicle = {}) {
-  const key = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim, vehicle.engine, vehicle.drivetrain, vehicle.driveType]
+  const key = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim, vehicle.engine, vehicle.engineCylinders, vehicle.drivetrain, vehicle.driveType]
     .map(normalize)
     .join('|');
 
@@ -208,5 +234,7 @@ async function resolveRepairDiagnosisUrl(vehicle = {}) {
 module.exports = {
   resolveRepairDiagnosisUrl,
   scoreVehicleFolderCandidate,
-  getVehicleSignals
+  getVehicleSignals,
+  classifyDrivetrain,
+  drivetrainsConflict
 };
