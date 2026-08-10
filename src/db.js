@@ -8,10 +8,21 @@ if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
 }
 
-const CURRENT_MANUAL_SCHEMA = 2;
+const CURRENT_MANUAL_SCHEMA = 3;
 
-function buildVehicleCacheKey({ year, make, model, engine }) {
-  return [year, make, model, engine || 'base']
+function normalizeDriveType(vehicle = {}) {
+  const raw = String(vehicle.drivetrain || vehicle.driveType || vehicle.drive || '').toLowerCase();
+  if (/\b4wd\b|\b4x4\b|four[ -]?wheel drive/.test(raw)) return '4wd';
+  if (/\bawd\b|all[ -]?wheel drive/.test(raw)) return 'awd';
+  if (/\bfwd\b|front[ -]?wheel drive/.test(raw)) return 'fwd';
+  if (/\brwd\b|rear[ -]?wheel drive/.test(raw)) return 'rwd';
+  if (/\b2wd\b|two[ -]?wheel drive/.test(raw)) return '2wd';
+  return 'drive-unknown';
+}
+
+function buildVehicleCacheKey({ year, make, model, engine, drivetrain, driveType, drive }) {
+  const driveKey = normalizeDriveType({ drivetrain, driveType, drive });
+  return [year, make, model, engine || 'base', driveKey]
     .map(v => String(v || '').toLowerCase().trim().replace(/\s+/g, '-'))
     .join('|');
 }
@@ -32,8 +43,7 @@ async function getCachedManual(vehicle) {
       return null;
     }
 
-    // Force one refresh of rows created by the old title/URL-only scraper.
-    // New rows contain schemaVersion=2 and preserve actual manual text/facts.
+    // Force one refresh of rows created by older scraper/cache schemas.
     if (data?.data?.schemaVersion !== CURRENT_MANUAL_SCHEMA) {
       console.log(`[DB] Legacy Lemon cache detected for ${cacheKey}; refreshing with schema v${CURRENT_MANUAL_SCHEMA}`);
       return null;
@@ -71,4 +81,4 @@ async function saveScrapedManual(vehicle, manualData) {
   }
 }
 
-module.exports = { supabase, getCachedManual, saveScrapedManual, buildVehicleCacheKey, CURRENT_MANUAL_SCHEMA };
+module.exports = { supabase, getCachedManual, saveScrapedManual, buildVehicleCacheKey, CURRENT_MANUAL_SCHEMA, normalizeDriveType };
