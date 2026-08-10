@@ -1,0 +1,84 @@
+name: Apply VIN evidence warmup v3
+
+on:
+  push:
+    branches: [ feature/vin-evidence-warmup ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-check-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/vin-evidence-warmup
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Preserve replacement escapes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply-vin-evidence-warmup.py')
+          s = p.read_text()
+          old = "updated, count = re.subn(pattern, replacement, content, count=1, flags=re.S)"
+          new = "updated, count = re.subn(pattern, lambda _match: replacement, content, count=1, flags=re.S)"
+          if old not in s:
+              raise SystemExit('regex replacement anchor missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Apply corrected patch
+        run: python3 scripts/apply-vin-evidence-warmup.py
+
+      - name: Syntax check backend
+        run: |
+          node --check src/services/vehicle.warmup.js
+          node --check src/routes/vehicle.js
+          node --check src/services/vehicle.evidence.js
+          node --check src/routes/estimate.js
+          node --check src/routes/diagnose.js
+          node --check api/server.js
+
+      - name: Compile inline browser script
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const html = fs.readFileSync('public/index.html', 'utf8');
+          const match = html.match(/<script>([\s\S]*?)<\/script>/);
+          if (!match) throw new Error('inline script not found');
+          new Function(match[1]);
+          console.log('public/index.html inline script: PASS');
+          NODE
+
+      - name: Regression checks
+        run: |
+          node scripts/test-evidence-selection.js
+          node scripts/test-vehicle-profile-merge.js
+          node scripts/test-completed-work-guard.js
+
+      - name: Remove one-shot patch infrastructure
+        run: |
+          rm -f scripts/apply-vin-evidence-warmup.js
+          rm -f scripts/apply-vin-evidence-warmup.py
+          rm -f .github/workflows/apply-vin-evidence-warmup.yml
+          rm -f .github/workflows/apply-vin-evidence-warmup-v2.yml
+          rm -f .github/workflows/apply-vin-evidence-warmup-v3.yml
+
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Warm vehicle evidence on VIN decode"
+          git push origin HEAD:feature/vin-evidence-warmup
