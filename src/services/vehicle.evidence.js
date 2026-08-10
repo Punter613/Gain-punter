@@ -1,5 +1,6 @@
 const NodeCache = require('node-cache');
 const { scrapeLEMONManuals } = require('./lemon');
+const { harvestVehicleTsbs } = require('./tsb.harvester');
 
 const cache = new NodeCache({ stdTTL: 60 * 60 * 12, checkperiod: 600, useClones: false });
 const NHTSA_BASE = 'https://api.nhtsa.gov';
@@ -59,6 +60,23 @@ function classifyFactoryItems(items) {
   });
 }
 
+function tsbCorpusToReferences(bulletins) {
+  return (bulletins || []).map(item => ({
+    title: item.title || item.subject || 'Technical Service Bulletin',
+    url: item.url,
+    evidenceType: 'TSB_CANDIDATE',
+    sourceAuthority: item.source || 'LEMON_MANUALS',
+    relevanceScore: Number(item.score || 0),
+    matchedKeywords: item.matchedKeywords || [],
+    bulletinNumber: item.bulletinNumber || '',
+    bulletinDate: item.bulletinDate || '',
+    groupName: item.groupName || '',
+    subject: item.subject || '',
+    extractedFacts: item.extractedFacts || {},
+    snippet: String(item.bodyText || '').slice(0, 3500)
+  }));
+}
+
 async function scrapeNhtsa(vehicle) {
   const params = new URLSearchParams({ make: clean(vehicle.make), model: clean(vehicle.model), modelYear: String(vehicle.year) });
   const [recallsResult, complaintsResult] = await Promise.allSettled([
@@ -86,12 +104,20 @@ async function collectVehicleEvidence(vehicle, context = {}) {
     available: false, fromCache: false, collectedAt: new Date().toISOString(),
     vehicle: { year: vehicle.year, make: vehicle.make, model: vehicle.model, trim: vehicle.trim || '', engine: vehicle.engine || '' },
     oem: { references: [], source: 'LEMON_MANUALS' },
-    tsbs: { references: [], status: 'candidate references only; verify bulletin identity before claiming a TSB' },
+    tsbs: {
+      references: [],
+      corpusTotal: 0,
+      corpusStored: false,
+      corpusHarvested: false,
+      corpusTruncated: false,
+      status: 'candidate references only; verify bulletin identity/applicability before claiming a TSB'
+    },
     recalls: [], knownIssues: [], sources: [], errors: []
   };
 
-  const [manualResult, nhtsaResult] = await Promise.allSettled([
+  const [manualResult, tsbResult, nhtsaResult] = await Promise.allSettled([
     scrapeLEMONManuals(vehicle, context),
+    harvestVehicleTsbs(vehicle, { ...context, keywords: context.keywords || [] }),
     scrapeNhtsa(vehicle)
   ]);
 
@@ -99,13 +125,30 @@ async function collectVehicleEvidence(vehicle, context = {}) {
     const manual = manualResult.value || {};
     const references = classifyFactoryItems(manual.items || []).sort((a, b) => b.relevanceScore - a.relevanceScore);
     result.oem = {
-      references: references.slice(0, 20), source: 'LEMON_MANUALS', fromCache: !!manual.fromCache,
+      references: references.filter(item => item.evidenceType !== 'TSB_CANDIDATE').slice(0, 20),
+      source: 'LEMON_MANUALS', fromCache: !!manual.fromCache,
       scraped: !!manual.scraped, schemaVersion: manual.schemaVersion || 1, crawledUrls: manual.crawled_urls || 0
     };
-    result.tsbs.references = references.filter(item => item.evidenceType === 'TSB_CANDIDATE').slice(0, 10);
     if (references.length) result.sources.push('LEMON_MANUALS');
     if (manual.error) result.errors.push(`LEMON: ${manual.error}`);
   } else result.errors.push(`LEMON: ${manualResult.reason?.message || 'scrape failed'}`);
+
+  if (tsbResult.status === 'fulfilled') {
+    const corpus = tsbResult.value || {};
+    const references = tsbCorpusToReferences(corpus.bulletins || []).sort((a, b) => b.relevanceScore - a.relevanceScore);
+    result.tsbs = {
+      ...result.tsbs,
+      references: references.slice(0, 15),
+      corpusTotal: Number(corpus.total || references.length || 0),
+      corpusStored: !!corpus.fromStore || (!!corpus.harvested && !corpus.error),
+      corpusHarvested: !!corpus.harvested,
+      corpusTruncated: !!corpus.truncated,
+      crawledUrls: Number(corpus.crawledUrls || 0),
+      rootUrl: corpus.tsbRootUrl || ''
+    };
+    if (references.length && !result.sources.includes('LEMON_MANUALS')) result.sources.push('LEMON_MANUALS');
+    if (corpus.error) result.errors.push(`LEMON TSB corpus: ${corpus.error}`);
+  } else result.errors.push(`LEMON TSB corpus: ${tsbResult.reason?.message || 'harvest failed'}`);
 
   if (nhtsaResult.status === 'fulfilled') {
     const nhtsa = nhtsaResult.value || {};
