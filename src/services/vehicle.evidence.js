@@ -6,7 +6,16 @@ const cache = new NodeCache({ stdTTL: 60 * 60 * 12, checkperiod: 600, useClones:
 const NHTSA_BASE = 'https://api.nhtsa.gov';
 
 function clean(value) { return String(value || '').trim(); }
-function vehicleKey(vehicle) { return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim, vehicle.engine].map(clean).join('|').toLowerCase(); }
+function vehicleKey(vehicle) {
+  return [
+    vehicle.year,
+    vehicle.make,
+    vehicle.model,
+    vehicle.trim,
+    vehicle.engine,
+    vehicle.drivetrain || vehicle.driveType || vehicle.drive
+  ].map(clean).join('|').toLowerCase();
+}
 
 async function getJson(url, timeoutMs = 8000) {
   const controller = new AbortController();
@@ -102,7 +111,14 @@ async function collectVehicleEvidence(vehicle, context = {}) {
 
   const result = {
     available: false, fromCache: false, collectedAt: new Date().toISOString(),
-    vehicle: { year: vehicle.year, make: vehicle.make, model: vehicle.model, trim: vehicle.trim || '', engine: vehicle.engine || '' },
+    vehicle: {
+      year: vehicle.year,
+      make: vehicle.make,
+      model: vehicle.model,
+      trim: vehicle.trim || '',
+      engine: vehicle.engine || '',
+      drivetrain: vehicle.drivetrain || vehicle.driveType || vehicle.drive || ''
+    },
     oem: { references: [], source: 'LEMON_MANUALS' },
     tsbs: {
       references: [],
