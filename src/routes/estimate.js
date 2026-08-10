@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { runDiagnosticPipeline } = require('../services/pipeline.engine');
 const { groqChat } = require('../services/groq');
-const { collectVehicleEvidence } = require('../services/vehicle.evidence');
-const { decodeVinNhtsa } = require('../services/vin');
+const { collectVehicleEvidence, selectRelevantTsbs } = require('../services/vehicle.evidence');
+const { resolveVehicleProfile, waitForVehicleWarmup } = require('../services/vehicle.warmup');
 const { extractCompletedWork } = require('../core/orchestrator/completed.work.guard');
 const { supabase } = require('../db');
 
@@ -44,45 +44,6 @@ function filterCompletedRepairs(repairs, completedWork) {
     const value = String(repair || '').toLowerCase();
     return !completedWork.some(done => done.split(' ').every(term => value.includes(term)));
   });
-}
-
-async function buildEvidenceVehicle(vehicle, vin) {
-  const enriched = {
-    ...vehicle,
-    vin,
-    year: vehicle.year,
-    make: vehicle.make,
-    model: vehicle.model,
-    trim: vehicle.trim,
-    engine: vehicle.engine || vehicle.trim,
-    drivetrain: vehicle.drivetrain || '',
-    driveType: vehicle.driveType || ''
-  };
-
-  const hasDriveSignal = enriched.drivetrain || enriched.driveType;
-  if (!hasDriveSignal && String(vin || '').trim().length === 17) {
-    try {
-      const decoded = await decodeVinNhtsa(String(vin).trim());
-      if (decoded) {
-        enriched.driveType = decoded.driveType || enriched.driveType;
-        enriched.engineCylinders = decoded.engineCylinders || enriched.engineCylinders;
-        enriched.bodyClass = decoded.bodyClass || enriched.bodyClass;
-        enriched.transmissionStyle = decoded.transmissionStyle || enriched.transmissionStyle;
-        if (!enriched.engine) enriched.engine = decoded.engine || '';
-        console.log(`[Estimate Evidence] VIN applicability enriched: ${enriched.driveType || 'drive type unavailable'}`);
-      }
-    } catch (err) {
-      console.warn('[Estimate Evidence] VIN applicability decode failed (non-fatal):', err.message);
-    }
-  }
-
-  return enriched;
-}
-
-function getRelevantTsbs(vehicleEvidence) {
-  return (vehicleEvidence.tsbs?.references || [])
-    .filter(ref => Number(ref.relevanceScore || 0) >= MIN_TSB_RELEVANCE)
-    .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0));
 }
 
 function torqueSignatures(text) {
@@ -133,23 +94,33 @@ router.post('/', async (req, res) => {
       if (pipelineResults.profile?.rustMultiplier > 1.0) rustBeltMultiplier = pipelineResults.profile.rustMultiplier;
     } catch (e) { console.warn('[Estimate Engine] Pipeline background pass skipped:', e.message); }
 
-    const evidenceVehicle = await buildEvidenceVehicle(vehicle, vin);
+    let evidenceVehicle = vehicle;
+    try {
+      evidenceVehicle = await resolveVehicleProfile(vin, vehicle);
+    } catch (err) {
+      console.warn('[Estimate Evidence] VIN/profile resolution failed (non-fatal):', err.message);
+    }
+    const evidenceContext = {
+      symptoms: customerStates.join(' '),
+      mechanicNotices,
+      obdCodes,
+      keywords
+    };
+    const warmupStatus = await waitForVehicleWarmup(evidenceVehicle, 2500);
 
     // collectVehicleEvidence may still collect NHTSA for shared/cache use, but Estimate intentionally
     // consumes and returns only OEM/TSB evidence. NHTSA presentation stays in the VIN Decode flow.
     let vehicleEvidence = { available: false, oem: { references: [] }, tsbs: { references: [] }, recalls: [], knownIssues: [], sources: [], errors: [] };
     try {
-      vehicleEvidence = await collectVehicleEvidence(evidenceVehicle, {
-        symptoms: customerStates.join(' '), mechanicNotices, obdCodes, keywords
-      });
+      vehicleEvidence = await collectVehicleEvidence(evidenceVehicle, evidenceContext, { includeNhtsa: false });
     } catch (e) {
       console.warn('[Estimate Evidence] Collection failed:', e.message);
       vehicleEvidence.errors = [e.message];
     }
 
     const completedWork = normalizeCompletedWork(mechanicNotices);
-    const vehicleStr = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' ') || 'Unknown Vehicle';
-    const relevantTsbs = getRelevantTsbs(vehicleEvidence);
+    const vehicleStr = [evidenceVehicle.year, evidenceVehicle.make, evidenceVehicle.model, evidenceVehicle.trim].filter(Boolean).join(' ') || 'Unknown Vehicle';
+    const relevantTsbs = selectRelevantTsbs(vehicleEvidence, evidenceContext, MIN_TSB_RELEVANCE);
     const oemReferences = (vehicleEvidence.oem?.references || []).slice(0, 8);
     const estimateSources = (vehicleEvidence.sources || [])
       .filter(source => source !== 'NHTSA_ODI' && source !== 'NHTSA ODI')
@@ -217,7 +188,8 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
       completedWorkExcluded: completedWork,
       drivetrain: evidenceVehicle.driveType || evidenceVehicle.drivetrain || '',
       tsbRelevanceFloor: MIN_TSB_RELEVANCE,
-      unsupportedTorqueSpecsRemoved
+      unsupportedTorqueSpecsRemoved,
+      warmupStatus: warmupStatus.status
     };
 
     if (!['high', 'medium', 'low'].includes(finalEstimate.priority)) finalEstimate.priority = 'medium';

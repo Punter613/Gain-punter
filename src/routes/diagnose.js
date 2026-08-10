@@ -8,6 +8,8 @@ const { findKnownPatterns } = require('../knowledge/failure.patterns');
 const { getLocalProcedure } = require('../knowledge/procedure.data');
 const { applyCompletedWorkGuard } = require('../core/orchestrator/completed.work.guard');
 const { recordGuardCatch } = require('../core/learning/guard.catch.recorder');
+const { collectVehicleEvidence, selectRelevantTsbs } = require('../services/vehicle.evidence');
+const { resolveVehicleProfile, waitForVehicleWarmup } = require('../services/vehicle.warmup');
 
 function extractJSON(text) {
   if (!text) return null;
@@ -96,6 +98,14 @@ router.post('/', async (req, res) => {
       ...(Array.isArray(mechanicNotices) ? mechanicNotices : [])
     ].map(s => String(s).toLowerCase().trim()).filter(Boolean);
 
+    let resolvedVehicle = vehicle;
+    try {
+      resolvedVehicle = await resolveVehicleProfile(vin, vehicle);
+      if (resolvedVehicle?.make) executionTrace.log('VIN_PROFILE', `${resolvedVehicle.year} ${resolvedVehicle.make} ${resolvedVehicle.model} ${resolvedVehicle.driveType || ''}`.trim());
+    } catch (err) {
+      executionTrace.log('VIN_PROFILE_WARN', `VIN/profile resolution failed: ${err.message}`);
+    }
+
     let compiledData = {
       profile: null,
       vinBuildProfile: null,
@@ -110,7 +120,7 @@ router.post('/', async (req, res) => {
 
     try {
       compiledData = runDiagnosticPipeline({
-        vehicle, vin, axleCode, symptoms: targetSymptoms, codes: targetCodes, notes, laborRate, mileage
+        vehicle: resolvedVehicle, vin, axleCode, symptoms: targetSymptoms, codes: targetCodes, notes, laborRate, mileage
       }, executionTrace);
     } catch (pipelineErr) {
       executionTrace.log('PIPELINE_WARN', `Pipeline skipped: ${pipelineErr.message}`);
@@ -128,7 +138,7 @@ router.post('/', async (req, res) => {
       symptomTelemetry
     } = compiledData;
 
-    const localProfile = getVehicleRiskProfile(vehicle, vin);
+    const localProfile = getVehicleRiskProfile(resolvedVehicle, vin);
     const platformHits = findKnownPatterns(localProfile, targetSymptoms, targetCodes);
 
     if (platformHits && platformHits.length > 0) {
@@ -171,8 +181,8 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const inputMake = (vehicle.make || '').toLowerCase();
-    const inputModel = (vehicle.model || '').toLowerCase();
+    const inputMake = (resolvedVehicle.make || '').toLowerCase();
+    const inputModel = (resolvedVehicle.model || '').toLowerCase();
     const profileId = profile ? profile.vehicleId : '';
 
     let isProfileValidContext = false;
@@ -183,6 +193,30 @@ router.post('/', async (req, res) => {
     } else if (profileId === 'FORD_3.5_ECOBOOST_V1' && inputMake.includes('ford') && (inputModel.includes('150') || inputModel.includes('f-150'))) {
       isProfileValidContext = true;
     }
+
+    const evidenceContext = {
+      symptoms: customerSymptomContext.join(' '),
+      mechanicNotices: mechanicContext,
+      obdCodes: targetCodes,
+      keywords
+    };
+    let vehicleEvidence = { available: false, oem: { references: [] }, tsbs: { references: [] }, sources: [], errors: [] };
+    let warmupStatus = { status: 'NOT_STARTED' };
+    if (resolvedVehicle?.year && resolvedVehicle?.make && resolvedVehicle?.model) {
+      try {
+        warmupStatus = await waitForVehicleWarmup(resolvedVehicle, 2500);
+        vehicleEvidence = await collectVehicleEvidence(resolvedVehicle, evidenceContext, { includeNhtsa: false });
+      } catch (err) {
+        executionTrace.log('EVIDENCE_WARN', `Vehicle evidence unavailable: ${err.message}`);
+      }
+    }
+    const relevantTsbs = selectRelevantTsbs(vehicleEvidence, evidenceContext, 12);
+    const oemReferences = (vehicleEvidence.oem?.references || []).slice(0, 6);
+    const compactEvidence = {
+      OEM_FACTORY_REFERENCES: oemReferences.map(x => ({ title: x.title, url: x.url, type: x.evidenceType, facts: x.extractedFacts })),
+      TSB_CANDIDATES: relevantTsbs.slice(0, 5).map(x => ({ title: x.title, url: x.url, facts: x.extractedFacts, relevanceScore: x.relevanceScore })),
+      SOURCES: (vehicleEvidence.sources || []).filter(source => source !== 'NHTSA_ODI' && source !== 'NHTSA ODI')
+    };
 
     let systemPrompt = `You are the expert diagnostic logic unit of SKSK ProTech — a master automotive diagnostician with 25 years of real shop experience.
 Output a single valid JSON object ONLY. No backticks, markdown, or text before/after.
@@ -213,7 +247,7 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
       systemPrompt += `\n\nLABOR: ${JSON.stringify(assemblyData.breakdowns, null, 2)}\nPARTS: ${JSON.stringify(assemblyData.partsRisks, null, 2)}`;
     }
 
-    const userPrompt = `Vehicle: ${vehicle.make || 'N/A'} ${vehicle.model || 'N/A'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | LOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerSymptomContext.join(', ') || 'N/A'} | HIGH-WEIGHT MECHANIC / TECH OBSERVATIONS: ${mechanicContext.join(', ') || 'N/A'}`;
+    const userPrompt = `Vehicle: ${[resolvedVehicle.year, resolvedVehicle.make, resolvedVehicle.model, resolvedVehicle.trim || resolvedVehicle.engine].filter(Boolean).join(' ') || 'N/A'} | Drivetrain: ${resolvedVehicle.driveType || resolvedVehicle.drivetrain || 'unknown'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | LOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerSymptomContext.join(', ') || 'N/A'} | HIGH-WEIGHT MECHANIC / TECH OBSERVATIONS: ${mechanicContext.join(', ') || 'N/A'}\n\nVEHICLE EVIDENCE:\n${JSON.stringify(compactEvidence)}`;
 
     executionTrace.log('GROQ_DISPATCH', 'Sending to Groq...');
 
@@ -247,7 +281,7 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
       recordGuardCatch({
         requestId: executionTrace.traceId,
         route: '/api/diagnose',
-        vehicle,
+        vehicle: resolvedVehicle,
         completedWork: guardResult.completedWork,
         removedItems: guardResult.removed,
         primaryCauseFlagged: !!parsed.primaryCauseFlaggedForReview,
@@ -257,6 +291,17 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
     parsed = guardResult.output;
 
     const finalResult = { ...safeResult(), ...parsed };
+    finalResult.knownIssues = relevantTsbs.slice(0, 3).map(x =>
+      `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`
+    );
+    finalResult.evidence = {
+      oem: oemReferences,
+      tsbs: relevantTsbs.slice(0, 5),
+      sources: compactEvidence.SOURCES,
+      available: !!(oemReferences.length || relevantTsbs.length),
+      drivetrain: resolvedVehicle.driveType || resolvedVehicle.drivetrain || '',
+      warmupStatus: warmupStatus.status
+    };
 
     res.json({ success: true, result: finalResult, traceLog: { traceId: executionTrace.traceId, logs: executionTrace.logs } });
 

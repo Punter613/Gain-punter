@@ -1241,28 +1241,54 @@
         });
 
         // ── VIN DECODE (NHTSA free API) ──
+        function storeActiveVehicle(vehicle) {
+            window.skskActiveVehicle = vehicle || null;
+            try {
+                if (vehicle) sessionStorage.setItem('sksk_active_vehicle', JSON.stringify(vehicle));
+                else sessionStorage.removeItem('sksk_active_vehicle');
+            } catch (_) {}
+        }
+
+        function activeVehicleForVin(vin) {
+            const wanted = String(vin || '').trim().toUpperCase();
+            let vehicle = window.skskActiveVehicle || null;
+            if (!vehicle) {
+                try { vehicle = JSON.parse(sessionStorage.getItem('sksk_active_vehicle') || 'null'); } catch (_) {}
+            }
+            if (!vehicle || String(vehicle.vin || '').trim().toUpperCase() !== wanted) return {};
+            return vehicle;
+        }
+
         async function decodeVin(vin, yearEl, makeEl, modelEl, trimEl) {
             if (!vin || vin.length !== 17) {
                 alert('Enter a valid 17-character VIN first.');
                 return;
             }
             try {
-                const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/${vin}?format=json`);
-                const data = await res.json();
-                const r = data.Results?.[0];
-                if (!r) throw new Error('No results');
-                if (yearEl) document.getElementById(yearEl).value = r.ModelYear || '';
-                if (makeEl) document.getElementById(makeEl).value = r.Make || '';
-                if (modelEl) document.getElementById(modelEl).value = r.Model || '';
-                if (trimEl) document.getElementById(trimEl).value = [r.Trim, r.EngineCylinders ? r.EngineCylinders + 'cyl' : '', r.DisplacementL ? r.DisplacementL + 'L' : ''].filter(Boolean).join(' ');
+                const res = await fetchWithTimeout(`${API_BASE}/api/vehicle/decode`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({ vin })
+                });
+                const data = await readBody(res);
+                if (!res.ok || !data.vehicle) throw new Error(data.error || 'No decode result');
+                const r = data.vehicle;
+                storeActiveVehicle(r);
 
-                // Check for recalls
-                const recallRes = await fetch(`https://api.nhtsa.gov/recalls/recallsByVehicle?make=${encodeURIComponent(r.Make)}&model=${encodeURIComponent(r.Model)}&modelYear=${r.ModelYear}`);
-                const recallData = await recallRes.json();
-                const recallCount = recallData.Count || 0;
+                if (yearEl) document.getElementById(yearEl).value = r.year || '';
+                if (makeEl) document.getElementById(makeEl).value = r.make || '';
+                if (modelEl) document.getElementById(modelEl).value = r.model || '';
+                if (trimEl) document.getElementById(trimEl).value = [r.trim, r.engineCylinders ? r.engineCylinders + 'cyl' : '', r.engine].filter(Boolean).join(' ');
+
+                let recallCount = 0;
+                try {
+                    const recallRes = await fetch(`https://api.nhtsa.gov/recalls/recallsByVehicle?make=${encodeURIComponent(r.make)}&model=${encodeURIComponent(r.model)}&modelYear=${r.year}`);
+                    const recallData = await recallRes.json();
+                    recallCount = recallData.Count || 0;
+                } catch (_) {}
 
                 saveForm();
-                alert(`✅ VIN Decoded!\n${r.ModelYear} ${r.Make} ${r.Model}\n\n⚠️ Open Recalls: ${recallCount}${recallCount > 0 ? '\nCheck NHTSA.gov for details!' : ''}`);
+                alert(`✅ VIN Decoded!\n${r.year} ${r.make} ${r.model}${r.driveType ? ' · ' + r.driveType : ''}\n\n⚠️ Open Recalls: ${recallCount}${recallCount > 0 ? '\nCheck NHTSA.gov for details!' : ''}\n\n📚 Factory/TSB evidence warmup: ${data.evidenceWarmup || 'started'}`);
             } catch (e) {
                 alert('VIN decode failed — check the VIN and try again.');
             }
@@ -1573,10 +1599,11 @@
                         email: document.getElementById('customerEmail').value.trim()
                     },
                     vehicle: {
-                        year: parseInt(document.getElementById('vehicleYear').value.trim(), 10) || 2008,
-                        make: document.getElementById('vehicleMake').value.trim(),
-                        model: document.getElementById('vehicleModel').value.trim(),
-                        trim: document.getElementById('vehicleTrim').value.trim()
+                        ...activeVehicleForVin(document.getElementById('vin').value.trim()),
+                        year: parseInt(document.getElementById('vehicleYear').value.trim(), 10) || activeVehicleForVin(document.getElementById('vin').value.trim()).year || '',
+                        make: document.getElementById('vehicleMake').value.trim() || activeVehicleForVin(document.getElementById('vin').value.trim()).make || '',
+                        model: document.getElementById('vehicleModel').value.trim() || activeVehicleForVin(document.getElementById('vin').value.trim()).model || '',
+                        trim: document.getElementById('vehicleTrim').value.trim() || activeVehicleForVin(document.getElementById('vin').value.trim()).trim || ''
                     },
                     obdCodes: splitList(document.getElementById('obdCodes').value),
                     customerStates: splitLines(document.getElementById('customerStates').value),
@@ -1633,8 +1660,10 @@
                     keywords = [];
                 }
 
+                const diagVin = document.getElementById('diagVin').value.trim();
                 const payload = {
-                    vin: document.getElementById('diagVin').value.trim(),
+                    vin: diagVin,
+                    vehicle: activeVehicleForVin(diagVin),
                     mileage: Number(document.getElementById('diagMileage').value || 0),
                     symptoms: splitLines(document.getElementById('diagSymptoms').value),
                     codes: splitList(document.getElementById('diagCodes').value),
@@ -1821,6 +1850,8 @@
 
             try {
                 localStorage.removeItem('sksk_form');
+                sessionStorage.removeItem('sksk_active_vehicle');
+                window.skskActiveVehicle = null;
             } catch (_) {}
 
             [
