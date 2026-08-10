@@ -1,22 +1,9 @@
 #!/usr/bin/env node
 /**
- * Head-to-head: openai/gpt-oss-20b vs openai/gpt-oss-120b, each run twice -
- * once with response_format: json_object (prompt-based, syntax-only
- * validation - what production currently uses) and once with
- * response_format: json_schema + strict:true (Groq's "Structured Outputs" -
- * constrained decoding, guarantees schema compliance, Groq's own docs call
- * this the preferred mode over json_object).
- *
- * Known risk being tested for, not assumed: a Groq community report
- * (Oct 2025, https://community.groq.com/t/structured-outputs-ignored-by-openai-gpt-oss-120b/687)
- * says gpt-oss-120b silently ignores json_schema and returns free-form text
- * instead of erroring. This script will surface that directly if it's still
- * happening - the json_schema runs' parsed/parseError/schemaFieldsPresent
- * fields make it obvious.
- *
- * CLI: GROQ_API_KEY=your_key node scripts/compare-diagnose-models.js
- * Also exports runComparison() so Render can execute the exact same test
- * with its existing GROQ_API_KEY without exposing that secret.
+ * Head-to-head: openai/gpt-oss-20b vs openai/gpt-oss-120b.
+ * Each model runs once with json_object and once with strict json_schema.
+ * The prompt, test case, temperature, reasoning effort, and token budget are
+ * intentionally unchanged from Round 1 so Round 2 remains directly comparable.
  */
 
 const Groq = require('groq-sdk');
@@ -41,9 +28,10 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
 
 const userPrompt = `Vehicle: KIA Sorento | VIN: KNDJC736385765089 | Mileage: N/A | Codes: P0300, P0171 | Symptoms: Loud audible clunking noise upon deceleration and full steering wheel rotation, possibly indicating a loose or worn-out component in the steering or suspension system, such as a ball joint or tie rod end | Tech Notes: Already replaced both cv axles replaced the lower ball joints on both front and the upper control arm ball joint assembly on both front | Technical Keywords: deceleration clunk, full-lock steering noise, ball joint, tie rod end`;
 
-// Mirrors the prompt's shape. codeExplanations uses an open-ended
-// additionalProperties map since OBD codes vary per vehicle - can't be a
-// fixed enum of keys.
+// Strict Structured Outputs requires every object to set
+// additionalProperties:false. Because this benchmark uses a fixed test case,
+// pin the two supplied OBD codes here. A production schema for arbitrary code
+// sets should be generated dynamically from the request instead.
 const diagnosisJsonSchema = {
   name: 'diagnostic_output',
   strict: true,
@@ -56,7 +44,12 @@ const diagnosisJsonSchema = {
       secondaryCauses: { type: 'array', items: { type: 'string' } },
       codeExplanations: {
         type: 'object',
-        additionalProperties: { type: 'string' }
+        properties: {
+          P0300: { type: 'string' },
+          P0171: { type: 'string' }
+        },
+        required: ['P0300', 'P0171'],
+        additionalProperties: false
       },
       probability: {
         type: 'array',
@@ -113,9 +106,7 @@ async function runModel(groq, model, mode) {
   }
 
   const latencyMs = Date.now() - started;
-  if (requestError) {
-    return { model, mode, latencyMs, requestError };
-  }
+  if (requestError) return { model, mode, latencyMs, requestError };
 
   const content = res?.choices?.[0]?.message?.content || '';
   let parsed = null;
@@ -144,14 +135,14 @@ async function runModel(groq, model, mode) {
 async function runComparison(apiKey = process.env.GROQ_API_KEY) {
   if (!apiKey) throw new Error('GROQ_API_KEY is not configured.');
   const groq = new Groq({ apiKey });
-
   const models = ['openai/gpt-oss-20b', 'openai/gpt-oss-120b'];
   const modes = ['json_object', 'json_schema'];
-
   const results = [];
+
   for (const model of models) {
     for (const mode of modes) {
-      const result = await runModel(groq, model, mode).catch(e => ({ model, mode, error: e.message }));
+      const result = await runModel(groq, model, mode)
+        .catch(e => ({ model, mode, error: e.message }));
       results.push(result);
     }
   }
@@ -159,7 +150,7 @@ async function runComparison(apiKey = process.env.GROQ_API_KEY) {
   return {
     generatedAt: new Date().toISOString(),
     testCase: '2008 Kia Sorento: clunk on deceleration and full steering lock; CV axles, lower ball joints, upper control-arm/ball-joint assemblies already replaced',
-    note: 'Watch model=openai/gpt-oss-120b mode=json_schema closely - Groq community reported this combination silently ignoring the schema and returning free-form text (parseError would be non-null, or schemaFieldsPresent would be false) as of Oct 2025.',
+    note: 'Round 2: strict schema corrected for the fixed P0300/P0171 benchmark case.',
     results
   };
 }
