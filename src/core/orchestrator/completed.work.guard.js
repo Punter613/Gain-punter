@@ -43,7 +43,7 @@ function itemMatchesCompletedWork(item, completedWork) {
   const text = normalize(
     typeof item === 'string'
       ? item
-      : [item?.description, item?.name, item?.part, item?.component, item?.repair, item?.title]
+      : [item?.description, item?.name, item?.part, item?.component, item?.repair, item?.title, item?.cause]
           .filter(Boolean)
           .join(' ')
   );
@@ -65,7 +65,13 @@ function guardJson(data, completedWork) {
   const removed = [];
   const arrayKeys = [
     'repairs', 'repairsNeeded', 'recommendedRepairs', 'recommendations',
-    'parts', 'requiredRepairs', 'repairItems', 'actions'
+    'parts', 'requiredRepairs', 'repairItems', 'actions',
+    // Diagnose-shaped output (src/routes/diagnose.js) uses a different
+    // field set than the estimate pipeline. Missing these meant the guard
+    // was a no-op for every /api/diagnose call - it only ever ran on
+    // /api/full-estimate.
+    'secondaryCauses', 'knownIssues', 'repairSteps', 'proTips',
+    'recommendedTests', 'additionalChecks', 'probability'
   ];
 
   for (const key of arrayKeys) {
@@ -74,13 +80,24 @@ function guardJson(data, completedWork) {
 
     for (const item of data[key]) {
       if (itemMatchesCompletedWork(item, completedWork)) {
-        removed.push(typeof item === 'string' ? item : (item.description || item.name || item.part || item.component || item.repair || item.title || JSON.stringify(item)));
+        removed.push(typeof item === 'string' ? item : (item.description || item.name || item.part || item.component || item.repair || item.title || item.cause || JSON.stringify(item)));
       } else {
         kept.push(item);
       }
     }
 
     data[key] = kept;
+  }
+
+  // primaryCause is a single string, not a list - can't just drop it like
+  // an array item without leaving the diagnosis empty. If the AI's main
+  // answer itself is just already-completed work restated (the exact
+  // failure the guard exists to catch), demote it to a review flag
+  // instead of silently presenting a stale answer as confident fact.
+  if (typeof data.primaryCause === 'string' && itemMatchesCompletedWork(data.primaryCause, completedWork)) {
+    removed.push(data.primaryCause);
+    data.primaryCause = 'AI proposed already-completed work as the primary cause — flagged for mechanic re-evaluation rather than shown as a confident diagnosis.';
+    data.primaryCauseFlaggedForReview = true;
   }
 
   return { data, removed };

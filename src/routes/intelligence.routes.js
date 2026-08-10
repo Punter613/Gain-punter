@@ -250,4 +250,36 @@ router.get('/feedback/mechanic/:mechanicId', async (req, res) => {
   }
 });
 
+// Pending queue: AI outputs the deterministic completed-work-guard caught
+// and filtered, waiting on a mechanic to confirm the catch was real
+// before it counts as a training signal.
+router.get('/guard-catches', async (req, res) => {
+  try {
+    const { listPendingGuardCatches } = require('../core/learning/guard.catch.recorder');
+    const catches = await listPendingGuardCatches(Number(req.query.limit) || 50);
+    return res.json({ status: 'SUCCESS', count: catches.length, catches });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// body: { correct: boolean, mechanicId?: string, note?: string }
+// correct=true feeds the catch into the real learning loop as an
+// AI_HALLUCINATED-weighted example. correct=false marks it a false
+// positive - logged for guard tuning, never trains anything.
+router.post('/guard-catches/:id/verify', async (req, res) => {
+  try {
+    const { correct, mechanicId, note } = req.body;
+    if (typeof correct !== 'boolean') {
+      return res.status(400).json({ error: '"correct" must be true or false' });
+    }
+    const { recordVerification } = require('../core/learning/guard.catch.recorder');
+    const { feedbackLoop } = require('../core/learning');
+    const result = await recordVerification(req.params.id, correct, { mechanicId, note, feedbackLoop });
+    return res.json({ status: 'SUCCESS', ...result });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

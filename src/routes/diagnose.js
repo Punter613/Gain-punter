@@ -6,6 +6,8 @@ const { calibrateProbabilityArray } = require('../core/metrics/index');
 const { getVehicleRiskProfile } = require('../knowledge/vehicle.risk.table');
 const { findKnownPatterns } = require('../knowledge/failure.patterns');
 const { getLocalProcedure } = require('../knowledge/procedure.data');
+const { applyCompletedWorkGuard } = require('../core/orchestrator/completed.work.guard');
+const { recordGuardCatch } = require('../core/learning/guard.catch.recorder');
 
 function extractJSON(text) {
   if (!text) return null;
@@ -224,6 +226,26 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
       console.warn('[Diagnose] JSON extract failed. Raw snippet:', aiText.substring(0, 300));
       parsed = safeResult({ notes: 'AI returned unparseable response — please retry' });
     }
+
+    const guardResult = applyCompletedWorkGuard(parsed, notes);
+    if (guardResult.changed) {
+      executionTrace.log('COMPLETED_WORK_GUARD', `Removed ${guardResult.removed.length} recommendation(s) already completed: ${guardResult.removed.join(' | ')}`);
+      console.log(`[Diagnose] Completed-work guard filtered ${guardResult.removed.length} item(s):`, guardResult.removed);
+
+      // Fire-and-forget: queue for mechanic verification. Never let a
+      // logging/persistence failure here affect the actual diagnosis
+      // response the mechanic is waiting on.
+      recordGuardCatch({
+        requestId: executionTrace.traceId,
+        route: '/api/diagnose',
+        vehicle,
+        completedWork: guardResult.completedWork,
+        removedItems: guardResult.removed,
+        primaryCauseFlagged: !!parsed.primaryCauseFlaggedForReview,
+        model: groqRes?.model || 'openai/gpt-oss-120b'
+      }).catch(err => console.warn('[Diagnose] recordGuardCatch failed (non-fatal):', err.message));
+    }
+    parsed = guardResult.output;
 
     const finalResult = { ...safeResult(), ...parsed };
 
