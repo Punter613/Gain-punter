@@ -1,5 +1,6 @@
 const DEFAULT_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_JSON_MIME_TYPE = 'APPLICATION_JSON';
 
 function isConfigured() {
   return Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
@@ -15,8 +16,9 @@ function resolveModel(requestedModel) {
   return requested;
 }
 
-// Gemini 3.6 Flash uses the current GenerateContent structured-output shape:
-// generationConfig.responseFormat.text.{mimeType,schema}.
+// Gemini 3.6 Flash uses generationConfig.responseFormat.text.{mimeType,schema}.
+// The raw v1beta REST endpoint defines mimeType as an enum. The live API rejects
+// the SDK-friendly literal "application/json" here and expects APPLICATION_JSON.
 // Keep SKSK's provider-neutral response_format contract at the router boundary and
 // translate it here instead of leaking Gemini-specific wire fields into callers.
 function jsonGenerationConfig(responseFormat) {
@@ -26,7 +28,7 @@ function jsonGenerationConfig(responseFormat) {
     return {
       responseFormat: {
         text: {
-          mimeType: 'application/json'
+          mimeType: GEMINI_JSON_MIME_TYPE
         }
       }
     };
@@ -37,7 +39,7 @@ function jsonGenerationConfig(responseFormat) {
     return {
       responseFormat: {
         text: {
-          mimeType: 'application/json',
+          mimeType: GEMINI_JSON_MIME_TYPE,
           ...(schemaConfig.schema ? { schema: schemaConfig.schema } : {})
         }
       }
