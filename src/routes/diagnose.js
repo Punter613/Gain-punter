@@ -189,6 +189,7 @@ RULES:
 - probability likelihoods should roughly sum to 100 across all listed causes; rank by evidence, not by which symptom was mentioned first.
 - All array values must be strings.
 - Never invent a TSB number, recall number, or campaign number — omit rather than fabricate.
+- KNOWN ISSUES / VEHICLE-SPECIFIC CLAIMS: never state that a condition is common, known, frequent, or specific to this model/year/manufacturer unless that claim is directly supported by evidence actually supplied in this prompt. Do not rely on general model memory for knownIssues. If no supplied evidence supports a known-issue claim, return knownIssues as an empty array rather than writing a plausible-sounding one.
 - Never recommend replacing a component the mechanic notes already replaced.
 MULTI-CONDITION REASONING: When the same symptom occurs under two or more distinct operating conditions (e.g. deceleration AND full steering lock, or cold-start AND hard acceleration), analyze what changes mechanically in each condition, then prioritize causes plausible under ALL the reported conditions over causes that only fit one. Consider three hypotheses: (1) one component explains every occurrence, (2) different components in the same system produce a similar-sounding reaction, (3) two unrelated faults happen to sound alike. Use the overlap between conditions to narrow the diagnostic tree rather than anchoring on the most obvious single-condition match.
 - Output raw JSON only.`;
