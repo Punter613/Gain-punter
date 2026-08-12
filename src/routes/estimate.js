@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { runDiagnosticPipeline } = require('../services/pipeline.engine');
-const { groqChat } = require('../services/groq');
+const { aiChat } = require('../services/ai/aiClient');
 const { collectVehicleEvidence, selectRelevantTsbs } = require('../services/vehicle.evidence');
 const { resolveVehicleProfile, waitForVehicleWarmup } = require('../services/vehicle.warmup');
 const { extractCompletedWork } = require('../core/orchestrator/completed.work.guard');
@@ -237,10 +237,11 @@ CONTRACT RULES:
     });
 
     const aiStartedAt = Date.now();
-    const aiRes = await groqChat([
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ], {
+    const aiRes = await aiChat({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
       max_tokens: 2500,
       temperature: 0.15,
       reasoning_effort: 'low',
