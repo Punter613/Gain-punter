@@ -7,6 +7,7 @@ const { getVehicleRiskProfile } = require('../knowledge/vehicle.risk.table');
 const { findKnownPatterns } = require('../knowledge/failure.patterns');
 const { getLocalProcedure } = require('../knowledge/procedure.data');
 const { applyCompletedWorkGuard } = require('../core/orchestrator/completed.work.guard');
+const { applyDiagnosticStageGuard } = require('../core/orchestrator/diagnostic.stage.guard');
 const { recordGuardCatch } = require('../core/learning/guard.catch.recorder');
 const { collectVehicleEvidence, selectRelevantTsbs } = require('../services/vehicle.evidence');
 const { resolveVehicleProfile, waitForVehicleWarmup } = require('../services/vehicle.warmup');
@@ -113,6 +114,16 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     const groqRes = await groqChat([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], { max_tokens: 2500, temperature: 0.15, reasoning_effort: 'low', response_format: { type: 'json_object' } });
     const aiText = typeof groqRes === 'string' ? groqRes : (groqRes?.choices?.[0]?.message?.content || ''); if (!aiText) throw new Error('Groq returned empty response');
     let parsed = extractJSON(aiText); if (!parsed || typeof parsed !== 'object') { console.warn('[Diagnose] JSON extract failed. Raw snippet:', aiText.substring(0, 300)); parsed = safeResult({ notes: 'AI returned unparseable response — please retry' }); }
+
+    // Hard lifecycle boundary: the model may rank causes and propose tests, but
+    // DIAG cannot authorize invasive work. Enforce this deterministically before
+    // completed-work filtering and before anything reaches the UI.
+    const stageGuard = applyDiagnosticStageGuard(parsed);
+    if (stageGuard.changed) {
+      executionTrace.log('DIAGNOSTIC_STAGE_GUARD', `Blocked ${stageGuard.removed.length} repair/invasive action(s) before VERIFY: ${stageGuard.removed.map(x => x.text).join(' | ')}`);
+      console.log(`[Diagnose] Diagnostic-stage guard blocked ${stageGuard.removed.length} item(s):`, stageGuard.removed);
+    }
+    parsed = stageGuard.output;
 
     const completedWorkContext = [...(Array.isArray(notes) ? notes : []), ...(Array.isArray(mechanicNotices) ? mechanicNotices : [])];
     const guardResult = applyCompletedWorkGuard(parsed, completedWorkContext);
