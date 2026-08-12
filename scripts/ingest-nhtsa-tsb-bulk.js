@@ -3,9 +3,9 @@
  * NHTSA bulk TSB ingestion.
  *
  * Downloads NHTSA's official Manufacturer Communications (TSB) bulk flat
- * files, parses them, and upserts into vehicle_tsb_corpus. This is a
- * batch/offline job — NOT called from any live route. Run manually or on
- * a periodic schedule (e.g. monthly GitHub Action), not per-request.
+ * files, parses them, optionally filters to a specific vehicle, and upserts
+ * into vehicle_tsb_corpus. This is a batch/offline job — NOT called from any
+ * live route. Run manually or on a periodic schedule, not per-request.
  */
 
 const axios = require('axios');
@@ -18,8 +18,6 @@ const ALL_CHUNKS = [
   '2015-2019', '2020-2024', '2025-2026'
 ];
 
-// Keep the existing batch size for the diagnostic run. If the first write
-// still fails, the expanded transport diagnostics below will tell us why.
 const BATCH_SIZE = 500;
 
 function selectedChunks() {
@@ -27,6 +25,26 @@ function selectedChunks() {
   if (!filter) return ALL_CHUNKS;
   const wanted = new Set(filter.split(',').map(s => s.trim()));
   return ALL_CHUNKS.filter(c => wanted.has(c));
+}
+
+function normalize(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function vehicleFilter() {
+  const rawYear = String(process.env.NHTSA_TSB_YEAR || '').trim();
+  return {
+    year: rawYear ? parseInt(rawYear, 10) : null,
+    make: normalize(process.env.NHTSA_TSB_MAKE),
+    model: normalize(process.env.NHTSA_TSB_MODEL)
+  };
+}
+
+function matchesVehicleFilter(row, filter) {
+  if (filter.year && row.year !== filter.year) return false;
+  if (filter.make && normalize(row.make) !== filter.make) return false;
+  if (filter.model && normalize(row.model) !== filter.model) return false;
+  return true;
 }
 
 function buildNhtsaVehicleKey(year, make, model) {
@@ -73,7 +91,7 @@ function parseRow(fields, rowIndex) {
   };
 }
 
-function parseTsv(text) {
+function parseTsv(text, filter) {
   const rows = [];
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
@@ -82,7 +100,7 @@ function parseTsv(text) {
     const fields = line.split('\t');
     if (fields.length < 14) continue;
     const row = parseRow(fields, i);
-    if (row) rows.push(row);
+    if (row && matchesVehicleFilter(row, filter)) rows.push(row);
   }
   return rows;
 }
@@ -124,7 +142,7 @@ async function upsertBatch(rows, startIndex) {
   }
 }
 
-async function ingestChunk(chunkLabel) {
+async function ingestChunk(chunkLabel, filter) {
   const url = `${BASE_URL}TSBS_RECEIVED_${chunkLabel}.zip`;
   console.log(`\n=== ${chunkLabel} ===`);
   console.log(`Downloading ${url}`);
@@ -141,8 +159,13 @@ async function ingestChunk(chunkLabel) {
   const text = textEntry.getData().toString('utf8');
   console.log(`Extracted ${textEntry.entryName} (${(text.length / 1024 / 1024).toFixed(1)} MB text)`);
 
-  const rows = parseTsv(text);
-  console.log(`Parsed ${rows.length.toLocaleString()} usable rows`);
+  const rows = parseTsv(text, filter);
+  console.log(`Matched ${rows.length.toLocaleString()} usable rows after vehicle filtering`);
+
+  if (rows.length === 0) {
+    console.log('No matching rows; nothing to upsert for this chunk.');
+    return { chunkLabel, rowsParsed: 0, rowsUpserted: 0 };
+  }
 
   let upserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
@@ -163,14 +186,30 @@ async function ingestChunk(chunkLabel) {
   }
 
   const chunks = selectedChunks();
+  if (chunks.length === 0) {
+    console.error('No valid NHTSA chunks selected.');
+    process.exit(1);
+  }
+
+  const filter = vehicleFilter();
+  if (String(process.env.NHTSA_TSB_YEAR || '').trim() && !filter.year) {
+    console.error(`Invalid NHTSA_TSB_YEAR: ${process.env.NHTSA_TSB_YEAR}`);
+    process.exit(1);
+  }
+
   console.log(`Ingesting ${chunks.length} chunk(s): ${chunks.join(', ')}`);
+  console.log('Vehicle filter:', {
+    year: filter.year || 'ALL',
+    make: filter.make || 'ALL',
+    model: filter.model || 'ALL'
+  });
 
   const results = [];
   let hadFailure = false;
 
   for (const chunk of chunks) {
     try {
-      results.push(await ingestChunk(chunk));
+      results.push(await ingestChunk(chunk, filter));
     } catch (err) {
       hadFailure = true;
       console.error(`\n[${chunk}] FAILED:`, describeError(err));

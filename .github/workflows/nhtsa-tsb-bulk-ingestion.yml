@@ -4,9 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       chunks:
-        description: "NHTSA chunk range/list (example: 2005-2009)"
+        description: "NHTSA chunk range/list (example: 2020-2024)"
         required: true
-        default: "2005-2009"
+        default: "2020-2024"
+        type: string
+      year:
+        description: "Optional model year filter (example: 2022)"
+        required: false
+        default: ""
+        type: string
+      make:
+        description: "Optional make filter (example: HONDA)"
+        required: false
+        default: ""
+        type: string
+      model:
+        description: "Optional model filter (example: ODYSSEY)"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -25,6 +40,9 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       NHTSA_TSB_CHUNKS: ${{ inputs.chunks }}
+      NHTSA_TSB_YEAR: ${{ inputs.year }}
+      NHTSA_TSB_MAKE: ${{ inputs.make }}
+      NHTSA_TSB_MODEL: ${{ inputs.model }}
 
     steps:
       - name: Checkout repository
@@ -44,6 +62,14 @@ jobs:
         run: |
           test -n "$SUPABASE_URL" || { echo "Missing GitHub Actions secret: SUPABASE_URL"; exit 1; }
           test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo "Missing GitHub Actions secret: SUPABASE_SERVICE_ROLE_KEY"; exit 1; }
+
+      - name: Show ingestion scope
+        shell: bash
+        run: |
+          echo "Chunks: $NHTSA_TSB_CHUNKS"
+          echo "Year: ${NHTSA_TSB_YEAR:-ALL}"
+          echo "Make: ${NHTSA_TSB_MAKE:-ALL}"
+          echo "Model: ${NHTSA_TSB_MODEL:-ALL}"
 
       - name: Run NHTSA TSB bulk ingestion
         run: node scripts/ingest-nhtsa-tsb-bulk.js
