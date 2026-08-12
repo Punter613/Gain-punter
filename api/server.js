@@ -71,7 +71,7 @@ app.use(express.urlencoded({ extended: true }));
 // 4. ROUTE INFRASTRUCTURE LANES
 // FIXED: Adjusted all relative paths to look outward into the parent root directory folder ('../src')
 const diagnose = require('../src/routes/diagnose');
-const estimateHeuristic = require('../src/routes/estimate'); 
+const estimateHeuristic = require('../src/routes/estimate');
 const invoice = require('../src/routes/invoice');
 const oemRouter = require('../src/routes/oem');
 const scrapeRouter = require('../src/routes/scrape');
@@ -81,14 +81,24 @@ const jobsRouter = require('../src/routes/jobs');
 const partsLookupRouter = require('../src/routes/partsLookup');
 const fleetRouter = require('../src/routes/fleet');
 const vehicleRouter = require('../src/routes/vehicle');
+const {
+  diagnosisLifecycle,
+  estimateLifecycle,
+  invoiceLifecycle
+} = require('../src/middleware/job.lifecycle.middleware');
 
 app.use('/api/scrape', scrapeRouter);
 app.use('/api/parts', partsRouter);
 app.use('/api/full-estimate', fullEstimateRouter);
 app.use('/api/jobs', jobsRouter);
-app.use('/api/diagnose', diagnose);
-app.use('/api/estimateHeuristic', estimateHeuristic); 
-app.use('/api/invoice', invoice);
+
+// Job lifecycle spine:
+// DIAG -> TEST -> VERIFY -> ESTIMATE -> optional INVOICE.
+// Legacy standalone estimate/invoice calls remain valid when no jobId is supplied.
+app.use('/api/diagnose', diagnosisLifecycle, diagnose);
+app.use('/api/estimateHeuristic', estimateLifecycle, estimateHeuristic);
+app.use('/api/invoice', invoiceLifecycle, invoice);
+
 app.use('/api/translate', require('../src/routes/translate'));
 app.use('/api/parts-lookup', partsLookupRouter);
 app.use('/api/fleet', fleetRouter);
