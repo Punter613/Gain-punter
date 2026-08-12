@@ -27,6 +27,8 @@ const NEGATED_COMPLETION_RE = /\b(?:(?:not|never)\s+(?:been\s+)?(?:replaced|repl
 const FUTURE_WORK_RE = /\b(?:need(?:s)?\s+to|should|recommend(?:ed)?\s+to|plan(?:ned)?\s+to|will|must|requires?\s+to)\s+(?:replace|install|change|swap|renew|repair)\b/i;
 const INSPECTION_ONLY_RE = /\b(?:inspect(?:ed|ing|ion)?|check(?:ed|ing)?|test(?:ed|ing)?|verify|verified|measur(?:e|ed|ing)|observ(?:e|ed|ing)|found|shows?|noted)\b/i;
 const CURRENT_COMPONENT_AFTER_RE = /^(?:was|were|is|are|has|have|had|not|never|did|still|shows?|showing|replace(?:d)?|install(?:ed)?|chang(?:e|ed)|swap(?:ped)?|renew(?:ed)?|repair(?:ed)?|inspect(?:ed|ing)?|check(?:ed|ing)?|test(?:ed|ing)?|verified?)\b/i;
+const REPAIR_ACTION_RE = /\b(?:replace|replacement|install|change|swap|renew|repair|remove|rebuild)\b/i;
+const DIAGNOSTIC_ACTION_RE = /\b(?:inspect|inspection|check|test|verify|verification|measure|measurement|observe|observation|audit|re-?torque|torque\s+(?:check|audit|verification)|confirm|reinspect)\b/i;
 
 function normalize(text) {
   return String(text || '')
@@ -91,8 +93,6 @@ function extractCompletedWork(notices = []) {
       } else if (COMPLETION_RE.test(before)) {
         activeCompletion = true;
       } else if (INSPECTION_ONLY_RE.test(before)) {
-        // "replaced CV axle and inspected upper ball joint" resets the state
-        // before the upper ball joint without undoing the already-completed CV axle.
         activeCompletion = false;
       }
 
@@ -116,14 +116,30 @@ function extractCompletedWork(notices = []) {
   return [...completed];
 }
 
-function itemMatchesCompletedWork(item, completedWork) {
-  const text = normalize(
+function itemText(item) {
+  return normalize(
     typeof item === 'string'
       ? item
       : [item?.description, item?.name, item?.part, item?.component, item?.repair, item?.title, item?.cause]
           .filter(Boolean)
           .join(' ')
   );
+}
+
+function isDiagnosticReinspection(item) {
+  const text = itemText(item);
+  if (!DIAGNOSTIC_ACTION_RE.test(text)) return false;
+
+  // Past-tense history such as "was replaced" is context, not a new repair action.
+  const actionable = text
+    .replace(/\b(?:was|were|has been|have been|had been|recently)\s+(?:replaced|installed|changed|swapped|renewed|repaired)\b/g, '')
+    .replace(/\b(?:previously|already)\s+(?:replaced|installed|changed|swapped|renewed|repaired)\b/g, '');
+
+  return !REPAIR_ACTION_RE.test(actionable);
+}
+
+function itemMatchesCompletedWork(item, completedWork) {
+  const text = itemText(item);
 
   return completedWork.some(work => {
     if (work === 'cv axle') return /\bcv\b.*\baxle|\bcv\b.*\bjoint|constant velocity/.test(text);
@@ -152,7 +168,7 @@ function guardJson(data, completedWork) {
     const kept = [];
 
     for (const item of data[key]) {
-      if (itemMatchesCompletedWork(item, completedWork)) {
+      if (itemMatchesCompletedWork(item, completedWork) && !isDiagnosticReinspection(item)) {
         removed.push(typeof item === 'string' ? item : (item.description || item.name || item.part || item.component || item.repair || item.title || item.cause || JSON.stringify(item)));
       } else {
         kept.push(item);
