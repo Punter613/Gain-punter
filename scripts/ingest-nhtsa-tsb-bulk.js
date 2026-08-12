@@ -91,17 +91,31 @@ function parseRow(fields, rowIndex) {
   };
 }
 
-function parseTsv(text, filter) {
+function parseTsvBuffer(buffer, filter) {
   const rows = [];
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.trim()) continue;
-    const fields = line.split('\t');
-    if (fields.length < 14) continue;
-    const row = parseRow(fields, i);
-    if (row && matchesVehicleFilter(row, filter)) rows.push(row);
+  let start = 0;
+  let rowIndex = 0;
+
+  while (start < buffer.length) {
+    let end = buffer.indexOf(0x0A, start);
+    if (end === -1) end = buffer.length;
+
+    let lineEnd = end;
+    if (lineEnd > start && buffer[lineEnd - 1] === 0x0D) lineEnd--;
+
+    if (lineEnd > start) {
+      const line = buffer.toString('utf8', start, lineEnd);
+      const fields = line.split('\t');
+      if (fields.length >= 14) {
+        const row = parseRow(fields, rowIndex);
+        if (row && matchesVehicleFilter(row, filter)) rows.push(row);
+      }
+    }
+
+    rowIndex++;
+    start = end + 1;
   }
+
   return rows;
 }
 
@@ -156,10 +170,10 @@ async function ingestChunk(chunkLabel, filter) {
   if (entries.length === 0) throw new Error('Zip contained no files');
 
   const textEntry = entries.find(e => /\.(txt|csv)$/i.test(e.entryName)) || entries[0];
-  const text = textEntry.getData().toString('utf8');
-  console.log(`Extracted ${textEntry.entryName} (${(text.length / 1024 / 1024).toFixed(1)} MB text)`);
+  const data = textEntry.getData();
+  console.log(`Extracted ${textEntry.entryName} (${(data.length / 1024 / 1024).toFixed(1)} MB)`);
 
-  const rows = parseTsv(text, filter);
+  const rows = parseTsvBuffer(data, filter);
   console.log(`Matched ${rows.length.toLocaleString()} usable rows after vehicle filtering`);
 
   if (rows.length === 0) {
