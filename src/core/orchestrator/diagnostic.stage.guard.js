@@ -6,7 +6,7 @@
  * diagnosis into repair authorization before TEST -> VERIFY.
  */
 
-const FORBIDDEN_ACTION_RE = /\b(?:replace|replacement|remove|disconnect|disassemble|teardown|tear\s*down|install|repair|rebuild|adjust|align|alignment|clean\s+and\s+(?:grease|lubricate)|re-?grease|grease\b|lubricate\b)\b/i;
+const FORBIDDEN_ACTION_RE = /\b(?:replace|replacement|remove|disconnect|disassemble|teardown|tear\s*down|install|repair|rebuild|adjust|align|alignment|clean\s+and\s+(?:grease|lubricate)|re-?grease|grease\b|greasing\b|lubricate\b|lubricating\b)\b/i;
 const SAFE_ACTION_RE = /\b(?:inspect|inspection|check|test|verify|verification|measure|measurement|observe|observation|audit|confirm|reinspect|monitor|compare|listen|look|pry|torque\s+(?:check|audit|verification)|check\s+torque)\b/i;
 
 function textOf(item) {
@@ -21,13 +21,78 @@ function isForbiddenDiagnosticAction(item) {
   return FORBIDDEN_ACTION_RE.test(text);
 }
 
-function sanitizeArray(items, removed, key) {
+function cleanFragment(fragment) {
+  return String(fragment || '')
+    .replace(/^\s*(?:and|then|or|but)\s+/i, '')
+    .replace(/^\s*[,;:\-–—]+\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Preserve safe diagnostic clauses when the model mixes them with a repair
+ * authorization in the same sentence. Example:
+ *   "Check slip yoke for binding, greasing or replacing as needed."
+ * becomes:
+ *   "Check slip yoke for binding."
+ *
+ * If a forbidden action is inseparable from the diagnostic instruction, the
+ * whole item is dropped rather than trying to rewrite mechanical meaning.
+ */
+function sanitizeText(text) {
+  const original = String(text || '').trim();
+  if (!original || !FORBIDDEN_ACTION_RE.test(original)) {
+    return { text: original, changed: false, removed: false };
+  }
+
+  const fragments = original
+    .split(/(?<=[.!?;])\s+|\s*;\s*|\s*,\s*(?=(?:and\s+|then\s+|or\s+)?(?:replace|replacement|remove|disconnect|disassemble|teardown|tear\s*down|install|repair|rebuild|adjust|align|alignment|clean|re-?grease|grease|greasing|lubricate|lubricating)\b)/i)
+    .map(cleanFragment)
+    .filter(Boolean);
+
+  const safe = fragments.filter(fragment => !FORBIDDEN_ACTION_RE.test(fragment));
+  const safeDiagnostic = safe.filter(fragment => SAFE_ACTION_RE.test(fragment));
+  const kept = safeDiagnostic.length ? safeDiagnostic : safe;
+
+  if (!kept.length) return { text: '', changed: true, removed: true };
+
+  let sanitized = kept.join(' ').replace(/\s+/g, ' ').trim();
+  if (sanitized && !/[.!?]$/.test(sanitized)) sanitized += '.';
+
+  // Never return a rewritten string that still contains a forbidden action.
+  if (!sanitized || FORBIDDEN_ACTION_RE.test(sanitized)) {
+    return { text: '', changed: true, removed: true };
+  }
+
+  return { text: sanitized, changed: sanitized !== original, removed: false };
+}
+
+function withText(item, sanitizedText) {
+  if (typeof item === 'string') return sanitizedText;
+  if (!item || typeof item !== 'object') return sanitizedText;
+  if (Object.prototype.hasOwnProperty.call(item, 'description')) return { ...item, description: sanitizedText };
+  if (Object.prototype.hasOwnProperty.call(item, 'name')) return { ...item, name: sanitizedText };
+  if (Object.prototype.hasOwnProperty.call(item, 'test')) return { ...item, test: sanitizedText };
+  if (Object.prototype.hasOwnProperty.call(item, 'step')) return { ...item, step: sanitizedText };
+  if (Object.prototype.hasOwnProperty.call(item, 'action')) return { ...item, action: sanitizedText };
+  return sanitizedText;
+}
+
+function sanitizeArray(items, removed, rewritten, key) {
   if (!Array.isArray(items)) return [];
   const kept = [];
   for (const item of items) {
-    const text = textOf(item);
-    if (isForbiddenDiagnosticAction(item)) {
-      removed.push({ key, text });
+    const original = textOf(item).trim();
+    if (!original) continue;
+
+    const result = sanitizeText(original);
+    if (result.removed) {
+      removed.push({ key, text: original });
+      continue;
+    }
+    if (result.changed) {
+      rewritten.push({ key, before: original, after: result.text });
+      kept.push(withText(item, result.text));
       continue;
     }
     kept.push(item);
@@ -36,33 +101,37 @@ function sanitizeArray(items, removed, key) {
 }
 
 function applyDiagnosticStageGuard(result) {
-  if (!result || typeof result !== 'object') return { output: result, removed: [], changed: false };
+  if (!result || typeof result !== 'object') return { output: result, removed: [], rewritten: [], changed: false };
 
   const output = { ...result };
   const removed = [];
+  const rewritten = [];
 
-  // repairSteps may exist for legacy UI compatibility, but at DIAG stage they
-  // may contain inspection/measurement steps only.
-  output.repairSteps = sanitizeArray(output.repairSteps, removed, 'repairSteps');
-  output.recommendedTests = sanitizeArray(output.recommendedTests, removed, 'recommendedTests');
-  output.additionalChecks = sanitizeArray(output.additionalChecks, removed, 'additionalChecks');
-  output.proTips = sanitizeArray(output.proTips, removed, 'proTips');
+  // repairSteps remains for legacy UI compatibility, but at DIAG stage it may
+  // contain inspection/measurement/verification steps only.
+  output.repairSteps = sanitizeArray(output.repairSteps, removed, rewritten, 'repairSteps');
+  output.recommendedTests = sanitizeArray(output.recommendedTests, removed, rewritten, 'recommendedTests');
+  output.additionalChecks = sanitizeArray(output.additionalChecks, removed, rewritten, 'additionalChecks');
+  output.proTips = sanitizeArray(output.proTips, removed, rewritten, 'proTips');
 
-  if (removed.length) {
+  if (removed.length || rewritten.length) {
     output.diagnosticStageGuard = {
       enforced: true,
       removedCount: removed.length,
+      rewrittenCount: rewritten.length,
       reason: 'Repair/invasive actions are blocked until TEST -> VERIFY.'
     };
-    output.notes = `${output.notes || ''} Diagnostic stage guard removed ${removed.length} repair/invasive action${removed.length === 1 ? '' : 's'} pending verification.`.trim();
+    const changes = removed.length + rewritten.length;
+    output.notes = `${output.notes || ''} Diagnostic stage guard sanitized ${changes} repair/invasive action${changes === 1 ? '' : 's'} pending verification.`.trim();
   }
 
-  return { output, removed, changed: removed.length > 0 };
+  return { output, removed, rewritten, changed: removed.length > 0 || rewritten.length > 0 };
 }
 
 module.exports = {
   applyDiagnosticStageGuard,
   isForbiddenDiagnosticAction,
+  sanitizeText,
   FORBIDDEN_ACTION_RE,
   SAFE_ACTION_RE
 };
