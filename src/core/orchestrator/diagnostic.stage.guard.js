@@ -6,7 +6,7 @@
  * diagnosis into repair authorization before TEST -> VERIFY.
  */
 
-const FORBIDDEN_ACTION_RE = /\b(?:replace|replacement|remove|disconnect|disassemble|teardown|tear\s*down|install|repair|rebuild|adjust|align|alignment|clean\s+and\s+(?:grease|lubricate)|re-?grease|grease\b|greasing\b|lubricate\b|lubricating\b)\b/i;
+const FORBIDDEN_ACTION_RE = /\b(?:replace|replacement|remove|disconnect|disassemble|teardown|tear\s*down|install|repair|rebuild|adjust|align|alignment|clean\s+and\s+(?:grease|lubricate)|re-?grease|greasing\b|lubricate\b|lubricating\b|(?:apply|add|pack|use)\s+(?:high[-\s]?temp(?:erature)?\s+|special\s+|spline\s+)?grease\b)\b/i;
 const SAFE_ACTION_RE = /\b(?:inspect|inspection|check|test|verify|verification|measure|measurement|observe|observation|audit|confirm|reinspect|monitor|compare|listen|look|pry|torque\s+(?:check|audit|verification)|check\s+torque)\b/i;
 
 function textOf(item) {
@@ -46,7 +46,7 @@ function sanitizeText(text) {
   }
 
   const fragments = original
-    .split(/(?<=[.!?;])\s+|\s*;\s*|\s*,\s*(?=(?:and\s+|then\s+|or\s+)?(?:replace|replacement|remove|disconnect|disassemble|teardown|tear\s*down|install|repair|rebuild|adjust|align|alignment|clean|re-?grease|grease|greasing|lubricate|lubricating)\b)/i)
+    .split(/(?<=[.!?;])\s+|\s*;\s*|\s*,\s*(?=(?:and\s+|then\s+|or\s+)?(?:replace|replacement|remove|disconnect|disassemble|teardown|tear\s*down|install|repair|rebuild|adjust|align|alignment|clean|re-?grease|greasing|lubricate|lubricating|apply\s+grease|add\s+grease|pack\s+grease|use\s+grease)\b)/i)
     .map(cleanFragment)
     .filter(Boolean);
 
