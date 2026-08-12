@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { runDiagnosticPipeline } = require('../services/pipeline.engine');
-const { groqChat } = require('../services/groq');
+const { aiChat } = require('../services/ai/aiClient');
 const { calibrateProbabilityArray } = require('../core/metrics/index');
 const { getVehicleRiskProfile } = require('../knowledge/vehicle.risk.table');
 const { findKnownPatterns } = require('../knowledge/failure.patterns');
@@ -111,7 +111,13 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     const userPrompt = `Vehicle: ${[resolvedVehicle.year, resolvedVehicle.make, resolvedVehicle.model, resolvedVehicle.trim || resolvedVehicle.engine].filter(Boolean).join(' ') || 'N/A'} | Drivetrain: ${resolvedVehicle.driveType || resolvedVehicle.drivetrain || 'unknown'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | LOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerSymptomContext.join(', ') || 'N/A'} | HIGH-WEIGHT MECHANIC / TECH OBSERVATIONS: ${mechanicContext.join(', ') || 'N/A'}\n\nVEHICLE EVIDENCE:\n${JSON.stringify(compactEvidence)}`;
 
     executionTrace.log('GROQ_DISPATCH', 'Sending to Groq...');
-    const groqRes = await groqChat([{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], { max_tokens: 2500, temperature: 0.15, reasoning_effort: 'low', response_format: { type: 'json_object' } });
+    const groqRes = await aiChat({
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+      max_tokens: 2500,
+      temperature: 0.15,
+      reasoning_effort: 'low',
+      response_format: { type: 'json_object' }
+    });
     const aiText = typeof groqRes === 'string' ? groqRes : (groqRes?.choices?.[0]?.message?.content || ''); if (!aiText) throw new Error('Groq returned empty response');
     let parsed = extractJSON(aiText); if (!parsed || typeof parsed !== 'object') { console.warn('[Diagnose] JSON extract failed. Raw snippet:', aiText.substring(0, 300)); parsed = safeResult({ notes: 'AI returned unparseable response — please retry' }); }
 
