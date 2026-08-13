@@ -1,0 +1,120 @@
+name: Lemon Targeted Manufacturer Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "Vehicle year"
+        required: true
+        default: "2008"
+        type: string
+      make:
+        description: "Vehicle make"
+        required: true
+        default: "KIA"
+        type: string
+      model:
+        description: "Vehicle model"
+        required: true
+        default: "SORENTO"
+        type: string
+      trim:
+        description: "Trim (optional)"
+        required: false
+        default: ""
+        type: string
+      engine:
+        description: "Engine (optional but recommended)"
+        required: false
+        default: "3.8L"
+        type: string
+      scope:
+        description: "Evidence scope"
+        required: true
+        default: "diagnosis"
+        type: choice
+        options:
+          - diagnosis
+          - repair
+          - all
+      symptoms:
+        description: "Customer/mechanic symptom text"
+        required: false
+        default: ""
+        type: string
+      dtcs:
+        description: "Comma-separated DTCs (example: P0300,P0171)"
+        required: false
+        default: ""
+        type: string
+      mechanic_notices:
+        description: "Comma-separated mechanic observations"
+        required: false
+        default: ""
+        type: string
+      max_pages:
+        description: "Maximum Lemon pages to crawl"
+        required: true
+        default: "80"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lemon-targeted-evidence-${{ inputs.year }}-${{ inputs.make }}-${{ inputs.model }}
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    name: Target Lemon manufacturer evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LEMON_YEAR: ${{ inputs.year }}
+      LEMON_MAKE: ${{ inputs.make }}
+      LEMON_MODEL: ${{ inputs.model }}
+      LEMON_TRIM: ${{ inputs.trim }}
+      LEMON_ENGINE: ${{ inputs.engine }}
+      LEMON_SCOPE: ${{ inputs.scope }}
+      LEMON_SYMPTOMS: ${{ inputs.symptoms }}
+      LEMON_DTCS: ${{ inputs.dtcs }}
+      LEMON_MECHANIC_NOTICES: ${{ inputs.mechanic_notices }}
+      LEMON_MAX_PAGES: ${{ inputs.max_pages }}
+      LEMON_OUTPUT_PATH: artifacts/lemon-targeted-evidence.json
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify normalization layer
+        run: node --test tests/automotive.normalization.test.js
+
+      - name: Show scrape scope
+        shell: bash
+        run: |
+          echo "Vehicle: $LEMON_YEAR $LEMON_MAKE $LEMON_MODEL $LEMON_ENGINE"
+          echo "Scope: $LEMON_SCOPE"
+          echo "DTCs: ${LEMON_DTCS:-NONE}"
+          echo "Symptoms: ${LEMON_SYMPTOMS:-NONE}"
+          echo "Max pages: $LEMON_MAX_PAGES"
+
+      - name: Scrape targeted Lemon evidence
+        run: node scripts/scrape-lemon-targeted-evidence.js
+
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemon-${{ inputs.year }}-${{ inputs.make }}-${{ inputs.model }}-${{ inputs.scope }}
+          path: artifacts/lemon-targeted-evidence.json
+          if-no-files-found: error
+          retention-days: 14
