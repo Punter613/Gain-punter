@@ -23,7 +23,10 @@ const TRIGGER_PATTERNS = [
       /\bfull[- ]?(?:lock|turn)\b/i,
       /\bturn(?:ing)?\s+(?:left|right)\b/i,
       /\bwhile\s+turning\b/i,
-      /\bsteer(?:ing)?\b/i,
+      /\bwhen\s+turning\b/i,
+      /\bsteer(?:ing)?\s+(?:left|right)\b/i,
+      /\bwhile\s+steer(?:ing)?\b/i,
+      /\bwhen\s+steer(?:ing)?\b/i,
       /\block[- ]to[- ]lock\b/i
     ]
   },
@@ -31,8 +34,8 @@ const TRIGGER_PATTERNS = [
     key: 'braking',
     patterns: [
       /\bbrak(?:e|ing)\b/i,
-      /\bwhen\s+stopping\b/i,
-      /\bwhile\s+stopping\b/i,
+      /\bbrake\s+pedal\b/i,
+      /\b(?:press|apply|step)(?:ing|ied)?\s+(?:on\s+)?(?:the\s+)?brake(?:\s+pedal)?\b/i,
       /\bunder\s+braking\b/i
     ]
   },
@@ -55,10 +58,11 @@ const CANONICAL_TRIGGER_ALIASES = {
     'acceleration', 'accelerating', 'under throttle', 'on throttle', 'under load'
   ],
   turning: [
-    'turning', 'steering', 'full steering turn', 'full lock', 'steering lock', 'lock to lock'
+    'turning', 'full steering turn', 'full lock', 'steering lock', 'lock to lock',
+    'turning left', 'turning right', 'steering left', 'steering right'
   ],
   braking: [
-    'braking', 'brake applied', 'stopping', 'under braking'
+    'braking', 'brake applied', 'brake pedal applied', 'under braking'
   ],
   road_impact: [
     'road impact', 'bump impact', 'pothole', 'rough road'
