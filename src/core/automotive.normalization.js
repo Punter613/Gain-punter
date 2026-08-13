@@ -22,7 +22,7 @@ const CONDITION_ALIASES = {
   hot: ['hot', 'warm', 'at operating temperature'],
   idle: ['idle', 'idling', 'at a stop'],
   steady_cruise: ['steady cruise', 'cruising', 'light throttle', 'highway cruise'],
-  full_lock: ['full lock', 'steering lock', 'wheel turned all the way', 'turned all the way'],
+  full_lock: ['full lock', 'full steering lock', 'steering lock', 'wheel turned all the way', 'turned all the way'],
   highway_speed: ['highway', 'highway speed', 'at speed'],
   low_speed: ['low speed', 'parking lot', 'slow turn'],
   reverse: ['reverse', 'backing up'],
@@ -119,20 +119,34 @@ function extractCanonicalProfile(input = {}) {
   return { dtcs, sounds, conditions, systems, triggers, canonicalTerms };
 }
 
+function sectionPathText(url) {
+  if (!url) return '';
+  try {
+    const pathname = decodeURIComponent(new URL(url).pathname);
+    const parts = pathname.split('/').filter(Boolean);
+    const repairIndex = parts.findIndex(part => /^repair and diagnosis$/i.test(part));
+    const sectionParts = repairIndex >= 0 ? parts.slice(repairIndex + 1) : parts.slice(-3);
+    return sectionParts.join(' ');
+  } catch (_) {
+    return '';
+  }
+}
+
 function classifyManualSection(input = {}) {
-  const titleHeadingsUrl = normalizeText([
+  // Do not classify from Lemon's common parent folder "Repair and Diagnosis".
+  // Every page inherits that path and it would otherwise make every page look DIAGNOSIS.
+  const titleHeadingsPath = normalizeText([
     input.title,
     ...(Array.isArray(input.headings) ? input.headings : []),
-    input.url
+    sectionPathText(input.url)
   ].filter(Boolean).join(' '));
   const body = normalizeText(input.bodyText || '').slice(0, 12000);
-  const weightedText = `${titleHeadingsUrl} ${titleHeadingsUrl} ${body}`;
 
   const scores = new Map();
   for (const [type, pattern] of SECTION_PATTERNS) {
     let score = 0;
-    if (pattern.test(titleHeadingsUrl)) score += 3;
-    if (pattern.test(weightedText)) score += 1;
+    if (pattern.test(titleHeadingsPath)) score += 3;
+    if (pattern.test(body)) score += 1;
     if (score) scores.set(type, score);
   }
 
@@ -142,24 +156,22 @@ function classifyManualSection(input = {}) {
 
 function buildCanonicalSearchTerms(vehicle = {}, context = {}) {
   const profile = extractCanonicalProfile(context);
-  const terms = new Set(profile.canonicalTerms);
 
-  for (const value of [vehicle.make, vehicle.model, vehicle.trim, vehicle.engine]) {
-    const normalized = normalizeText(value);
-    if (normalized) terms.add(normalized);
-  }
+  // Vehicle identity belongs to applicability/path resolution, not page ranking.
+  // Raw complaint words are intentionally not promoted independently because
+  // generic tokens such as "release" can create false matches like
+  // "accelerator release" -> "Fuel Pressure Release".
+  const terms = [...profile.canonicalTerms];
 
-  const rawContext = cleanText([
-    context.symptoms,
-    ...(Array.isArray(context.mechanicNotices) ? context.mechanicNotices : [context.mechanicNotices]),
-    ...(Array.isArray(context.obdCodes) ? context.obdCodes : [context.obdCodes])
-  ].filter(Boolean).join(' '));
+  const vehicleTerms = [vehicle.make, vehicle.model, vehicle.trim, vehicle.engine]
+    .map(normalizeText)
+    .filter(Boolean);
 
-  for (const token of normalizeText(rawContext).split(' ')) {
-    if (token.length >= 4) terms.add(token);
-  }
-
-  return { profile, terms: [...terms].filter(Boolean) };
+  return {
+    profile,
+    terms: [...new Set(terms)].filter(Boolean),
+    vehicleTerms: [...new Set(vehicleTerms)]
+  };
 }
 
 module.exports = {
@@ -168,5 +180,6 @@ module.exports = {
   extractDtcs,
   extractCanonicalProfile,
   classifyManualSection,
-  buildCanonicalSearchTerms
+  buildCanonicalSearchTerms,
+  sectionPathText
 };
