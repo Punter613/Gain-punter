@@ -3,6 +3,7 @@ const TRIGGER_PATTERNS = [
     key: 'deceleration',
     patterns: [
       /\breleas(?:e|ed|ing)\s+(?:the\s+)?(?:gas|accelerator|throttle)\b/i,
+      /\b(?:gas|accelerator|throttle)\s+(?:is|was|gets?|got)\s+releas(?:ed|ing)\b/i,
       /\blet(?:ting)?\s+off\s+(?:the\s+)?(?:gas|accelerator|throttle)\b/i,
       /\blift(?:ing)?\s+off\s+(?:the\s+)?(?:gas|accelerator|throttle)\b/i,
       /\bdeceler(?:ate|ating|ation)\b/i,
