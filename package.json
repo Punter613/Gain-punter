@@ -2,10 +2,10 @@
   "name": "skskprotech-rebuild",
   "version": "1.0.0",
   "description": "SKSK ProTech - Rebuilt scaffold (backend + PWA)",
-  "main": "api/server.js",
+  "main": "api/server.route-wiring.js",
   "scripts": {
-    "start": "node api/server.js",
-    "dev": "nodemon api/server.js",
+    "start": "node api/server.route-wiring.js",
+    "dev": "nodemon api/server.route-wiring.js",
     "lint": "echo \"no linter configured\"",
     "test": "echo \"no tests configured\""
   },
