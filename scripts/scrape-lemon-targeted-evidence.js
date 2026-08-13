@@ -169,11 +169,10 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
 
     const kind = semanticKind(term, queryProfile);
 
-    // A broad system word found only in the full body is not enough to qualify a page.
-    // Lemon body text includes global navigation/sidebar content that can mention systems
-    // unrelated to the actual page subject. Preserve the page text, but do not promote
-    // navigation chrome into retrieval ground truth.
-    if (kind === 'system' && locations.every(location => location === 'body')) continue;
+    // Broad system context in a parent path or page chrome is navigation context,
+    // not proof that the leaf page is about that system. A system term must be in
+    // the actual page title or heading to qualify the page on its own.
+    if (kind === 'system' && !locations.some(location => location === 'title' || location === 'heading')) continue;
 
     const baseWeight = semanticMatchWeight(term, queryProfile, sectionType);
     let locationMultiplier = 0;
@@ -207,6 +206,16 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
     matchedTerms: uniqueMatchedTerms.slice(0, 60),
     matchLocations
   };
+}
+
+function exactDtcLinkPriority(link, queryProfile = {}) {
+  const haystack = normalizeText(`${link.text || ''} ${decodeURIComponentSafe(link.url || '')}`);
+  return (queryProfile.dtcs || []).some(code => haystack.includes(normalizeText(code))) ? 10000 : 0;
+}
+
+function decodeURIComponentSafe(value) {
+  try { return decodeURIComponent(value); }
+  catch (_) { return String(value || ''); }
 }
 
 function normalizedRetrievalKey(page, relevance) {
@@ -269,16 +278,16 @@ async function main() {
   console.log(`Resolved Lemon path (${resolution.method}): ${baseUrl}`);
   console.log('Canonical query profile:', queryProfile);
 
-  const queue = [{ url: baseUrl, depth: 0, priority: 1000 }];
+  const queue = [{ url: baseUrl, depth: 0, priority: 1000, exactDtc: false }];
   const queued = new Set([baseUrl]);
   const visited = new Set();
   const candidatePages = [];
 
   while (queue.length && visited.size < MAX_PAGES) {
-    // Prefer breadth first so one attractive subsystem cannot consume the entire crawl
-    // budget before another independent DTC/symptom lane is explored. Relevance breaks
-    // ties within the same depth.
-    queue.sort((a, b) => a.depth - b.depth || b.priority - a.priority);
+    // Exact requested DTC descendants are a protected retrieval lane. Once an index
+    // exposes P0300/P0171 links, follow those before spending the remaining budget on
+    // broad siblings. Otherwise traverse breadth-first and use relevance as a tie-breaker.
+    queue.sort((a, b) => Number(b.exactDtc) - Number(a.exactDtc) || a.depth - b.depth || b.priority - a.priority);
     const next = queue.shift();
     if (!next || visited.has(next.url) || next.depth > MAX_DEPTH) continue;
     visited.add(next.url);
@@ -292,8 +301,14 @@ async function main() {
         if (visited.has(link.url) || queued.has(link.url) || next.depth + 1 > MAX_DEPTH) continue;
         const linkPage = { title: link.text, headings: [], bodyText: link.text, url: link.url };
         const linkRelevance = scorePage(linkPage, terms, scope, queryProfile);
+        const dtcPriority = exactDtcLinkPriority(link, queryProfile);
         queued.add(link.url);
-        queue.push({ url: link.url, depth: next.depth + 1, priority: linkRelevance.score });
+        queue.push({
+          url: link.url,
+          depth: next.depth + 1,
+          priority: linkRelevance.score + dtcPriority,
+          exactDtc: dtcPriority > 0
+        });
       }
     } catch (error) {
       console.warn(`Fetch failed: ${next.url}: ${error.message}`);
