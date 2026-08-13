@@ -125,7 +125,17 @@ function getInput() {
   return { vehicle, context, scope };
 }
 
-function scorePage(page, searchTerms, scope) {
+function semanticMatchWeight(term, queryProfile, sectionType) {
+  const normalized = normalizeText(term);
+  if (queryProfile.dtcs.some(code => normalizeText(code) === normalized)) return 28;
+  if (queryProfile.triggers.includes(term)) return 18;
+  if (queryProfile.sounds.includes(term)) return 16;
+  if (queryProfile.conditions.includes(term)) return 14;
+  if (queryProfile.systems.includes(term)) return sectionType === 'SPEC' ? 4 : 8;
+  return 5;
+}
+
+function scorePage(page, searchTerms, scope, queryProfile = {}) {
   const title = normalizeText(page.title);
   const headings = normalizeText((page.headings || []).join(' '));
   const url = normalizeText(page.url);
@@ -133,30 +143,63 @@ function scorePage(page, searchTerms, scope) {
   const sectionType = classifyManualSection(page);
   const profile = extractCanonicalProfile(page);
   const matchedTerms = [];
-  let score = SCOPE_SECTION_WEIGHTS[scope][sectionType] || 0;
+  let semanticScore = 0;
 
   for (const term of searchTerms) {
     const normalized = normalizeText(term);
     if (!normalized || normalized.length < 3) continue;
-    if (title.includes(normalized)) { score += 15; matchedTerms.push(term); }
-    if (headings.includes(normalized)) { score += 12; matchedTerms.push(term); }
-    if (url.includes(normalized)) { score += 8; matchedTerms.push(term); }
-    if (body.includes(normalized)) { score += 2; matchedTerms.push(term); }
+
+    const baseWeight = semanticMatchWeight(term, queryProfile, sectionType);
+    let locationMultiplier = 0;
+    if (title.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 1.0);
+    if (headings.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 0.9);
+    if (url.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 0.75);
+    if (body.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 0.25);
+
+    if (locationMultiplier > 0) {
+      semanticScore += Math.round(baseWeight * locationMultiplier);
+      matchedTerms.push(term);
+    }
   }
+
+  const uniqueMatchedTerms = [...new Set(matchedTerms)];
+  const matchedTrigger = uniqueMatchedTerms.some(term => queryProfile.triggers?.includes(term));
+  const matchedSound = uniqueMatchedTerms.some(term => queryProfile.sounds?.includes(term));
+  const matchedDtc = uniqueMatchedTerms.some(term => queryProfile.dtcs?.some(code => normalizeText(code) === normalizeText(term)));
+
+  // Reward relationships that actually describe the complaint rather than a broad system alone.
+  if (matchedTrigger && matchedSound) semanticScore += 18;
+  if (matchedDtc && ['DIAGNOSIS', 'TEST'].includes(sectionType)) semanticScore += 12;
+
+  // Scope preference is useful only after a page has a real semantic match.
+  const scopeScore = uniqueMatchedTerms.length ? (SCOPE_SECTION_WEIGHTS[scope][sectionType] || 0) : 0;
+  const score = semanticScore + scopeScore;
 
   return {
     score,
+    semanticScore,
+    scopeScore,
     sectionType,
     profile,
-    matchedTerms: [...new Set(matchedTerms)].slice(0, 60)
+    matchedTerms: uniqueMatchedTerms.slice(0, 60)
   };
 }
 
-function buildOutputPage(page, relevance) {
+function normalizedRetrievalKey(page, relevance) {
+  const title = normalizeText(page.title)
+    .replace(/\b\d{4}\s+(kia|honda|ford|chevrolet|toyota|nissan|hyundai)\b.*$/i, '')
+    .replace(/\bservice manual\b.*$/i, '')
+    .trim();
+  return `${relevance.sectionType}|${title}`;
+}
+
+function buildOutputPage(candidate) {
+  const { page, relevance, alternates = [] } = candidate;
   return {
     sourceEvidence: {
       source: 'LEMON_MANUALS',
       sourceUrl: page.url,
+      alternateSourceUrls: alternates.map(item => item.page.url).filter(url => url !== page.url),
       title: page.title,
       headings: page.headings,
       bodyText: page.bodyText,
@@ -165,12 +208,15 @@ function buildOutputPage(page, relevance) {
     derivedIndex: {
       sectionType: relevance.sectionType,
       relevanceScore: relevance.score,
+      semanticScore: relevance.semanticScore,
+      scopeScore: relevance.scopeScore,
       matchedTerms: relevance.matchedTerms,
       dtcs: relevance.profile.dtcs,
       sounds: relevance.profile.sounds,
       conditions: relevance.profile.conditions,
       systems: relevance.profile.systems,
-      canonicalTerms: relevance.profile.canonicalTerms
+      canonicalTerms: relevance.profile.canonicalTerms,
+      sourceVariantCount: 1 + alternates.length
     }
   };
 }
@@ -211,13 +257,13 @@ async function main() {
 
     try {
       const page = { ...extractPage(await fetchHtml(next.url), next.url), url: next.url };
-      const relevance = scorePage(page, terms, scope);
+      const relevance = scorePage(page, terms, scope, queryProfile);
       candidatePages.push({ page, relevance, depth: next.depth });
 
       for (const link of page.links) {
         if (visited.has(link.url) || queued.has(link.url) || next.depth + 1 > MAX_DEPTH) continue;
         const linkPage = { title: link.text, headings: [], bodyText: link.text, url: link.url };
-        const linkRelevance = scorePage(linkPage, terms, scope);
+        const linkRelevance = scorePage(linkPage, terms, scope, queryProfile);
         queued.add(link.url);
         queue.push({ url: link.url, depth: next.depth + 1, priority: linkRelevance.score });
       }
@@ -226,20 +272,37 @@ async function main() {
     }
   }
 
+  // First collapse byte-identical evidence pages.
   const byHash = new Map();
   for (const candidate of candidatePages) {
-    // A section-type preference alone is not evidence of relevance to the complaint.
-    // Require at least one actual DTC/sound/condition/system term match.
     if (!candidate.relevance.matchedTerms.length) continue;
     const hash = contentHash(candidate.page);
     const current = byHash.get(hash);
     if (!current || candidate.relevance.score > current.relevance.score) byHash.set(hash, candidate);
   }
 
-  const selected = [...byHash.values()]
+  // Then collapse retrieval duplicates by normalized title + section while preserving
+  // every distinct manufacturer URL as provenance on the winning result.
+  const byRetrievalKey = new Map();
+  for (const candidate of byHash.values()) {
+    const key = normalizedRetrievalKey(candidate.page, candidate.relevance);
+    const current = byRetrievalKey.get(key);
+    if (!current) {
+      byRetrievalKey.set(key, { ...candidate, alternates: [] });
+      continue;
+    }
+
+    if (candidate.relevance.score > current.relevance.score) {
+      byRetrievalKey.set(key, { ...candidate, alternates: [current, ...(current.alternates || [])] });
+    } else {
+      current.alternates.push(candidate);
+    }
+  }
+
+  const selected = [...byRetrievalKey.values()]
     .sort((a, b) => b.relevance.score - a.relevance.score)
     .slice(0, 60)
-    .map(candidate => buildOutputPage(candidate.page, candidate.relevance));
+    .map(buildOutputPage);
 
   const output = {
     schemaVersion: 1,
