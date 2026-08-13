@@ -7,18 +7,39 @@ const {
 } = require('../src/core/observation/observation-normalizer');
 
 test('handles noun vs verb operational context correctly', () => {
-  const complaint = 'vibration felt in the accelerator pedal while stopping';
+  const complaint = 'vibration felt in the accelerator pedal while braking';
   const canonicalData = {
     observations: [{
       subject: 'pedal',
       trigger: 'braking',
-      operating_conditions: ['stopping']
+      operating_conditions: ['braking']
     }]
   };
 
   const result = assertTriggerSurvival(complaint, canonicalData);
   assert.equal(result.valid, true);
   assert.deepEqual(result.rawTriggers, ['braking']);
+});
+
+test('does not mistake engine stopping for a braking trigger', () => {
+  assert.deepEqual(
+    detectRawTriggers('the engine keeps stopping at red lights'),
+    []
+  );
+});
+
+test('does not mistake stopping language for braking without brake context', () => {
+  assert.deepEqual(
+    detectRawTriggers('engine vibration happens while stopping unexpectedly'),
+    []
+  );
+});
+
+test('does detect braking when brake context is explicit', () => {
+  assert.deepEqual(
+    detectRawTriggers('vibration starts when I press the brake pedal'),
+    ['braking']
+  );
 });
 
 test('does not mistake the word bump for a road-impact trigger', () => {
@@ -39,6 +60,20 @@ test('distinguishes accelerator as a subject from acceleration as a trigger', ()
   assert.deepEqual(
     detectRawTriggers('accelerator pedal vibrates while braking'),
     ['braking']
+  );
+});
+
+test('does not mistake static steering-system complaints for a turning trigger', () => {
+  assert.deepEqual(
+    detectRawTriggers('power steering pump is leaking and the steering wheel feels loose'),
+    []
+  );
+});
+
+test('does detect steering as an operating event when turn context is explicit', () => {
+  assert.deepEqual(
+    detectRawTriggers('clunks when steering left'),
+    ['turning']
   );
 });
 
