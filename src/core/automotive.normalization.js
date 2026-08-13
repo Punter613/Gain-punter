@@ -1,3 +1,5 @@
+const { detectRawTriggers } = require('./observation/observation-normalizer');
+
 const SOUND_ALIASES = {
   clunk: ['clunk', 'clunking', 'knock when turning'],
   knock: ['knock', 'knocking', 'pinging'],
@@ -31,7 +33,7 @@ const CONDITION_ALIASES = {
 const SYSTEM_ALIASES = {
   engine: ['engine', 'motor', 'combustion', 'misfire', 'fuel trim'],
   fuel_emissions: ['fuel', 'evap', 'purge', 'emission', 'lean', 'rich'],
-  transmission: ['transmission', 'transaxle', 'gearbox', 'shift', 'tcM', 'pcm/tecm'],
+  transmission: ['transmission', 'transaxle', 'gearbox', 'shift', 'tcm', 'pcm/tecm'],
   steering: ['steering', 'tie rod', 'steering rack', 'intermediate shaft'],
   suspension: ['suspension', 'ball joint', 'control arm', 'bushing', 'sway bar', 'stabilizer', 'strut', 'shock'],
   driveline: ['driveline', 'driveshaft', 'propeller shaft', 'cv axle', 'constant velocity', 'u-joint', 'differential'],
@@ -86,10 +88,14 @@ function collectAliases(text, map) {
 }
 
 function extractCanonicalProfile(input = {}) {
-  const joined = [
+  const complaintText = [
     input.symptoms,
     input.customerStates,
-    ...(Array.isArray(input.mechanicNotices) ? input.mechanicNotices : [input.mechanicNotices]),
+    ...(Array.isArray(input.mechanicNotices) ? input.mechanicNotices : [input.mechanicNotices])
+  ].filter(Boolean).join(' ');
+
+  const joined = [
+    complaintText,
     ...(Array.isArray(input.obdCodes) ? input.obdCodes : [input.obdCodes]),
     input.title,
     ...(Array.isArray(input.headings) ? input.headings : []),
@@ -101,15 +107,17 @@ function extractCanonicalProfile(input = {}) {
   const sounds = collectAliases(joined, SOUND_ALIASES);
   const conditions = collectAliases(joined, CONDITION_ALIASES);
   const systems = collectAliases(joined, SYSTEM_ALIASES);
+  const triggers = detectRawTriggers(complaintText);
 
   const canonicalTerms = [...new Set([
     ...dtcs.map(code => code.toLowerCase()),
     ...sounds,
     ...conditions,
-    ...systems
+    ...systems,
+    ...triggers
   ])];
 
-  return { dtcs, sounds, conditions, systems, canonicalTerms };
+  return { dtcs, sounds, conditions, systems, triggers, canonicalTerms };
 }
 
 function classifyManualSection(input = {}) {
