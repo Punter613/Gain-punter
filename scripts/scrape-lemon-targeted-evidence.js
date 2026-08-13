@@ -13,7 +13,7 @@ const {
 } = require('../src/core/automotive.normalization');
 
 const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy']);
-const MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 80);
+const MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 160);
 const MAX_DEPTH = Number(process.env.LEMON_MAX_DEPTH || 4);
 const OUTPUT_PATH = process.env.LEMON_OUTPUT_PATH || path.join(process.cwd(), 'artifacts', 'lemon-targeted-evidence.json');
 
@@ -125,13 +125,23 @@ function getInput() {
   return { vehicle, context, scope };
 }
 
-function semanticMatchWeight(term, queryProfile, sectionType) {
+function semanticKind(term, queryProfile) {
   const normalized = normalizeText(term);
-  if (queryProfile.dtcs.some(code => normalizeText(code) === normalized)) return 28;
-  if (queryProfile.triggers.includes(term)) return 18;
-  if (queryProfile.sounds.includes(term)) return 16;
-  if (queryProfile.conditions.includes(term)) return 14;
-  if (queryProfile.systems.includes(term)) return sectionType === 'SPEC' ? 4 : 8;
+  if (queryProfile.dtcs.some(code => normalizeText(code) === normalized)) return 'dtc';
+  if (queryProfile.triggers.includes(term)) return 'trigger';
+  if (queryProfile.sounds.includes(term)) return 'sound';
+  if (queryProfile.conditions.includes(term)) return 'condition';
+  if (queryProfile.systems.includes(term)) return 'system';
+  return 'other';
+}
+
+function semanticMatchWeight(term, queryProfile, sectionType) {
+  const kind = semanticKind(term, queryProfile);
+  if (kind === 'dtc') return 28;
+  if (kind === 'trigger') return 18;
+  if (kind === 'sound') return 16;
+  if (kind === 'condition') return 14;
+  if (kind === 'system') return sectionType === 'SPEC' ? 4 : 8;
   return 5;
 }
 
@@ -143,23 +153,38 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
   const sectionType = classifyManualSection(page);
   const profile = extractCanonicalProfile(page);
   const matchedTerms = [];
+  const matchLocations = {};
   let semanticScore = 0;
 
   for (const term of searchTerms) {
     const normalized = normalizeText(term);
     if (!normalized || normalized.length < 3) continue;
 
+    const locations = [];
+    if (title.includes(normalized)) locations.push('title');
+    if (headings.includes(normalized)) locations.push('heading');
+    if (url.includes(normalized)) locations.push('path');
+    if (body.includes(normalized)) locations.push('body');
+    if (!locations.length) continue;
+
+    const kind = semanticKind(term, queryProfile);
+
+    // A broad system word found only in the full body is not enough to qualify a page.
+    // Lemon body text includes global navigation/sidebar content that can mention systems
+    // unrelated to the actual page subject. Preserve the page text, but do not promote
+    // navigation chrome into retrieval ground truth.
+    if (kind === 'system' && locations.every(location => location === 'body')) continue;
+
     const baseWeight = semanticMatchWeight(term, queryProfile, sectionType);
     let locationMultiplier = 0;
-    if (title.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 1.0);
-    if (headings.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 0.9);
-    if (url.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 0.75);
-    if (body.includes(normalized)) locationMultiplier = Math.max(locationMultiplier, 0.25);
+    if (locations.includes('title')) locationMultiplier = Math.max(locationMultiplier, 1.0);
+    if (locations.includes('heading')) locationMultiplier = Math.max(locationMultiplier, 0.9);
+    if (locations.includes('path')) locationMultiplier = Math.max(locationMultiplier, 0.75);
+    if (locations.includes('body')) locationMultiplier = Math.max(locationMultiplier, 0.25);
 
-    if (locationMultiplier > 0) {
-      semanticScore += Math.round(baseWeight * locationMultiplier);
-      matchedTerms.push(term);
-    }
+    semanticScore += Math.round(baseWeight * locationMultiplier);
+    matchedTerms.push(term);
+    matchLocations[term] = locations;
   }
 
   const uniqueMatchedTerms = [...new Set(matchedTerms)];
@@ -167,11 +192,9 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
   const matchedSound = uniqueMatchedTerms.some(term => queryProfile.sounds?.includes(term));
   const matchedDtc = uniqueMatchedTerms.some(term => queryProfile.dtcs?.some(code => normalizeText(code) === normalizeText(term)));
 
-  // Reward relationships that actually describe the complaint rather than a broad system alone.
   if (matchedTrigger && matchedSound) semanticScore += 18;
   if (matchedDtc && ['DIAGNOSIS', 'TEST'].includes(sectionType)) semanticScore += 12;
 
-  // Scope preference is useful only after a page has a real semantic match.
   const scopeScore = uniqueMatchedTerms.length ? (SCOPE_SECTION_WEIGHTS[scope][sectionType] || 0) : 0;
   const score = semanticScore + scopeScore;
 
@@ -181,7 +204,8 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
     scopeScore,
     sectionType,
     profile,
-    matchedTerms: uniqueMatchedTerms.slice(0, 60)
+    matchedTerms: uniqueMatchedTerms.slice(0, 60),
+    matchLocations
   };
 }
 
@@ -211,6 +235,7 @@ function buildOutputPage(candidate) {
       semanticScore: relevance.semanticScore,
       scopeScore: relevance.scopeScore,
       matchedTerms: relevance.matchedTerms,
+      matchLocations: relevance.matchLocations,
       dtcs: relevance.profile.dtcs,
       sounds: relevance.profile.sounds,
       conditions: relevance.profile.conditions,
@@ -250,7 +275,10 @@ async function main() {
   const candidatePages = [];
 
   while (queue.length && visited.size < MAX_PAGES) {
-    queue.sort((a, b) => b.priority - a.priority);
+    // Prefer breadth first so one attractive subsystem cannot consume the entire crawl
+    // budget before another independent DTC/symptom lane is explored. Relevance breaks
+    // ties within the same depth.
+    queue.sort((a, b) => a.depth - b.depth || b.priority - a.priority);
     const next = queue.shift();
     if (!next || visited.has(next.url) || next.depth > MAX_DEPTH) continue;
     visited.add(next.url);
@@ -272,7 +300,6 @@ async function main() {
     }
   }
 
-  // First collapse byte-identical evidence pages.
   const byHash = new Map();
   for (const candidate of candidatePages) {
     if (!candidate.relevance.matchedTerms.length) continue;
@@ -281,8 +308,6 @@ async function main() {
     if (!current || candidate.relevance.score > current.relevance.score) byHash.set(hash, candidate);
   }
 
-  // Then collapse retrieval duplicates by normalized title + section while preserving
-  // every distinct manufacturer URL as provenance on the winning result.
   const byRetrievalKey = new Map();
   for (const candidate of byHash.values()) {
     const key = normalizedRetrievalKey(candidate.page, candidate.relevance);
