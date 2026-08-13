@@ -14,15 +14,14 @@ const SOUND_ALIASES = {
   shudder: ['shudder', 'shuddering', 'stumble']
 };
 
+// Static/non-event operating conditions only. Dynamic physical events such as
+// acceleration, deceleration, turning, braking and road impact come from the
+// shared observation trigger detector so there is one deterministic definition.
 const CONDITION_ALIASES = {
   cold_start: ['cold start', 'cold startup', 'first start', 'startup cold'],
   hot: ['hot', 'warm', 'at operating temperature'],
   idle: ['idle', 'idling', 'at a stop'],
-  acceleration: ['acceleration', 'accelerating', 'on throttle', 'under load'],
-  deceleration: ['deceleration', 'decelerating', 'off throttle', 'accelerator release', 'letting off gas', 'coast down', 'coastdown'],
   steady_cruise: ['steady cruise', 'cruising', 'light throttle', 'highway cruise'],
-  braking: ['braking', 'when braking', 'on brake'],
-  steering: ['steering', 'turning', 'when turning'],
   full_lock: ['full lock', 'steering lock', 'wheel turned all the way', 'turned all the way'],
   highway_speed: ['highway', 'highway speed', 'at speed'],
   low_speed: ['low speed', 'parking lot', 'slow turn'],
@@ -105,16 +104,16 @@ function extractCanonicalProfile(input = {}) {
 
   const dtcs = extractDtcs(joined);
   const sounds = collectAliases(joined, SOUND_ALIASES);
-  const conditions = collectAliases(joined, CONDITION_ALIASES);
+  const triggers = detectRawTriggers(joined);
+  const staticConditions = collectAliases(joined, CONDITION_ALIASES);
+  const conditions = [...new Set([...staticConditions, ...triggers])];
   const systems = collectAliases(joined, SYSTEM_ALIASES);
-  const triggers = detectRawTriggers(complaintText);
 
   const canonicalTerms = [...new Set([
     ...dtcs.map(code => code.toLowerCase()),
     ...sounds,
     ...conditions,
-    ...systems,
-    ...triggers
+    ...systems
   ])];
 
   return { dtcs, sounds, conditions, systems, triggers, canonicalTerms };
