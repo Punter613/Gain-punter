@@ -1,0 +1,1 @@
+Temporary integration note: live VERIFY endpoint must require an explicit mechanic-confirmed cause and must never promote the AI primary cause automatically. Estimate authorization requires both explicit verification and a bounded fault.
