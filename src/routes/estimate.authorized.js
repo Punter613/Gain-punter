@@ -3,27 +3,30 @@ const router = express.Router();
 const estimateRouter = require('./estimate');
 const { getJob } = require('../services/job.lifecycle');
 const { authorizeJobRepair } = require('../middleware/repair.authorization.middleware');
-const { evaluateRepairAuthorization } = require('../core/orchestrator/repair.authorization.guard');
 
 router.post('/', async (req, res, next) => {
   try {
-    let result;
-
-    if (req.body?.jobId) {
-      const job = await getJob(req.body.jobId);
-      if (!job) {
-        return res.status(404).json({ success: false, error: 'Job not found', jobId: req.body.jobId });
-      }
-      result = authorizeJobRepair(job);
-    } else {
-      result = evaluateRepairAuthorization(req.body || {});
+    const jobId = String(req.body?.jobId || '').trim();
+    if (!jobId) {
+      return res.status(409).json({
+        success: false,
+        error: 'A persisted diagnostic job must be verified before estimate generation.',
+        status: 'DIAGNOSIS_REQUIRED'
+      });
     }
 
+    const job = await getJob(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, error: 'Job not found', jobId });
+    }
+
+    const result = authorizeJobRepair(job);
     if (!result.authorized) {
       return res.status(409).json({
         success: false,
         error: 'Verification is required before estimate generation.',
         status: result.status,
+        jobId,
         authorization: result
       });
     }
@@ -31,6 +34,7 @@ router.post('/', async (req, res, next) => {
     req.repairAuthorization = result;
     req.body = {
       ...(req.body || {}),
+      jobId,
       diagnosisVerified: true,
       verificationStatus: 'VERIFIED',
       verifiedFaults: result.repairScope
