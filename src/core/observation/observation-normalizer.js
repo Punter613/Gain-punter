@@ -4,6 +4,7 @@ const TRIGGER_PATTERNS = [
     patterns: [
       /\breleas(?:e|ed|ing)\s+(?:the\s+)?(?:gas|accelerator|throttle)\b/i,
       /\b(?:gas|accelerator|throttle)\s+(?:is|was|gets?|got)\s+releas(?:ed|ing)\b/i,
+      /\b(?:gas|accelerator|throttle)\s+release\b/i,
       /\blet(?:ting)?\s+off\s+(?:the\s+)?(?:gas|accelerator|throttle)\b/i,
       /\blift(?:ing)?\s+off\s+(?:the\s+)?(?:gas|accelerator|throttle)\b/i,
       /\bdeceler(?:ate|ating|ation)\b/i,
@@ -22,6 +23,7 @@ const TRIGGER_PATTERNS = [
     key: 'turning',
     patterns: [
       /\bfull[- ]?(?:lock|turn)\b/i,
+      /\bfull\s+steering\s+lock\b/i,
       /\bturn(?:ing)?\s+(?:left|right)\b/i,
       /\bwhile\s+turning\b/i,
       /\bwhen\s+turning\b/i,
