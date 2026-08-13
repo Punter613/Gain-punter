@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { resolveRepairDiagnosisUrl } = require('../src/services/lemon.path.resolver');
+const { resolveRepairDiagnosisUrl, classifyDrivetrain } = require('../src/services/lemon.path.resolver');
 const {
   cleanText,
   normalizeText,
@@ -114,7 +114,8 @@ function getInput() {
     make,
     model,
     trim: String(process.env.LEMON_TRIM || '').trim(),
-    engine: String(process.env.LEMON_ENGINE || '').trim()
+    engine: String(process.env.LEMON_ENGINE || '').trim(),
+    drivetrain: String(process.env.LEMON_DRIVETRAIN || '').trim()
   };
   const context = {
     symptoms: String(process.env.LEMON_SYMPTOMS || '').trim(),
@@ -180,6 +181,18 @@ async function main() {
   const resolution = await resolveRepairDiagnosisUrl(vehicle);
   const baseUrl = resolution.url;
 
+  const resolvedDrivetrain = classifyDrivetrain(decodeURIComponent(baseUrl));
+  const requestedDrivetrain = classifyDrivetrain(vehicle.drivetrain);
+  if (!requestedDrivetrain && resolvedDrivetrain) {
+    throw new Error(
+      `LEMON resolved a drive-specific ${resolvedDrivetrain.toUpperCase()} manual while drivetrain is unknown. ` +
+      'Set LEMON_DRIVETRAIN (for example 2WD or 4WD) before creating manufacturer evidence.'
+    );
+  }
+  if (requestedDrivetrain && resolvedDrivetrain && requestedDrivetrain !== resolvedDrivetrain) {
+    throw new Error(`LEMON drivetrain mismatch: requested ${requestedDrivetrain}, resolved ${resolvedDrivetrain}`);
+  }
+
   console.log(`Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.engine}`.trim());
   console.log(`Scope: ${scope}`);
   console.log(`Resolved Lemon path (${resolution.method}): ${baseUrl}`);
@@ -215,7 +228,9 @@ async function main() {
 
   const byHash = new Map();
   for (const candidate of candidatePages) {
-    if (candidate.relevance.score <= 0) continue;
+    // A section-type preference alone is not evidence of relevance to the complaint.
+    // Require at least one actual DTC/sound/condition/system term match.
+    if (!candidate.relevance.matchedTerms.length) continue;
     const hash = contentHash(candidate.page);
     const current = byHash.get(hash);
     if (!current || candidate.relevance.score > current.relevance.score) byHash.set(hash, candidate);
