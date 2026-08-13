@@ -19,7 +19,7 @@ function normalizeVerification(input = {}) {
   const explicitVerified = input.diagnosisVerified === true || input.verificationStatus === 'VERIFIED';
 
   return {
-    status: explicitVerified || verifiedFaults.length ? 'VERIFIED' : 'UNVERIFIED',
+    status: explicitVerified && verifiedFaults.length > 0 ? 'VERIFIED' : 'UNVERIFIED',
     verifiedFaults,
     diagnosticTests,
     explicitVerified
@@ -28,14 +28,14 @@ function normalizeVerification(input = {}) {
 
 function evaluateRepairAuthorization(input = {}) {
   const verification = normalizeVerification(input);
-  const authorized = verification.status === 'VERIFIED' && verification.verifiedFaults.length > 0;
+  const authorized = verification.status === 'VERIFIED' && verification.explicitVerified && verification.verifiedFaults.length > 0;
 
   return {
     authorized,
     status: authorized ? 'REPAIR_AUTHORIZED' : 'DIAGNOSIS_REQUIRED',
     reason: authorized
-      ? 'At least one fault has explicit verification evidence and a bounded repair scope.'
-      : 'No bounded verified fault was supplied. Continue diagnosis and discriminating tests before authorizing repair parts/labor.',
+      ? 'The mechanic explicitly verified at least one bounded fault for repair.'
+      : 'Repair authorization requires both an explicit VERIFY action and at least one bounded verified fault. Continue diagnosis and discriminating tests until both are present.',
     verification,
     repairScope: authorized ? verification.verifiedFaults : []
   };
