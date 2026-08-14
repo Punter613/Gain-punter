@@ -7,7 +7,8 @@
     "start": "node api/server.js",
     "dev": "nodemon api/server.js",
     "lint": "echo \"no linter configured\"",
-    "test": "echo \"no tests configured\""
+    "test": "echo \"no tests configured\"",
+    "test:guards": "node --test tests/completed.work.guard.edge-cases.test.js tests/diagnostic.stage.guard.edge-cases.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",
