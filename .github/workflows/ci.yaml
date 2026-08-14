@@ -34,5 +34,8 @@ jobs:
     - name: Deterministic Guard Regression Checks
       run: npm run test:guards
 
+    - name: Provider Routing Regression Checks
+      run: npm run test:providers
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
