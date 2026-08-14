@@ -19,6 +19,14 @@
 - A clean boot plus green syntax/static checks is necessary but not sufficient; runtime behavior is the merge criterion.
 - If the runtime environment or required credentials are unavailable, do not merge. Document what is blocked instead.
 
+## TAG Safety Invariants
+- Missing does not mean safe. Missing does not mean unsafe. Missing means unknown.
+- The Brain owns interpretation and uncertainty. TAG owns deterministic policy evaluation.
+- Brain-owned normalization may emit a canonical scalar only after its evidence/confidence threshold is satisfied; otherwise it must omit the field.
+- No low-confidence derived scalar may trigger a mandatory TAG action.
+- The Brain → TAG contract is scalar-or-absent. TAG must not parse raw technician language, fabricate missing measurements, or infer a substitute value for absent data.
+- Absence of a measurement must not itself create a measurement-based mandatory override. If missing data should require inspection or human review, implement that as a separate explicit rule.
+
 ## Manual Scraping
 - The Rust scraper is located in `tools/lemon_scraper`.
 - Integration logic is in `src/services/lemon.js`.
