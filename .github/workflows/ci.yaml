@@ -31,5 +31,8 @@ jobs:
         node scripts/test-estimate-contract.js
         node scripts/test-gemini-fallback.js
 
+    - name: Deterministic Guard Regression Checks
+      run: npm run test:guards
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
