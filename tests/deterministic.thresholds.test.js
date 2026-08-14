@@ -83,3 +83,17 @@ test('transmission.fluidCondition darkness 3 passes boundary', async () => {
   const r = await run({ transmission: { fluidCondition: 3 } });
   assert.equal(r.overrides.length, 0);
 });
+
+test('present component with missing measurement stays unknown and produces no override', async () => {
+  const r = await run({ brakes: {} });
+  assert.equal(r.approved, true);
+  assert.equal(r.canUseAI, true);
+  assert.equal(r.overrides.length, 0);
+});
+
+test('entirely absent component data stays unknown and produces no override', async () => {
+  const r = await run({});
+  assert.equal(r.approved, true);
+  assert.equal(r.canUseAI, true);
+  assert.equal(r.overrides.length, 0);
+});
