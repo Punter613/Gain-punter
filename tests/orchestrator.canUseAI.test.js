@@ -79,3 +79,29 @@ test('CRITICAL-severity rule still blocks AI and returns DETERMINISTIC_OVERRIDE'
     assert.deepEqual(getCalls(), { routeCalls: 0, executeCalls: 0 });
   });
 });
+
+test('newly activated HIGH rule (brakeFluid 25mo) blocks AI end-to-end', async () => {
+  await withBlockedAIRouter(async (getCalls) => {
+    const orchestrator = new SKSKOrchestrator();
+    const result = await orchestrator.process({
+      input: 'Brake fluid looks old, due for service',
+      vehicleProfile: {
+        vin: 'TESTVIN1234567890',
+        componentData: {
+          brakes: {
+            brakeFluid: 25
+          }
+        }
+      },
+      context: {}
+    });
+
+    assert.equal(result.status, 'DETERMINISTIC_OVERRIDE');
+    assert.equal(result.decision.action, 'SAFETY_ADVISORY');
+    assert.equal(result.decision.urgency, 'HIGH');
+    assert.equal(result.aiBypassed, true);
+    assert.equal(result.humanReviewRequired, false);
+    assert.equal(orchestrator.pipelineStats.deterministicOverrides, 1);
+    assert.deepEqual(getCalls(), { routeCalls: 0, executeCalls: 0 });
+  });
+});

@@ -11,31 +11,31 @@ class DeterministicOrchestrator {
       brakes: {
         padThickness: { min: 2.0, unit: 'mm', action: 'MANDATORY_REPLACE', severity: 'CRITICAL' },
         rotorRunout: { max: 0.05, unit: 'mm', action: 'MANDATORY_RESURFACE_OR_REPLACE', severity: 'CRITICAL' },
-        brakeFluid: { maxAgeMonths: 24, action: 'MANDATORY_FLUSH', severity: 'HIGH' },
+        brakeFluid: { max: 24, unit: 'months', action: 'MANDATORY_FLUSH', severity: 'HIGH' },
         aiOverride: false
       },
       timing_belt: {
         mileage: { max: 100000, unit: 'miles', action: 'MANDATORY_INSPECT', severity: 'CRITICAL' },
-        age: { maxMonths: 60, action: 'MANDATORY_REPLACE', severity: 'CRITICAL' },
+        age: { max: 60, unit: 'months', action: 'MANDATORY_REPLACE', severity: 'CRITICAL' },
         aiOverride: false
       },
       tires: {
         treadDepth: { min: 2.0, unit: '32nds', action: 'MANDATORY_REPLACE', severity: 'CRITICAL' },
-        age: { maxMonths: 72, action: 'MANDATORY_INSPECT', severity: 'HIGH' },
+        age: { max: 72, unit: 'months', action: 'MANDATORY_INSPECT', severity: 'HIGH' },
         aiOverride: false
       },
       engine_oil: {
-        level: { min: 'LOW_MARK', action: 'MANDATORY_TOP_OFF', severity: 'CRITICAL' },
-        age: { maxMonths: 12, action: 'MANDATORY_CHANGE', severity: 'HIGH' },
+        level: { value: 'LOW_MARK', action: 'MANDATORY_TOP_OFF', severity: 'CRITICAL' },
+        age: { max: 12, unit: 'months', action: 'MANDATORY_CHANGE', severity: 'HIGH' },
         aiOverride: false
       },
       coolant: {
-        level: { min: 'MIN_MARK', action: 'MANDATORY_TOP_OFF', severity: 'CRITICAL' },
-        condition: { phMin: 7.0, phMax: 11.0, action: 'MANDATORY_FLUSH', severity: 'HIGH' },
+        level: { value: 'MIN_MARK', action: 'MANDATORY_TOP_OFF', severity: 'CRITICAL' },
+        condition: { min: 7.0, max: 11.0, unit: 'pH', action: 'MANDATORY_FLUSH', severity: 'HIGH' },
         aiOverride: false
       },
       transmission: {
-        fluidCondition: { maxDarkness: 3, action: 'MANDATORY_SERVICE', severity: 'HIGH' },
+        fluidCondition: { max: 3, unit: 'darkness', action: 'MANDATORY_SERVICE', severity: 'HIGH' },
         slipDetected: { value: true, action: 'MANDATORY_DIAGNOSE', severity: 'CRITICAL' },
         aiOverride: false
       },
@@ -46,17 +46,17 @@ class DeterministicOrchestrator {
       },
       suspension: {
         sag: { max: 1.0, unit: 'inches', action: 'MANDATORY_INSPECT', severity: 'HIGH' },
-        noise: { type: 'clunk', action: 'MANDATORY_INSPECT', severity: 'HIGH' },
+        noise: { value: 'clunk', action: 'MANDATORY_INSPECT', severity: 'HIGH' },
         aiOverride: false
       },
       electrical: {
-        batteryVoltage: { min: 12.4, action: 'MANDATORY_TEST', severity: 'HIGH' },
-        alternatorOutput: { min: 13.5, max: 14.8, action: 'MANDATORY_REPAIR', severity: 'CRITICAL' },
+        batteryVoltage: { min: 12.4, unit: 'V', action: 'MANDATORY_TEST', severity: 'HIGH' },
+        alternatorOutput: { min: 13.5, max: 14.8, unit: 'V', action: 'MANDATORY_REPAIR', severity: 'CRITICAL' },
         aiOverride: false
       },
       exhaust: {
         leakBeforeCatalytic: { value: true, action: 'MANDATORY_REPAIR', severity: 'CRITICAL' },
-        carbonMonoxide: { maxPPM: 100, action: 'MANDATORY_REPAIR', severity: 'CRITICAL' },
+        carbonMonoxide: { max: 100, unit: 'PPM', action: 'MANDATORY_REPAIR', severity: 'CRITICAL' },
         aiOverride: false
       }
     };
