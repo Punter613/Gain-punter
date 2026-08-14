@@ -1,4 +1,4 @@
-const { groqChat } = require('../../groq');
+const groqClient = require('../../groq');
 
 /**
  * Provider contract: chat() takes ONE object.
@@ -6,11 +6,11 @@ const { groqChat } = require('../../groq');
  * This must match exactly what providerRouter.routeProvider() forwards,
  * and what aiClient.aiChat() accepts from callers.
  *
- * Previously this took (messages, options) as two separate arguments,
- * but providerRouter called chat(payload) with a single object — so the
- * whole payload landed in `messages` and `options` silently defaulted to
- * {}, dropping model/temperature/max_tokens/response_format on every
- * call through aiClient -> providerRouter -> groq.
+ * Fallback ownership belongs to providerRouter for calls entering through
+ * aiClient. The legacy groqChat helper still supports direct-call fallback for
+ * older routes, but this adapter disables that inner fallback so a retryable
+ * Groq failure cannot trigger Gemini once inside groqChat and then a second
+ * time when providerRouter catches the propagated error.
  */
 async function chat(payload = {}) {
   const { messages, model, temperature, max_tokens, response_format, reasoning_effort } = payload;
@@ -22,7 +22,14 @@ async function chat(payload = {}) {
     );
   }
 
-  return groqChat(messages, { model, temperature, max_tokens, response_format, reasoning_effort });
+  return groqClient.groqChat(messages, {
+    model,
+    temperature,
+    max_tokens,
+    response_format,
+    reasoning_effort,
+    disable_fallback: true
+  });
 }
 
 module.exports = { chat };
