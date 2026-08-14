@@ -42,7 +42,7 @@ class SKSKOrchestrator {
       console.log('[ORCHESTRATOR] Step 1: Running deterministic checks...');
       const deterministicResult = await deterministicOrchestrator.process(vehicleProfile, input);
 
-      if (!deterministicResult.approved) {
+      if (!deterministicResult.approved || !deterministicResult.canUseAI) {
         this.pipelineStats.deterministicOverrides++;
         return this._buildDeterministicResponse(deterministicResult, vehicleProfile);
       }
