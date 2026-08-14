@@ -71,13 +71,13 @@ app.use(express.urlencoded({ extended: true }));
 // 4. ROUTE INFRASTRUCTURE LANES
 // FIXED: Adjusted all relative paths to look outward into the parent root directory folder ('../src')
 const diagnose = require('../src/routes/diagnose');
-const estimateHeuristic = require('../src/routes/estimate');
+const estimateHeuristic = require('../src/routes/estimate.authorized');
 const invoice = require('../src/routes/invoice');
 const oemRouter = require('../src/routes/oem');
 const scrapeRouter = require('../src/routes/scrape');
 const partsRouter = require('../src/routes/parts');
-const fullEstimateRouter = require('../src/routes/full-estimate');
-const jobsRouter = require('../src/routes/jobs');
+const fullEstimateRouter = require('../src/routes/full-estimate.protected');
+const jobsRouter = require('../src/routes/jobs.protected');
 const partsLookupRouter = require('../src/routes/partsLookup');
 const fleetRouter = require('../src/routes/fleet');
 const vehicleRouter = require('../src/routes/vehicle');

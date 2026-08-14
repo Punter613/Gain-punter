@@ -2,7 +2,9 @@
 
 ## Completed / merged foundation
 
-PR #69 — **Add targeted Lemon evidence normalization and scrape workflow** — is **merged into `main`** and should be treated as completed foundation work.
+### PR #69 — targeted Lemon evidence normalization
+
+PR #69 is **merged into `main`** and should be treated as completed foundation work.
 
 Runtime validation was performed against the 2008 Kia Sorento 4WD 3.8L in Codespaces. The live scrape was used to tighten:
 - drivetrain applicability
@@ -14,13 +16,36 @@ Runtime validation was performed against the 2008 Kia Sorento 4WD 3.8L in Codesp
 
 Do **not** rebuild or reopen that Lemon foundation unless a specific regression is found.
 
+### PR #70 — repair authorization guard foundation
+
+PR #70 is **merged into `main`**. It contains the deterministic repair authorization primitive, its tests, and this integration-status breadcrumb.
+
+Important: PR #70 **did not finish the live route/UI wiring**. It merged while further work was still being added to the same branch. Do not mistake "PR #70 merged" for "Diagnose -> Verify -> Estimate complete."
+
+The guard now requires BOTH:
+1. an explicit mechanic VERIFY action, and
+2. at least one bounded verified fault.
+
+A model hypothesis, code, symptom, probability, or `diagnosisVerified: true` without a bounded fault must not authorize repair.
+
 ## Current active branch
 
-`feature/diag-estimate-production-integration`
+`feature/diag-estimate-route-wiring`
 
-Purpose: production wiring of the merged Lemon evidence into the live workflow:
+This is the continuation branch created after PR #70 merged. It owns the remaining production wiring.
 
-`Diagnose -> competing hypotheses -> manufacturer/TSB evidence -> discriminating tests -> verification gate -> Estimate`
+Current work on this branch includes:
+- persisted-job -> authorization adapter
+- protected `/api/jobs/:id/verify` wrapper that requires an explicit confirmed cause
+- protected `/api/estimateHeuristic` wrapper
+- protected legacy `/api/full-estimate` boundary
+- guarded backend entrypoint (`api/server.route-wiring.js`)
+- browser lifecycle script (`public/js/diag-estimate-lifecycle.js`)
+- tests for persisted verification authorization
+
+The production workflow being implemented is:
+
+`Diagnose -> competing hypotheses -> manufacturer/TSB evidence -> discriminating tests -> record test -> explicit mechanic VERIFY -> Estimate`
 
 Key rules:
 - TSB/manufacturer information is a flashlight, not a verdict.
@@ -32,6 +57,16 @@ Key rules:
 - Estimate must use verified repair scope only.
 - No fabricated parts cost, labor hours, torque values, or repair economics.
 - Multiple verified faults should be staged by safety, damage propagation, repair dependency, diagnostic leverage, and customer affordability, with retest gates between stages.
+
+## Production gate still required
+
+Before merging the current branch:
+- load the browser lifecycle script from the actual served `public/index.html`
+- run syntax/tests
+- exercise the real route sequence end-to-end
+- confirm unverified Estimate returns 409
+- confirm a recorded test + explicit bounded verification unlocks Estimate
+- confirm CI is green
 
 ## Future reuse
 
