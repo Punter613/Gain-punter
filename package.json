@@ -9,7 +9,7 @@
     "lint": "echo \"no linter configured\"",
     "test": "echo \"no tests configured\"",
     "test:guards": "node --test tests/completed.work.guard.edge-cases.test.js tests/diagnostic.stage.guard.edge-cases.test.js",
-    "test:providers": "node --test tests/provider.groq.contract.test.js"
+    "test:providers": "node --test tests/provider.groq.contract.test.js tests/provider.router.fallback.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",
