@@ -1,4 +1,4 @@
-const groqClient = require('../groq');
+const aiClient = require('./aiClient');
 
 class AISpecialistRouter {
   constructor() {
@@ -178,10 +178,11 @@ Do not source parts for work explicitly documented as already completed unless r
     const prompt = this._buildPrompt(config, input, context);
 
     try {
-      const response = await groqClient.groqChat([
-        { role: 'system', content: config.systemPrompt },
-        { role: 'user', content: prompt }
-      ], {
+      const response = await aiClient.aiChat({
+        messages: [
+          { role: 'system', content: config.systemPrompt },
+          { role: 'user', content: prompt }
+        ],
         model: config.model,
         temperature: config.temperature,
         max_tokens: config.maxTokens,
@@ -202,7 +203,7 @@ Do not source parts for work explicitly documented as already completed unless r
         success: false,
         specialist: config.name,
         error: error.message,
-        fallback: 'Attempting fallback to receptionist for human handoff'
+        fallback: 'Provider routing exhausted; human handoff required'
       };
     }
   }
