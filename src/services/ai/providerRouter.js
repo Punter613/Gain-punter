@@ -37,8 +37,26 @@ function fallbackReason(error) {
   return 'PROVIDER_RETRYABLE_ERROR';
 }
 
+function geminiFallbackPayload(payload, reason) {
+  return {
+    ...payload,
+    model: payload.gemini_model || process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash',
+    fallbackReason: reason
+  };
+}
+
 async function routeProvider(payload) {
   const provider = getProvider();
+
+  // providerRouter owns configuration-time fallback for the aiClient path.
+  // Do this before entering the Groq adapter so a missing key does not rely on
+  // legacy error-message matching to reach Gemini.
+  if (activeProvider === 'groq' && !process.env.GROQ_API_KEY && gemini.isConfigured()) {
+    const reason = 'GROQ_NOT_CONFIGURED';
+    console.warn(`[AI Router] Groq unavailable (${reason}); falling back to Gemini.`);
+    return gemini.chat(geminiFallbackPayload(payload, reason));
+  }
+
   try {
     return await provider.chat(payload);
   } catch (error) {
@@ -47,11 +65,7 @@ async function routeProvider(payload) {
 
     const reason = fallbackReason(error);
     console.warn(`[AI Router] Groq unavailable (${reason}); falling back to Gemini.`);
-    return gemini.chat({
-      ...payload,
-      model: payload.gemini_model || process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash',
-      fallbackReason: reason
-    });
+    return gemini.chat(geminiFallbackPayload(payload, reason));
   }
 }
 
