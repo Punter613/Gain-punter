@@ -15,7 +15,8 @@
     "test:evidence": "node --test tests/nhtsa.tsb.corpus.test.js",
     "test:diagnose-pipeline": "node --test tests/diagnose.pipeline.contract.test.js",
     "test:evidence-packet": "node --test tests/diagnostic.evidence.packet.test.js tests/diagnostic.evidence.packet.route.test.js",
-    "test:verified-case": "node --test tests/verified.case.handoff.test.js tests/lifecycle.http.test.js"
+    "test:verified-case": "node --test tests/verified.case.handoff.test.js tests/lifecycle.http.test.js",
+    "test:estimate-verified-truth": "node --test tests/estimate.verified.truth.test.js tests/verified.case.handoff.test.js tests/lifecycle.http.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",
