@@ -23,7 +23,6 @@ function runDiagnosticPipeline(input = {}) {
     safetyNotes: '',
     matchedPatterns: [],
     assemblyData: null,
-    dynamicRisk: 0,
     confidence: { percentage: 30, rating: 'LOW' },
     symptomTelemetry: {
       hasMismatchedSignals: false,
