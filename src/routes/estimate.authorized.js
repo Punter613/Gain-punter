@@ -3,6 +3,7 @@ const router = express.Router();
 const estimateRouter = require('./estimate');
 const { getJob } = require('../services/job.lifecycle');
 const { authorizeJobRepair } = require('../middleware/repair.authorization.middleware');
+const { verifiedEstimateInput } = require('../core/evidence/verified.case');
 
 router.post('/', async (req, res, next) => {
   try {
@@ -31,13 +32,12 @@ router.post('/', async (req, res, next) => {
       });
     }
 
+    const canonical = verifiedEstimateInput(job.verifiedCase);
     req.repairAuthorization = result;
     req.body = {
       ...(req.body || {}),
       jobId,
-      diagnosisVerified: true,
-      verificationStatus: 'VERIFIED',
-      verifiedFaults: result.repairScope
+      ...canonical
     };
     return next();
   } catch (err) {
