@@ -9,6 +9,7 @@ const {
   normalizeBulletinId
 } = require('../src/services/nhtsa.tsb.corpus');
 const { selectRelevantTsbs } = require('../src/services/vehicle.evidence');
+const { buildEvidenceLedger, compactLedgerForModel } = require('../src/contracts/estimate.ai.contract');
 
 function row(overrides = {}) {
   return {
@@ -45,17 +46,36 @@ test('ranks code and symptom-matched NHTSA rows above unrelated communications',
   assert.ok(ranked[0].matchedSignals.includes('DTC:P0171'));
 });
 
-test('matched NHTSA body text is preserved as a bounded model-facing evidence excerpt', () => {
+test('matched NHTSA body text is preserved as bounded model-facing evidence in Diagnose and Estimate shapes', () => {
   const bodyText = `P0300 isolated in NHTSA body text. ${'diagnostic evidence '.repeat(100)}`;
   const ranked = rankNhtsaRows([
     row({ subject: 'Engine performance', body_text: bodyText })
   ], { obdCodes: ['P0300'] }, { minScore: 1, limit: 8 });
 
   assert.equal(ranked.length, 1);
-  assert.ok(ranked[0].extractedFacts.evidenceExcerpt.includes('P0300 isolated in NHTSA body text'));
-  assert.ok(ranked[0].extractedFacts.evidenceExcerpt.length <= MAX_EVIDENCE_EXCERPT);
-  assert.ok(ranked[0].extractedFacts.matchedSignals.includes('DTC:P0300'));
-  assert.equal(ranked[0].extractedFacts.source, 'NHTSA_BULK');
+  const ref = ranked[0];
+  assert.ok(ref.extractedFacts.evidenceExcerpt.includes('P0300 isolated in NHTSA body text'));
+  assert.ok(ref.extractedFacts.evidenceExcerpt.length <= MAX_EVIDENCE_EXCERPT);
+  assert.ok(ref.extractedFacts.matchedSignals.includes('DTC:P0300'));
+  assert.equal(ref.extractedFacts.source, 'NHTSA_BULK');
+
+  // Diagnose's compact packet currently passes extractedFacts as `facts`.
+  const diagnoseModelCandidate = {
+    title: ref.title,
+    url: ref.url,
+    facts: ref.extractedFacts,
+    relevanceScore: ref.relevanceScore
+  };
+  const diagnosePayload = JSON.stringify(diagnoseModelCandidate);
+  assert.ok(diagnosePayload.includes('P0300 isolated in NHTSA body text'));
+  assert.ok(diagnosePayload.includes('DTC:P0300'));
+
+  // Estimate uses the evidence-ledger contract; the same excerpt must survive there too.
+  const ledger = buildEvidenceLedger({ relevantTsbs: [ref] });
+  const compactLedger = compactLedgerForModel(ledger);
+  const estimatePayload = JSON.stringify(compactLedger);
+  assert.ok(estimatePayload.includes('P0300 isolated in NHTSA body text'));
+  assert.ok(estimatePayload.includes('DTC:P0300'));
 });
 
 test('diagnose relevance filter accepts a strongly matched NHTSA engine-performance candidate', () => {
