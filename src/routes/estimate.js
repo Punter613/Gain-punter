@@ -184,7 +184,14 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const laborRateNum = Math.max(0, Number(req.body?.laborRate ?? 65));
+    const rawLaborRate = req.body?.laborRate;
+    const hasMechanicLaborRate = rawLaborRate != null
+      && typeof rawLaborRate !== 'boolean'
+      && !(typeof rawLaborRate === 'string' && rawLaborRate.trim() === '')
+      && Number.isFinite(Number(rawLaborRate))
+      && Number(rawLaborRate) >= 0;
+    const laborRateNum = hasMechanicLaborRate ? Number(rawLaborRate) : 65;
+    const laborRateSource = hasMechanicLaborRate ? 'MECHANIC_INPUT' : 'SYSTEM_DEFAULT';
     const partsCostNum = Math.max(0, Number(req.body?.partsCost ?? 0));
     const customer = req.body?.customer || {};
 
@@ -228,7 +235,7 @@ router.post('/', async (req, res) => {
 
     const systemPrompt = `You are the repair-estimate reasoning module of SKSK ProTech. Return only the JSON object required by the supplied JSON Schema.\n\nCONTRACT RULES:\n- The mechanic has already completed TEST -> VERIFY. The VERIFIED CAUSE supplied below is immutable diagnostic truth. Do not diagnose a different cause, add a competing fault, or revoke verification.\n- Your job is to describe repair of the verified fault using only the supplied VERIFIED_CASE evidence.\n- JSON booleans are real booleans: true or false.\n- Do not output laborCost, partsCost, total, or laborRate. Those are mechanic-owned/deterministic.\n- estimatedHours is advisory only; explicit mechanic laborHours overrides it deterministically.\n- evidenceRefs may contain ONLY IDs present in the supplied EVIDENCE LEDGER.\n- Never invent a TSB, OEM procedure, torque, measurement, construction method, special tool, or vehicle-specific failure pattern.\n- repairActions and repairSteps must stay within the verified repair scope.\n- proTips that claim factory facts must cite supplied OEM/TSB evidence.\n- Probabilities/confidence are advisory only and will be normalized deterministically.`;
 
-    const userPrompt = `VERIFIED CAUSE: ${verifiedCause}\nVehicle: ${vehicleStr}\nVIN: ${vehicle.vin || 'N/A'}\nMileage: ${vehicle.mileage || 'N/A'}\nMechanic-entered labor rate: $${laborRateNum}/hr (DO NOT MODIFY)\nMechanic-entered parts cost: $${partsCostNum} (DO NOT MODIFY)\nMechanic-entered labor hours: ${req.body?.laborHours ?? 'not supplied'} (OVERRIDES ADVISORY HOURS WHEN PRESENT)\n\nVERIFIED_CASE fingerprint: ${verifiedCase.fingerprint}\nEVIDENCE LEDGER:\n${evidenceText}`;
+    const userPrompt = `VERIFIED CAUSE: ${verifiedCause}\nVehicle: ${vehicleStr}\nVIN: ${vehicle.vin || 'N/A'}\nMileage: ${vehicle.mileage || 'N/A'}\nLabor rate: $${laborRateNum}/hr (${laborRateSource})\nMechanic-entered parts cost: $${partsCostNum} (DO NOT MODIFY)\nMechanic-entered labor hours: ${req.body?.laborHours ?? 'not supplied'} (OVERRIDES ADVISORY HOURS WHEN PRESENT)\n\nVERIFIED_CASE fingerprint: ${verifiedCase.fingerprint}\nEVIDENCE LEDGER:\n${evidenceText}`;
 
     const aiStartedAt = Date.now();
     const aiRes = await aiChat({
@@ -250,6 +257,7 @@ router.post('/', async (req, res) => {
     const repairResolution = buildVerifiedRepairResolution({
       verifiedCase,
       laborRate: laborRateNum,
+      laborRateSource,
       laborHours: req.body?.laborHours,
       modelEstimatedHours: parsed.estimatedHours,
       parts: req.body?.parts,
