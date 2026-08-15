@@ -6,7 +6,8 @@ const express = require('express');
 const { buildVerifiedCase } = require('../src/core/evidence/verified.case');
 const {
   buildVerifiedRepairResolution,
-  assertRepairResolutionIntegrity
+  assertRepairResolutionIntegrity,
+  MAX_PART_LINES
 } = require('../src/core/evidence/verified.repair.resolution');
 
 function makeVerifiedCase() {
@@ -43,6 +44,7 @@ test('repair resolution is bound to VERIFIED_CASE and mechanic-owned pricing inp
   const resolution = buildVerifiedRepairResolution({
     verifiedCase,
     laborRate: 65,
+    laborRateSource: 'MECHANIC_INPUT',
     laborHours: 1.5,
     modelEstimatedHours: 4,
     parts: [
@@ -77,6 +79,59 @@ test('model labor hours remain explicitly advisory when mechanic hours are absen
   assert.equal(resolution.labor.hoursSource, 'MODEL_ADVISORY');
   assert.equal(resolution.partsTotal, 90);
   assert.equal(resolution.parts[0].source, 'MECHANIC_INPUT');
+});
+
+test('null blank and boolean laborHours do not override advisory hours', () => {
+  const verifiedCase = makeVerifiedCase();
+  for (const laborHours of [null, '', '   ', false, true]) {
+    const resolution = buildVerifiedRepairResolution({
+      verifiedCase,
+      laborRate: 65,
+      laborHours,
+      modelEstimatedHours: 2.5
+    });
+    assert.equal(resolution.labor.hours, 2.5, `unexpected override for ${String(laborHours)}`);
+    assert.equal(resolution.labor.hoursSource, 'MODEL_ADVISORY');
+  }
+});
+
+test('explicit numeric zero labor hours is preserved as mechanic input', () => {
+  const verifiedCase = makeVerifiedCase();
+  for (const laborHours of [0, '0']) {
+    const resolution = buildVerifiedRepairResolution({
+      verifiedCase,
+      laborRate: 65,
+      laborHours,
+      modelEstimatedHours: 2.5
+    });
+    assert.equal(resolution.labor.hours, 0);
+    assert.equal(resolution.labor.hoursSource, 'MECHANIC_INPUT');
+  }
+});
+
+test('labor rate provenance preserves system default source', () => {
+  const verifiedCase = makeVerifiedCase();
+  const resolution = buildVerifiedRepairResolution({
+    verifiedCase,
+    laborRate: 65,
+    laborRateSource: 'SYSTEM_DEFAULT',
+    modelEstimatedHours: 1
+  });
+  assert.equal(resolution.labor.hourlyRate, 65);
+  assert.equal(resolution.labor.rateSource, 'SYSTEM_DEFAULT');
+});
+
+test('oversized part lists fail closed instead of truncating totals', () => {
+  const verifiedCase = makeVerifiedCase();
+  const parts = Array.from({ length: MAX_PART_LINES + 1 }, (_, index) => ({
+    description: `Part ${index + 1}`,
+    quantity: 1,
+    unitPrice: 1
+  }));
+  assert.throws(
+    () => buildVerifiedRepairResolution({ verifiedCase, laborRate: 65, modelEstimatedHours: 1, parts }),
+    /at most 40 part lines/i
+  );
 });
 
 test('tampered repair resolution fails integrity validation', () => {
@@ -157,10 +212,26 @@ test('Estimate deterministically consumes resolved mechanic labor and parts whil
     assert.equal(body.estimate.partsCost, 85);
     assert.equal(body.estimate.total, 182.5);
     assert.equal(body.estimate.repairResolution.labor.hoursSource, 'MECHANIC_INPUT');
+    assert.equal(body.estimate.repairResolution.labor.rateSource, 'MECHANIC_INPUT');
     assert.equal(body.estimate.repairResolution.partsTotal, 85);
     assert.equal(body.estimate.repairResolution.verifiedCaseFingerprint, verifiedCase.fingerprint);
     assert.equal(body.estimate.candidates[0].cause, 'Ignition coil failure');
     assert.equal(body.estimate.probability[0].likelihood, 100);
     assert.equal(body.estimate.evidence.repairResolutionFingerprint, body.estimate.repairResolution.fingerprint);
+  });
+});
+
+test('Estimate marks omitted labor rate as system default', async () => {
+  const verifiedCase = makeVerifiedCase();
+  await withServer(async base => {
+    const response = await fetch(`${base}/estimate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ verifiedCase, laborHours: 1, partsCost: 10 })
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.estimate.repairResolution.labor.hourlyRate, 65);
+    assert.equal(body.estimate.repairResolution.labor.rateSource, 'SYSTEM_DEFAULT');
   });
 });
