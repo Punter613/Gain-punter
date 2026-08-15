@@ -13,7 +13,8 @@
     "test:lifecycle": "node --test tests/lifecycle.http.test.js",
     "test:measurements": "node --test tests/measurement.normalizer.test.js tests/measurement.tag.integration.test.js",
     "test:evidence": "node --test tests/nhtsa.tsb.corpus.test.js",
-    "test:diagnose-pipeline": "node --test tests/diagnose.pipeline.contract.test.js"
+    "test:diagnose-pipeline": "node --test tests/diagnose.pipeline.contract.test.js",
+    "test:evidence-packet": "node --test tests/diagnostic.evidence.packet.test.js tests/diagnostic.evidence.packet.route.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",
