@@ -40,5 +40,8 @@ jobs:
     - name: Lifecycle HTTP Regression Checks
       run: npm run test:lifecycle
 
+    - name: Measurement Normalization Regression Checks
+      run: npm run test:measurements
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
