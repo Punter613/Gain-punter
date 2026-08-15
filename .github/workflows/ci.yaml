@@ -43,5 +43,8 @@ jobs:
     - name: Measurement Normalization Regression Checks
       run: npm run test:measurements
 
+    - name: Evidence Retrieval Regression Checks
+      run: npm run test:evidence
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty

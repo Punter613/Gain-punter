@@ -2,20 +2,15 @@ const NodeCache = require('node-cache');
 const crypto = require('crypto');
 const { scrapeLEMONManuals } = require('./lemon');
 const { harvestVehicleTsbs } = require('./tsb.harvester');
+const { loadNhtsaCorpus, mergeTsbReferences } = require('./nhtsa.tsb.corpus');
 
 const cache = new NodeCache({ stdTTL: 60 * 60 * 12, checkperiod: 600, useClones: false });
 const NHTSA_BASE = 'https://api.nhtsa.gov';
 
 function clean(value) { return String(value || '').trim(); }
 function vehicleKey(vehicle) {
-  return [
-    vehicle.year,
-    vehicle.make,
-    vehicle.model,
-    vehicle.trim,
-    vehicle.engine,
-    vehicle.drivetrain || vehicle.driveType || vehicle.drive
-  ].map(clean).join('|').toLowerCase();
+  return [vehicle.year, vehicle.make, vehicle.model, vehicle.trim, vehicle.engine, vehicle.drivetrain || vehicle.driveType || vehicle.drive]
+    .map(clean).join('|').toLowerCase();
 }
 
 function evidenceContextKey(context = {}) {
@@ -35,15 +30,11 @@ function tsbContextEligible(reference, context = {}) {
     ...(Array.isArray(context.keywords) ? context.keywords : [])
   ].filter(Boolean).join(' ')).toLowerCase();
   const bulletinText = clean([
-    reference.title,
-    reference.subject,
-    reference.groupName,
-    reference.snippet,
+    reference.title, reference.subject, reference.groupName, reference.snippet,
     JSON.stringify(reference.extractedFacts || {})
   ].filter(Boolean).join(' ')).toLowerCase();
   const codes = (Array.isArray(context.obdCodes) ? context.obdCodes : [])
-    .map(code => String(code || '').trim().toLowerCase())
-    .filter(Boolean);
+    .map(code => String(code || '').trim().toLowerCase()).filter(Boolean);
   const codeMatch = codes.some(code => bulletinText.includes(code));
 
   const symptomNoise = /clunk|noise|chatter|vibration|knock|thud|bump/.test(symptomText);
@@ -51,10 +42,11 @@ function tsbContextEligible(reference, context = {}) {
   const steeringOverlap = /steering|full lock|tie rod|rack/.test(symptomText) && /steering|full lock|tie rod|rack/.test(bulletinText);
   const drivelineOverlap = /driveline|driveshaft|propeller shaft|u joint|universal joint|transfer case|differential|torque reversal/.test(symptomText) && /driveline|driveshaft|propeller shaft|u joint|universal joint|transfer case|differential|torque reversal/.test(bulletinText);
   const loadOverlap = /deceler|throttle release|accelerator[^.]{0,20}release|load change|torque reversal|reverse|neutral[^.]{0,20}drive/.test(symptomText) && /deceler|throttle release|accelerator[^.]{0,20}release|load change|torque reversal|reverse|neutral[^.]{0,20}drive/.test(bulletinText);
+  const engineOverlap = /misfire|lean|fuel trim|vacuum|intake|ignition/.test(symptomText) && /misfire|lean|fuel trim|vacuum|intake|ignition/.test(bulletinText);
 
   if (codeMatch) return true;
   if (symptomNoise) return bulletinNoise && (steeringOverlap || drivelineOverlap || loadOverlap);
-  return steeringOverlap || drivelineOverlap || loadOverlap || Number(reference.relevanceScore || 0) >= 24;
+  return steeringOverlap || drivelineOverlap || loadOverlap || engineOverlap || Number(reference.relevanceScore || 0) >= 24;
 }
 
 function selectRelevantTsbs(vehicleEvidence, context = {}, minScore = 12) {
@@ -159,28 +151,24 @@ async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
   const result = {
     available: false, fromCache: false, collectedAt: new Date().toISOString(),
     vehicle: {
-      year: vehicle.year,
-      make: vehicle.make,
-      model: vehicle.model,
-      trim: vehicle.trim || '',
-      engine: vehicle.engine || '',
+      year: vehicle.year, make: vehicle.make, model: vehicle.model, trim: vehicle.trim || '', engine: vehicle.engine || '',
       drivetrain: vehicle.drivetrain || vehicle.driveType || vehicle.drive || ''
     },
     oem: { references: [], source: 'LEMON_MANUALS' },
     tsbs: {
-      references: [],
-      corpusTotal: 0,
-      corpusStored: false,
-      corpusHarvested: false,
-      corpusTruncated: false,
+      references: [], corpusTotal: 0, corpusStored: false, corpusHarvested: false, corpusTruncated: false,
+      nhtsaCorpusFetched: 0, nhtsaCorpusTruncated: false,
       status: 'candidate references only; verify bulletin identity/applicability before claiming a TSB'
     },
     recalls: [], knownIssues: [], sources: [], errors: []
   };
 
-  const [manualResult, tsbResult, nhtsaResult] = await Promise.allSettled([
+  // NHTSA bulk is a local Supabase corpus lookup, independent of the live ODI API.
+  // Diagnose can disable live NHTSA network calls while still using pre-ingested official manufacturer communications.
+  const [manualResult, tsbResult, nhtsaCorpusResult, nhtsaResult] = await Promise.allSettled([
     scrapeLEMONManuals(vehicle, context),
     harvestVehicleTsbs(vehicle, { ...context, keywords: context.keywords || [] }),
+    options.includeNhtsaCorpus === false ? Promise.resolve(null) : loadNhtsaCorpus(vehicle, context, { limit: 12, minScore: 1 }),
     options.includeNhtsa === false ? Promise.resolve(null) : scrapeNhtsa(vehicle)
   ]);
 
@@ -189,8 +177,8 @@ async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
     const references = classifyFactoryItems(manual.items || []).sort((a, b) => b.relevanceScore - a.relevanceScore);
     result.oem = {
       references: references.filter(item => item.evidenceType !== 'TSB_CANDIDATE').slice(0, 20),
-      source: 'LEMON_MANUALS', fromCache: !!manual.fromCache,
-      scraped: !!manual.scraped, schemaVersion: manual.schemaVersion || 1, crawledUrls: manual.crawled_urls || 0
+      source: 'LEMON_MANUALS', fromCache: !!manual.fromCache, scraped: !!manual.scraped,
+      schemaVersion: manual.schemaVersion || 1, crawledUrls: manual.crawled_urls || 0
     };
     if (references.length) result.sources.push('LEMON_MANUALS');
     if (manual.error) result.errors.push(`LEMON: ${manual.error}`);
@@ -206,12 +194,22 @@ async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
       corpusStored: !!corpus.fromStore || (!!corpus.harvested && !corpus.error),
       corpusHarvested: !!corpus.harvested,
       corpusTruncated: !!corpus.truncated,
-      crawledUrls: Number(corpus.crawledUrls || 0),
-      rootUrl: corpus.tsbRootUrl || ''
+      crawledUrls: Number(corpus.crawledUrls || 0), rootUrl: corpus.tsbRootUrl || ''
     };
     if (references.length && !result.sources.includes('LEMON_MANUALS')) result.sources.push('LEMON_MANUALS');
     if (corpus.error) result.errors.push(`LEMON TSB corpus: ${corpus.error}`);
   } else result.errors.push(`LEMON TSB corpus: ${tsbResult.reason?.message || 'harvest failed'}`);
+
+  if (nhtsaCorpusResult.status === 'fulfilled' && nhtsaCorpusResult.value) {
+    const nhtsaCorpus = nhtsaCorpusResult.value;
+    result.tsbs.references = mergeTsbReferences(result.tsbs.references, nhtsaCorpus.references || [], 15);
+    result.tsbs.nhtsaCorpusFetched = Number(nhtsaCorpus.totalFetched || 0);
+    result.tsbs.nhtsaCorpusTruncated = !!nhtsaCorpus.truncated;
+    if ((nhtsaCorpus.references || []).length && !result.sources.includes('NHTSA_BULK')) result.sources.push('NHTSA_BULK');
+    if (nhtsaCorpus.error) result.errors.push(`NHTSA TSB corpus: ${nhtsaCorpus.error}`);
+  } else if (nhtsaCorpusResult.status === 'rejected') {
+    result.errors.push(`NHTSA TSB corpus: ${nhtsaCorpusResult.reason?.message || 'lookup failed'}`);
+  }
 
   if (options.includeNhtsa !== false) {
     if (nhtsaResult.status === 'fulfilled') {
