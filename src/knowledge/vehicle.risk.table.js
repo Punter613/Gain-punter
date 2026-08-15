@@ -102,19 +102,23 @@ const VEHICLE_FLEET_DB = {
   }
 };
 
+function normalizeVehicleToken(value = '') {
+  return String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function getVehicleRiskProfile(vehicle = {}, vin = '') {
-  const make = (vehicle.make || '').toLowerCase();
-  let model = (vehicle.model || '').toLowerCase();
+  const make = normalizeVehicleToken(vehicle.make);
+  const model = normalizeVehicleToken(vehicle.model);
   const trim = (vehicle.trim || '').toLowerCase();
   const year = parseInt(vehicle.year) || 0;
   const cleanVin = (vin || '').toUpperCase().trim();
 
-  for (const [key, profile] of Object.entries(VEHICLE_FLEET_DB)) {
-    const profileMake = profile.make.toLowerCase();
-    const profileModel = profile.model.toLowerCase();
+  for (const profile of Object.values(VEHICLE_FLEET_DB)) {
+    const profileMake = normalizeVehicleToken(profile.make);
+    const profileModel = normalizeVehicleToken(profile.model);
 
-    const makeMatch = make.includes(profileMake) || profileMake.includes(make);
-    const modelMatch = model.includes(profileModel) || profileModel.includes(model);
+    const makeMatch = make && profileMake && (make.includes(profileMake) || profileMake.includes(make));
+    const modelMatch = model && profileModel && (model.includes(profileModel) || profileModel.includes(model));
 
     if (makeMatch && modelMatch) {
       if (year >= profile.minYear && year <= profile.maxYear) {
@@ -146,10 +150,6 @@ function getVehicleRiskProfile(vehicle = {}, vin = '') {
           if (profile.engineCode.includes('DPS6')) return profile;
         }
 
-        // If no engine info or no engine match, but it's the right VMM/Year,
-        // we should probably still return this profile as it's the best we have.
-        // But the pattern matcher might block if engineCode doesn't match?
-        // Let's ensure it matches if possible.
         return profile;
       }
     }
@@ -157,4 +157,4 @@ function getVehicleRiskProfile(vehicle = {}, vin = '') {
   return null;
 }
 
-module.exports = { getVehicleRiskProfile, VEHICLE_FLEET_DB };
+module.exports = { getVehicleRiskProfile, VEHICLE_FLEET_DB, normalizeVehicleToken };
