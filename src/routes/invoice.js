@@ -7,6 +7,16 @@ function money(value) {
   return Math.round(n * 100) / 100;
 }
 
+function lockedLaborMultiplier(est = {}) {
+  const adjustment = est.rustAdjustment;
+  if (!adjustment || adjustment.source !== 'VERIFIED_CASE') return 1;
+  const multiplier = Number(adjustment.multiplier);
+  if (!Number.isFinite(multiplier) || multiplier < 1) {
+    throw new Error('Canonical invoice contains invalid verified labor adjustment');
+  }
+  return multiplier;
+}
+
 function buildCanonicalLines(est) {
   const resolution = est.repairResolution;
   if (!resolution || resolution.stage !== 'REPAIR_RESOLVED' || !resolution.fingerprint) {
@@ -18,7 +28,9 @@ function buildCanonicalLines(est) {
   const laborOperation = operations.get(labor.operationId);
   if (!laborOperation) throw new Error('Canonical invoice labor line is not bound to verified operation');
 
-  const laborAmount = money(Number(labor.hours) * Number(labor.hourlyRate));
+  const laborMultiplier = lockedLaborMultiplier(est);
+  const baseLaborAmount = money(Number(labor.hours) * Number(labor.hourlyRate));
+  const laborAmount = money(baseLaborAmount * laborMultiplier);
   const laborLines = [{
     lineNumber: 1,
     type: 'LABOR',
@@ -27,7 +39,8 @@ function buildCanonicalLines(est) {
     hours: Number(labor.hours),
     rate: money(labor.hourlyRate),
     amount: laborAmount,
-    source: labor.hoursSource
+    source: labor.hoursSource,
+    ...(laborMultiplier > 1 ? { adjustmentMultiplier: laborMultiplier, adjustmentSource: 'VERIFIED_CASE' } : {})
   }];
 
   const partsLines = (resolution.parts || []).map((part, index) => {
@@ -165,3 +178,4 @@ router.post('/build', (req, res) => {
 
 module.exports = router;
 module.exports.buildInvoice = buildInvoice;
+module.exports.lockedLaborMultiplier = lockedLaborMultiplier;
