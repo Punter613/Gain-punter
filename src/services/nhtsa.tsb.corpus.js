@@ -4,6 +4,7 @@ const { supabase } = require('../db');
 
 const MAX_CORPUS_ROWS = 500;
 const DEFAULT_LIMIT = 8;
+const MAX_EVIDENCE_EXCERPT = 800;
 
 function clean(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -31,10 +32,15 @@ function contextCodes(context = {}) {
     .filter(Boolean);
 }
 
+function boundedExcerpt(value, max = MAX_EVIDENCE_EXCERPT) {
+  return clean(value).slice(0, max);
+}
+
 function rowToReference(row = {}) {
   const bulletinNumber = clean(row.bulletin_number);
   const component = clean(row.group_name || row.subject);
   const summary = clean(row.body_text);
+  const excerpt = boundedExcerpt(summary);
   return {
     title: bulletinNumber ? `${bulletinNumber}: ${component || 'Manufacturer communication'}` : (component || 'Manufacturer communication'),
     url: '',
@@ -47,8 +53,15 @@ function rowToReference(row = {}) {
     subject: clean(row.subject || row.group_name),
     snippet: summary.slice(0, 3500),
     bodyText: summary,
-    extractedFacts: row.extracted_facts || {},
+    excerpt,
+    extractedFacts: {
+      ...(row.extracted_facts || {}),
+      source: 'NHTSA_BULK',
+      evidenceExcerpt: excerpt,
+      matchedSignals: []
+    },
     matchedKeywords: [],
+    matchedSignals: [],
     relevanceScore: 0
   };
 }
@@ -66,11 +79,13 @@ function scoreReference(reference, context = {}) {
   const rawHaystack = clean(reference.snippet).toUpperCase();
   let score = 0;
   const matched = [];
+  const matchedSignals = [];
 
   for (const code of codes) {
     if (rawHaystack.includes(code) || clean(reference.subject).toUpperCase().includes(code)) {
       score += 30;
       matched.push(code);
+      matchedSignals.push(`DTC:${code}`);
     }
   }
 
@@ -79,6 +94,7 @@ function scoreReference(reference, context = {}) {
     if (haystack.includes(token)) {
       score += 3;
       matched.push(token);
+      matchedSignals.push(`SYMPTOM:${token}`);
     }
   }
 
@@ -95,34 +111,63 @@ function scoreReference(reference, context = {}) {
     if (pattern.test(symptoms) && pattern.test(haystack)) {
       score += points;
       matched.push(label);
+      matchedSignals.push(`OVERLAP:${label}`);
     }
   }
 
+  const uniqueSignals = [...new Set(matchedSignals)];
   return {
     ...reference,
     relevanceScore: score,
-    matchedKeywords: [...new Set(matched)]
+    matchedKeywords: [...new Set(matched)],
+    matchedSignals: uniqueSignals,
+    extractedFacts: {
+      ...(reference.extractedFacts || {}),
+      source: reference.sourceAuthority || reference.source || 'NHTSA_BULK',
+      evidenceExcerpt: boundedExcerpt(reference.excerpt || reference.snippet || reference.bodyText),
+      matchedSignals: uniqueSignals
+    }
   };
 }
 
-function dedupeReferences(references = []) {
-  const seen = new Set();
-  const output = [];
+function referenceKey(reference = {}) {
+  const bulletinId = normalizeBulletinId(reference.bulletinNumber);
+  const fallback = normalize(`${reference.subject}|${reference.snippet}`).slice(0, 240);
+  return bulletinId || fallback;
+}
+
+function union(valuesA = [], valuesB = []) {
+  return [...new Set([...(valuesA || []), ...(valuesB || [])].filter(Boolean))];
+}
+
+function dedupeReferencesKeepingHighestScore(references = []) {
+  const strongest = new Map();
   for (const reference of references) {
-    const bulletinId = normalizeBulletinId(reference.bulletinNumber);
-    const fallback = normalize(`${reference.subject}|${reference.snippet}`).slice(0, 240);
-    const key = bulletinId || fallback;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    output.push(reference);
+    const key = referenceKey(reference);
+    if (!key) continue;
+    const existing = strongest.get(key);
+    if (!existing || Number(reference.relevanceScore || 0) > Number(existing.relevanceScore || 0)) {
+      strongest.set(key, reference);
+    } else if (Number(reference.relevanceScore || 0) === Number(existing.relevanceScore || 0)) {
+      strongest.set(key, {
+        ...existing,
+        matchedKeywords: union(existing.matchedKeywords, reference.matchedKeywords),
+        matchedSignals: union(existing.matchedSignals, reference.matchedSignals),
+        extractedFacts: {
+          ...(existing.extractedFacts || {}),
+          matchedSignals: union(existing.matchedSignals, reference.matchedSignals)
+        }
+      });
+    }
   }
-  return output;
+  return [...strongest.values()];
 }
 
 function rankNhtsaRows(rows = [], context = {}, options = {}) {
   const minScore = Number.isFinite(options.minScore) ? options.minScore : 1;
   const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : DEFAULT_LIMIT;
-  return dedupeReferences(rows.map(rowToReference).map(ref => scoreReference(ref, context)))
+  const scored = rows.map(rowToReference).map(ref => scoreReference(ref, context));
+  return dedupeReferencesKeepingHighestScore(scored)
     .filter(ref => ref.relevanceScore >= minScore)
     .sort((a, b) => b.relevanceScore - a.relevanceScore)
     .slice(0, limit);
@@ -176,7 +221,28 @@ function mergeTsbReferences(primary = [], nhtsa = [], limit = 15) {
     const key = id || `NHTSA:${normalize(`${reference.subject}|${reference.snippet}`).slice(0, 240)}`;
     if (merged.has(key)) {
       const existing = merged.get(key);
-      merged.set(key, { ...existing, nhtsaVerified: true, nhtsaReference: reference });
+      const existingScore = Number(existing.relevanceScore || 0);
+      const nhtsaScore = Number(reference.relevanceScore || 0);
+      const strongest = nhtsaScore > existingScore ? reference : existing;
+      const matchedSignals = union(existing.matchedSignals || existing.extractedFacts?.matchedSignals, reference.matchedSignals || reference.extractedFacts?.matchedSignals);
+      const matchedKeywords = union(existing.matchedKeywords, reference.matchedKeywords);
+      const strongestExcerpt = boundedExcerpt(strongest.excerpt || strongest.snippet || strongest.bodyText || strongest.extractedFacts?.evidenceExcerpt);
+
+      merged.set(key, {
+        ...existing,
+        relevanceScore: Math.max(existingScore, nhtsaScore),
+        matchedKeywords,
+        matchedSignals,
+        excerpt: strongestExcerpt || existing.excerpt,
+        extractedFacts: {
+          ...(existing.extractedFacts || {}),
+          evidenceExcerpt: strongestExcerpt || existing.extractedFacts?.evidenceExcerpt || boundedExcerpt(existing.snippet),
+          matchedSignals,
+          nhtsaVerified: true
+        },
+        nhtsaVerified: true,
+        nhtsaReference: reference
+      });
     } else {
       merged.set(key, { ...reference });
     }
@@ -189,9 +255,12 @@ function mergeTsbReferences(primary = [], nhtsa = [], limit = 15) {
 
 module.exports = {
   MAX_CORPUS_ROWS,
+  MAX_EVIDENCE_EXCERPT,
   normalizeBulletinId,
+  boundedExcerpt,
   rowToReference,
   scoreReference,
+  dedupeReferencesKeepingHighestScore,
   rankNhtsaRows,
   loadNhtsaCorpus,
   mergeTsbReferences
