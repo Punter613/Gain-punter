@@ -1,5 +1,9 @@
 const crypto = require('crypto');
 const { supabase } = require('../db');
+const {
+  buildVerifiedEstimateSnapshot,
+  assertVerifiedEstimateSnapshot
+} = require('../core/evidence/verified.estimate.snapshot');
 
 const VALID_STATES = new Set(['DIAGNOSING', 'TESTING', 'VERIFIED', 'ESTIMATED', 'INVOICED', 'DIAG_FAILED']);
 
@@ -197,7 +201,7 @@ async function attachEstimate(jobId, estimate) {
   const job = await getJob(jobId);
   if (!job) return null;
   if (job.status !== 'VERIFIED') throw new Error('Estimate requires a VERIFIED diagnosis');
-  job.estimate = { ...estimate, estimateNumber: jobId, jobId, createdAt: nowIso() };
+  job.estimate = buildVerifiedEstimateSnapshot(job, estimate);
   job.status = 'ESTIMATED';
   job.updatedAt = nowIso();
   await persist(job);
@@ -208,7 +212,8 @@ async function attachInvoice(jobId, invoice) {
   const job = await getJob(jobId);
   if (!job) return null;
   if (!job.estimate) throw new Error('Invoice requires an estimate');
-  job.invoice = { ...invoice, invoiceNumber: jobId, jobId, createdAt: nowIso() };
+  assertVerifiedEstimateSnapshot(job.estimate, job);
+  job.invoice = { ...invoice, invoiceNumber: jobId, jobId, estimateFingerprint: job.estimate.fingerprint, createdAt: nowIso() };
   job.status = 'INVOICED';
   job.updatedAt = nowIso();
   await persist(job);
@@ -234,13 +239,18 @@ function hydrateEstimateInput(job, incoming = {}) {
 }
 
 function hydrateInvoiceInput(job, incoming = {}) {
+  const estimate = assertVerifiedEstimateSnapshot(job.estimate, job);
   return {
-    ...incoming,
     jobId: job.jobId,
-    estimate: incoming.estimate || job.estimate,
-    customerInfo: { ...job.customer, ...(incoming.customerInfo || {}) },
-    vehicleInfo: { ...job.vehicle, ...(incoming.vehicleInfo || {}) }
+    estimate,
+    customerInfo: clonePlain(job.customer),
+    vehicleInfo: clonePlain(job.vehicle),
+    notes: typeof incoming.notes === 'string' ? incoming.notes : ''
   };
+}
+
+function clonePlain(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
 module.exports = {
