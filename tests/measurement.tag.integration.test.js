@@ -33,7 +33,7 @@ test('derived brake-fluid age reaches TAG and blocks AI', async () => {
         mileage: 150000,
         componentData: {
           brakes: {
-            brakeFluidServiceDate: '2020-01-01T00:00:00.000Z'
+            brakeFluidServiceDate: '2020-01-01'
           }
         }
       },
