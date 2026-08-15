@@ -77,8 +77,6 @@ router.post('/', async (req, res) => {
       return res.json({ success: true, result: localResult, traceLog: { traceId: executionTrace.traceId, logs: executionTrace.logs } });
     }
 
-    if (!process.env.GROQ_API_KEY) return res.status(503).json({ success: false, error: 'Diagnosis failed', details: 'Local pattern database miss and cloud GROQ_API_KEY is not configured.', trace: executionTrace.traceId });
-
     const inputMake = (resolvedVehicle.make || '').toLowerCase(); const inputModel = (resolvedVehicle.model || '').toLowerCase(); const profileId = profile ? profile.vehicleId : '';
     let isProfileValidContext = false;
     if (profileId === 'FORD_F150_3V_TRITON' && inputMake.includes('ford') && (inputModel.includes('150') || inputModel.includes('f-150'))) isProfileValidContext = true;
@@ -119,15 +117,15 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     if (assemblyData && isProfileValidContext && assemblyData.breakdowns.length > 0) systemPrompt += `\n\nLABOR: ${JSON.stringify(assemblyData.breakdowns, null, 2)}\nPARTS: ${JSON.stringify(assemblyData.partsRisks, null, 2)}`;
     const userPrompt = `Vehicle: ${[resolvedVehicle.year, resolvedVehicle.make, resolvedVehicle.model, resolvedVehicle.trim || resolvedVehicle.engine].filter(Boolean).join(' ') || 'N/A'} | Drivetrain: ${resolvedVehicle.driveType || resolvedVehicle.drivetrain || 'unknown'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | LOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerSymptomContext.join(', ') || 'N/A'} | HIGH-WEIGHT MECHANIC / TECH OBSERVATIONS: ${mechanicContext.join(', ') || 'N/A'}\n\nVEHICLE EVIDENCE:\n${JSON.stringify(compactEvidence)}`;
 
-    executionTrace.log('GROQ_DISPATCH', 'Sending to Groq...');
-    const groqRes = await aiChat({
+    executionTrace.log('AI_DISPATCH', 'Sending to shared AI provider router...');
+    const aiRes = await aiChat({
       messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
       max_tokens: 2500,
       temperature: 0.15,
       reasoning_effort: 'low',
       response_format: { type: 'json_object' }
     });
-    const aiText = typeof groqRes === 'string' ? groqRes : (groqRes?.choices?.[0]?.message?.content || ''); if (!aiText) throw new Error('Groq returned empty response');
+    const aiText = typeof aiRes === 'string' ? aiRes : (aiRes?.choices?.[0]?.message?.content || ''); if (!aiText) throw new Error('AI provider returned empty response');
     let parsed = extractJSON(aiText); if (!parsed || typeof parsed !== 'object') { console.warn('[Diagnose] JSON extract failed. Raw snippet:', aiText.substring(0, 300)); parsed = safeResult({ notes: 'AI returned unparseable response — please retry' }); }
 
     const stageGuard = applyDiagnosticStageGuard(parsed);
@@ -142,7 +140,7 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     if (guardResult.changed) {
       executionTrace.log('COMPLETED_WORK_GUARD', `Removed ${guardResult.removed.length} recommendation(s) already completed: ${guardResult.removed.join(' | ')}`);
       console.log(`[Diagnose] Completed-work guard filtered ${guardResult.removed.length} item(s):`, guardResult.removed);
-      recordGuardCatch({ requestId: executionTrace.traceId, route: '/api/diagnose', vehicle: resolvedVehicle, completedWork: guardResult.completedWork, removedItems: guardResult.removed, primaryCauseFlagged: !!parsed.primaryCauseFlaggedForReview, model: groqRes?.model || 'openai/gpt-oss-120b' }).catch(err => console.warn('[Diagnose] recordGuardCatch failed (non-fatal):', err.message));
+      recordGuardCatch({ requestId: executionTrace.traceId, route: '/api/diagnose', vehicle: resolvedVehicle, completedWork: guardResult.completedWork, removedItems: guardResult.removed, primaryCauseFlagged: !!parsed.primaryCauseFlaggedForReview, model: aiRes?.model || 'unknown-provider-model' }).catch(err => console.warn('[Diagnose] recordGuardCatch failed (non-fatal):', err.message));
     }
     parsed = guardResult.output;
 
