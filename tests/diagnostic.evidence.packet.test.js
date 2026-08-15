@@ -127,3 +127,19 @@ test('deterministic profile is compacted instead of copying arbitrary registry p
   assert.equal('giantInternalBlob' in packet.deterministic.vehicleProfile, false);
   assert.doesNotMatch(JSON.stringify(packet), /DO_NOT_COPY/);
 });
+
+test('packet boundary resolves deterministic registry profiles beyond route-specific legacy cases', () => {
+  const packet = build({
+    vin: '',
+    vehicle: { year: 2015, make: 'Ram', model: '1500', engine: '5.7L Hemi' },
+    deterministicProfile: null
+  });
+
+  assert.equal(packet.deterministic.vehicleProfile?.vehicleId, 'RAM_5.7_HEMI');
+});
+
+test('missing or placeholder zero mileage stays unknown while measurement zero remains valid', () => {
+  const packet = build({ mileage: 0 });
+  assert.equal(packet.vehicle.mileage, undefined);
+  assert.equal(packet.measurements.values.brakes.padThickness, 0);
+});
