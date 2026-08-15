@@ -41,6 +41,12 @@ function safeResult(overrides = {}) {
   };
 }
 
+function withDynamicRisk(profile, dynamicRisk) {
+  if (!profile) return null;
+  if (dynamicRisk === undefined || dynamicRisk === null) return { ...profile };
+  return { ...profile, dynamicCalculatedRisk: dynamicRisk };
+}
+
 router.post('/', async (req, res) => {
   const executionTrace = { traceId: 'TR-' + Date.now().toString(16).toUpperCase(), stage: 'INGESTION', logs: [], log(stage, message) { this.stage = stage; this.logs.push(`[${stage}] ${message}`); } };
   executionTrace.log('API_ROUTER', 'Payload received.');
@@ -55,7 +61,7 @@ router.post('/', async (req, res) => {
     try { resolvedVehicle = await resolveVehicleProfile(vin, vehicle); if (resolvedVehicle?.make) executionTrace.log('VIN_PROFILE', `${resolvedVehicle.year} ${resolvedVehicle.make} ${resolvedVehicle.model} ${resolvedVehicle.driveType || ''}`.trim()); }
     catch (err) { executionTrace.log('VIN_PROFILE_WARN', `VIN/profile resolution failed: ${err.message}`); }
 
-    let compiledData = { profile: null, vinBuildProfile: null, localSafetyTriggered: false, safetyNotes: '', matchedPatterns: [], assemblyData: null, dynamicRisk: 0, confidence: { percentage: 30, rating: 'LOW' }, symptomTelemetry: { hasMismatchedSignals: false, categories: {}, overlappingClassesCount: 0 } };
+    let compiledData = { profile: null, vinBuildProfile: null, localSafetyTriggered: false, safetyNotes: '', matchedPatterns: [], assemblyData: null, confidence: { percentage: 30, rating: 'LOW' }, symptomTelemetry: { hasMismatchedSignals: false, categories: {}, overlappingClassesCount: 0 } };
     try { compiledData = runDiagnosticPipeline({ vehicle: resolvedVehicle, vin, axleCode, symptoms: targetSymptoms, codes: targetCodes, notes, laborRate, mileage }, executionTrace); }
     catch (pipelineErr) { executionTrace.log('PIPELINE_WARN', `Pipeline skipped: ${pipelineErr.message}`); }
     const { profile, vinBuildProfile, localSafetyTriggered, safetyNotes, matchedPatterns, assemblyData, dynamicRisk, confidence, symptomTelemetry } = compiledData;
@@ -67,7 +73,7 @@ router.post('/', async (req, res) => {
       executionTrace.log('LOCAL_MATCH', `Deterministic hit: ${hit.patternName}`);
       const rawTips = procedureSpecs && procedureSpecs.criticalSpecs ? [procedureSpecs.criticalSpecs.torqueSequence, procedureSpecs.criticalSpecs.antiseizeNote] : [];
       const cleanTips = rawTips.filter(Boolean); if (!cleanTips.length) cleanTips.push('Always verify clearance specifications against factory block data prior to teardown.');
-      const localResult = safeResult({ urgency: 'immediate', safetyRisk: true, primaryCause: hit.patternName.toUpperCase(), notes: `Offline deterministic match active. ${hit.primaryCause}`.trim(), diagnosticConfidence: confidence || { percentage: 95, rating: 'HIGH' }, localVehicleTelemetry: localProfile ? { ...localProfile, dynamicCalculatedRisk: dynamicRisk } : null, probability: [{ cause: hit.patternName, likelihood: hit.likelihood }], recommendedTests: procedureSpecs ? procedureSpecs.clearanceSteps : [], repairSteps: [], proTips: cleanTips });
+      const localResult = safeResult({ urgency: 'immediate', safetyRisk: true, primaryCause: hit.patternName.toUpperCase(), notes: `Offline deterministic match active. ${hit.primaryCause}`.trim(), diagnosticConfidence: confidence || { percentage: 95, rating: 'HIGH' }, localVehicleTelemetry: withDynamicRisk(localProfile, dynamicRisk), probability: [{ cause: hit.patternName, likelihood: hit.likelihood }], recommendedTests: procedureSpecs ? procedureSpecs.clearanceSteps : [], repairSteps: [], proTips: cleanTips });
       return res.json({ success: true, result: localResult, traceLog: { traceId: executionTrace.traceId, logs: executionTrace.logs } });
     }
 
@@ -106,7 +112,10 @@ RULES:
 - Never recommend replacing a component the mechanic notes already replaced. You MAY inspect or verify its installation, torque, fitment, binding, or measured condition when diagnostically relevant.
 MULTI-CONDITION REASONING: When a symptom occurs under distinct operating conditions, analyze what changes mechanically in each condition and prioritize causes plausible under all conditions. Consider one common cause, multiple causes in one system, and two unrelated faults. Use overlap to narrow the diagnostic tree.
 - Output raw JSON only.`;
-    if (profile && isProfileValidContext) systemPrompt += `\n\nVEHICLE PROFILE: ${JSON.stringify({ ...profile, dynamicRisk }, null, 2)}`;
+    if (profile && isProfileValidContext) {
+      const profileContext = dynamicRisk === undefined || dynamicRisk === null ? { ...profile } : { ...profile, dynamicRisk };
+      systemPrompt += `\n\nVEHICLE PROFILE: ${JSON.stringify(profileContext, null, 2)}`;
+    }
     if (assemblyData && isProfileValidContext && assemblyData.breakdowns.length > 0) systemPrompt += `\n\nLABOR: ${JSON.stringify(assemblyData.breakdowns, null, 2)}\nPARTS: ${JSON.stringify(assemblyData.partsRisks, null, 2)}`;
     const userPrompt = `Vehicle: ${[resolvedVehicle.year, resolvedVehicle.make, resolvedVehicle.model, resolvedVehicle.trim || resolvedVehicle.engine].filter(Boolean).join(' ') || 'N/A'} | Drivetrain: ${resolvedVehicle.driveType || resolvedVehicle.drivetrain || 'unknown'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | LOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerSymptomContext.join(', ') || 'N/A'} | HIGH-WEIGHT MECHANIC / TECH OBSERVATIONS: ${mechanicContext.join(', ') || 'N/A'}\n\nVEHICLE EVIDENCE:\n${JSON.stringify(compactEvidence)}`;
 
@@ -121,9 +130,6 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     const aiText = typeof groqRes === 'string' ? groqRes : (groqRes?.choices?.[0]?.message?.content || ''); if (!aiText) throw new Error('Groq returned empty response');
     let parsed = extractJSON(aiText); if (!parsed || typeof parsed !== 'object') { console.warn('[Diagnose] JSON extract failed. Raw snippet:', aiText.substring(0, 300)); parsed = safeResult({ notes: 'AI returned unparseable response — please retry' }); }
 
-    // Hard lifecycle boundary: the model may rank causes and propose tests, but
-    // DIAG cannot authorize invasive work. Enforce this deterministically before
-    // completed-work filtering and before anything reaches the UI.
     const stageGuard = applyDiagnosticStageGuard(parsed);
     if (stageGuard.changed) {
       executionTrace.log('DIAGNOSTIC_STAGE_GUARD', `Blocked ${stageGuard.removed.length} repair/invasive action(s) before VERIFY: ${stageGuard.removed.map(x => x.text).join(' | ')}`);
@@ -145,7 +151,7 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     finalResult.evidence = { oem: oemReferences, tsbs: relevantTsbs.slice(0, 5), sources: vehicleEvidence.sources || [], available: vehicleEvidence.available, warmup: warmupStatus };
     finalResult.probability = calibrateProbabilityArray(finalResult.probability || [], confidence);
     finalResult.diagnosticConfidence = confidence || { percentage: 30, rating: 'LOW' };
-    finalResult.localVehicleTelemetry = localProfile ? { ...localProfile, dynamicCalculatedRisk: dynamicRisk } : null;
+    finalResult.localVehicleTelemetry = withDynamicRisk(localProfile, dynamicRisk);
     finalResult.vinManufacturingTelemetry = vinBuildProfile || null;
     finalResult.injectedFieldProtocols = matchedPatterns || [];
     finalResult.calculatedLaborBreakdown = assemblyData ? assemblyData.breakdowns : [];

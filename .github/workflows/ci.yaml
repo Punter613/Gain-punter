@@ -46,5 +46,8 @@ jobs:
     - name: Evidence Retrieval Regression Checks
       run: npm run test:evidence
 
+    - name: Diagnose Pipeline Contract Checks
+      run: npm run test:diagnose-pipeline
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
