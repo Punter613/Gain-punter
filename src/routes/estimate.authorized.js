@@ -33,11 +33,21 @@ router.post('/', async (req, res, next) => {
     }
 
     const canonical = verifiedEstimateInput(job.verifiedCase);
+    const packet = canonical.verifiedCase.evidencePacket || {};
+    const vehicle = packet.vehicle || canonical.verifiedCase.vehicle || job.vehicle || {};
     req.repairAuthorization = result;
     req.body = {
       ...(req.body || {}),
       jobId,
-      ...canonical
+      ...canonical,
+      vehicle,
+      vin: vehicle.vin || '',
+      mileage: vehicle.mileage,
+      customerStates: packet.observations?.customer || [],
+      mechanicNotices: packet.observations?.mechanic || [],
+      obdCodes: packet.dtcs || [],
+      diagnosticTests: canonical.diagnosticTests,
+      verifiedDiagnosis: canonical.verifiedCase.verification
     };
     return next();
   } catch (err) {
