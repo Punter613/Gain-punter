@@ -17,7 +17,8 @@
     "test:evidence-packet": "node --test tests/diagnostic.evidence.packet.test.js tests/diagnostic.evidence.packet.route.test.js",
     "test:verified-case": "node --test tests/verified.case.handoff.test.js tests/lifecycle.http.test.js",
     "test:estimate-verified-truth": "node --test tests/estimate.verified.truth.test.js tests/verified.case.handoff.test.js tests/lifecycle.http.test.js",
-    "test:repair-resolution": "node --test tests/verified.repair.resolution.test.js tests/verified.repair.resolution.edge.test.js tests/estimate.verified.truth.test.js tests/verified.case.handoff.test.js tests/lifecycle.http.test.js"
+    "test:repair-resolution": "node --test tests/verified.repair.resolution.test.js tests/verified.repair.resolution.edge.test.js tests/estimate.verified.truth.test.js tests/verified.case.handoff.test.js tests/lifecycle.http.test.js",
+    "test:invoice-handoff": "node --test tests/verified.estimate.invoice.handoff.test.js tests/invoice.rust-adjustment.test.js tests/lifecycle.http.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",

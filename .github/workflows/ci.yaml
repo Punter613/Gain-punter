@@ -27,8 +27,10 @@ jobs:
       run: |
         node --check src/contracts/estimate.ai.contract.js
         node --check src/core/evidence/verified.repair.resolution.js
+        node --check src/core/evidence/verified.estimate.snapshot.js
         node --check src/services/ai/providers/gemini.js
         node --check src/routes/estimate.js
+        node --check src/routes/invoice.js
         node scripts/test-estimate-contract.js
         node scripts/test-gemini-fallback.js
 
@@ -61,6 +63,9 @@ jobs:
 
     - name: Verified Repair Resolution Checks
       run: npm run test:repair-resolution
+
+    - name: Verified Estimate Invoice Handoff Checks
+      run: npm run test:invoice-handoff
 
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
