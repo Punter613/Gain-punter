@@ -28,9 +28,13 @@ function hours(value) {
 }
 
 function canonicalOperationId(scope = {}, index = 0) {
-  const identity = clean(scope.cause || scope.component, 300).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  if (!identity) throw new Error('Verified repair scope contains an invalid operation');
-  return `VERIFY_OP_${index + 1}_${identity}`;
+  const component = clean(scope.component, 300);
+  const cause = clean(scope.cause, 300);
+  if (!component && !cause) throw new Error('Verified repair scope contains an invalid operation');
+
+  // Fixed-length hash keeps IDs ASCII-safe, bounded, and stable for Unicode/long causes.
+  const digest = fingerprint({ index, component, cause }).slice(0, 32);
+  return `VERIFY_OP_${index + 1}_${digest}`;
 }
 
 function verifiedOperations(repairScope = []) {
@@ -109,8 +113,11 @@ function buildVerifiedRepairResolution({
 
   const explicitHours = hours(laborHours);
   const advisoryHours = hours(modelEstimatedHours);
-  const resolvedHours = explicitHours ?? advisoryHours ?? 0;
-  const laborHoursSource = explicitHours != null ? 'MECHANIC_INPUT' : advisoryHours != null ? 'MODEL_ADVISORY' : 'UNKNOWN';
+  if (explicitHours == null && advisoryHours == null) {
+    throw new Error('Verified repair resolution requires explicit or valid advisory labor hours');
+  }
+  const resolvedHours = explicitHours ?? advisoryHours;
+  const laborHoursSource = explicitHours != null ? 'MECHANIC_INPUT' : 'MODEL_ADVISORY';
   const rate = money(laborRate);
   const partLines = normalizeParts(parts, partsCost, operations);
   const partsTotal = money(partLines.reduce((sum, part) => sum + part.total, 0));
