@@ -3,11 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
-const { buildVerifiedCase } = require('../src/core/evidence/verified.case');
+const { buildVerifiedCase, fingerprint } = require('../src/core/evidence/verified.case');
 const {
   buildVerifiedRepairResolution,
   assertRepairResolutionIntegrity,
-  MAX_PART_LINES
+  MAX_PART_LINES,
+  verifiedOperations
 } = require('../src/core/evidence/verified.repair.resolution');
 
 function makeVerifiedCase() {
@@ -55,6 +56,10 @@ test('repair resolution is bound to VERIFIED_CASE and mechanic-owned pricing inp
 
   assert.equal(resolution.verifiedCaseFingerprint, verifiedCase.fingerprint);
   assert.deepEqual(resolution.repairScope, verifiedCase.repairScope);
+  assert.deepEqual(resolution.operations, verifiedOperations(verifiedCase.repairScope));
+  assert.equal(resolution.operations.length, 1);
+  assert.equal(resolution.labor.operationId, resolution.operations[0].operationId);
+  assert.ok(resolution.parts.every(part => part.operationId === resolution.operations[0].operationId));
   assert.equal(resolution.labor.hours, 1.5);
   assert.equal(resolution.labor.hoursSource, 'MECHANIC_INPUT');
   assert.equal(resolution.labor.hourlyRate, 65);
@@ -134,6 +139,51 @@ test('oversized part lists fail closed instead of truncating totals', () => {
   );
 });
 
+test('altered labor operation identifiers fail closed', () => {
+  const verifiedCase = makeVerifiedCase();
+  assert.throws(
+    () => buildVerifiedRepairResolution({
+      verifiedCase,
+      laborRate: 65,
+      laborHours: 1,
+      operationId: 'VERIFY_OP_999_ALTERNATE_REPAIR'
+    }),
+    /bind to a VERIFIED_CASE repair operation/i
+  );
+});
+
+test('part lines cannot bind to an operation outside VERIFIED_CASE', () => {
+  const verifiedCase = makeVerifiedCase();
+  assert.throws(
+    () => buildVerifiedRepairResolution({
+      verifiedCase,
+      laborRate: 65,
+      laborHours: 1,
+      parts: [{
+        operationId: 'VERIFY_OP_999_UNVERIFIED_REPAIR',
+        description: 'Unverified repair part',
+        quantity: 1,
+        unitPrice: 50
+      }]
+    }),
+    /bind to a VERIFIED_CASE repair operation/i
+  );
+});
+
+test('altered operation set fails integrity validation even with recomputed outer fingerprint', () => {
+  const verifiedCase = makeVerifiedCase();
+  const resolution = JSON.parse(JSON.stringify(buildVerifiedRepairResolution({
+    verifiedCase,
+    laborRate: 65,
+    laborHours: 1,
+    partsCost: 80
+  })));
+  resolution.operations[0].cause = 'Different repair';
+  delete resolution.fingerprint;
+  resolution.fingerprint = fingerprint(resolution);
+  assert.throws(() => assertRepairResolutionIntegrity(resolution, verifiedCase), /operation set/i);
+});
+
 test('tampered repair resolution fails integrity validation', () => {
   const verifiedCase = makeVerifiedCase();
   const resolution = JSON.parse(JSON.stringify(buildVerifiedRepairResolution({
@@ -151,23 +201,27 @@ function stubModule(modulePath, exports) {
   require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports };
 }
 
+let lastAiPrompt = '';
 stubModule('../src/services/ai/aiClient', {
-  aiChat: async () => ({
-    model: 'test-model',
-    _provider: 'test',
-    choices: [{ message: { content: JSON.stringify({
-      priority: 'medium',
-      diagnosis: 'wrong model wording',
-      estimatedHours: 4,
-      candidates: [{
-        cause: 'wrong cause', component: 'wrong component', modelConfidence: 80,
-        evidenceRefs: [], contradictions: [], confirmationTests: [], evidenceClass: 'MODEL_INFERENCE',
-        factorySupported: false, mechanicSupported: false, measuredSupported: false,
-        confirmationRequired: false, confirmed: true, repairAuthorized: true
-      }],
-      repairActions: [], repairSteps: [], proTips: [], additionalChecks: [], notes: ''
-    }) } }]
-  })
+  aiChat: async payload => {
+    lastAiPrompt = (payload?.messages || []).map(message => message.content).join('\n');
+    return {
+      model: 'test-model',
+      _provider: 'test',
+      choices: [{ message: { content: JSON.stringify({
+        priority: 'medium',
+        diagnosis: 'wrong model wording',
+        estimatedHours: 4,
+        candidates: [{
+          cause: 'wrong cause', component: 'wrong component', modelConfidence: 80,
+          evidenceRefs: [], contradictions: [], confirmationTests: [], evidenceClass: 'MODEL_INFERENCE',
+          factorySupported: false, mechanicSupported: false, measuredSupported: false,
+          confirmationRequired: false, confirmed: true, repairAuthorized: true
+        }],
+        repairActions: [], repairSteps: [], proTips: [], additionalChecks: [], notes: ''
+      }) } }]
+    };
+  }
 });
 
 const estimateRouter = require('../src/routes/estimate');
@@ -215,9 +269,62 @@ test('Estimate deterministically consumes resolved mechanic labor and parts whil
     assert.equal(body.estimate.repairResolution.labor.rateSource, 'MECHANIC_INPUT');
     assert.equal(body.estimate.repairResolution.partsTotal, 85);
     assert.equal(body.estimate.repairResolution.verifiedCaseFingerprint, verifiedCase.fingerprint);
+    assert.equal(body.estimate.repairResolution.labor.operationId, body.estimate.repairResolution.operations[0].operationId);
+    assert.ok(body.estimate.repairResolution.parts.every(part => part.operationId === body.estimate.repairResolution.operations[0].operationId));
     assert.equal(body.estimate.candidates[0].cause, 'Ignition coil failure');
     assert.equal(body.estimate.probability[0].likelihood, 100);
     assert.equal(body.estimate.evidence.repairResolutionFingerprint, body.estimate.repairResolution.fingerprint);
+  });
+});
+
+test('Estimate ignores tampered request vehicle and repair text in favor of VERIFIED_CASE', async () => {
+  const verifiedCase = makeVerifiedCase();
+  lastAiPrompt = '';
+  await withServer(async base => {
+    const response = await fetch(`${base}/estimate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        verifiedCase,
+        vehicle: { year: 2025, make: 'Ford', model: 'F-150' },
+        vin: 'TAMPEREDVIN',
+        repairScope: [{ cause: 'Replace transmission' }],
+        verifiedDiagnosis: { confirmedCause: 'Replace transmission' },
+        laborHours: 1,
+        partsCost: 10
+      })
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.match(lastAiPrompt, /2016 Chevrolet Malibu/);
+    assert.doesNotMatch(lastAiPrompt, /2025 Ford F-150|TAMPEREDVIN|Replace transmission/);
+    assert.equal(body.estimate.repairResolution.repairScope[0].cause, 'Ignition coil failure');
+    assert.equal(body.estimate.candidates[0].cause, 'Ignition coil failure');
+  });
+});
+
+test('Estimate fails closed when a part line names an unverified operation', async () => {
+  const verifiedCase = makeVerifiedCase();
+  await withServer(async base => {
+    const response = await fetch(`${base}/estimate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        verifiedCase,
+        laborHours: 1,
+        parts: [{
+          operationId: 'VERIFY_OP_999_UNVERIFIED_REPAIR',
+          description: 'Transmission assembly',
+          quantity: 1,
+          unitPrice: 1000
+        }]
+      })
+    });
+    const body = await response.json();
+    assert.equal(response.status, 409);
+    assert.equal(body.success, false);
+    assert.equal(body.code, 'VERIFIED_CASE_REQUIRED_OR_INVALID');
+    assert.equal(body.estimate, undefined);
   });
 });
 
