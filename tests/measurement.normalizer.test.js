@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const deterministicOrchestrator = require('../src/core/orchestrator/deterministic.orchestrator');
 const {
   normalizeVehicleMeasurements,
   monthsSince
@@ -70,15 +71,28 @@ test('maps unit-labeled observation fields into canonical TAG scalars', () => {
   assert.equal(normalized.componentData.exhaust.carbonMonoxide, 120);
 });
 
-test('invalid, future, null, and undefined dates remain unknown', () => {
+test('invalid, future, null, and undefined dates remain unknown', async () => {
   const now = Date.UTC(2026, 7, 14);
   assert.equal(monthsSince('not-a-date', now), undefined);
   assert.equal(monthsSince(null, now), undefined);
   assert.equal(monthsSince('2027-01-01T00:00:00.000Z', now), undefined);
 
-  const normalized = normalizeVehicleMeasurements({
+  const invalid = normalizeVehicleMeasurements({
     componentData: { brakes: { brakeFluidServiceDate: 'not-a-date' } }
   }, { now });
+  assert.equal(invalid.componentData.brakes.brakeFluid, undefined);
 
-  assert.equal(normalized.componentData.brakes.brakeFluid, undefined);
+  const future = normalizeVehicleMeasurements({
+    componentData: { brakes: { brakeFluidServiceDate: '2027-01-01T00:00:00.000Z' } }
+  }, { now });
+
+  assert.equal(future.componentData.brakes.brakeFluid, undefined);
+
+  const tagResult = await deterministicOrchestrator.process(future, 'brake fluid service date supplied');
+  assert.equal(
+    tagResult.overrides.some(item => item.component === 'brakes' && item.metric === 'brakeFluid'),
+    false,
+    'an impossible future service date must remain unknown rather than becoming a brake-fluid safety classification'
+  );
+  assert.equal(tagResult.canUseAI, true);
 });
