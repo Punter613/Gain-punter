@@ -67,5 +67,8 @@ jobs:
     - name: Verified Estimate Invoice Handoff Checks
       run: npm run test:invoice-handoff
 
+    - name: Verified Lifecycle Frontend Checks
+      run: npm run test:frontend-lifecycle
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
