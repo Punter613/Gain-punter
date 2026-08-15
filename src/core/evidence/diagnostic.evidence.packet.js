@@ -2,6 +2,7 @@
 
 const { normalizeVehicleMeasurements } = require('../measurement/measurement-normalizer');
 const { extractCompletedWork } = require('../orchestrator/completed.work.guard');
+const { getVehicleRiskProfile } = require('../../knowledge/vehicle.risk.table');
 
 const SCHEMA_VERSION = 1;
 const MAX_OBSERVATIONS = 12;
@@ -35,6 +36,11 @@ function optionalNumber(value) {
   if (typeof value === 'boolean' || Array.isArray(value) || typeof value === 'object') return undefined;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function optionalPositiveNumber(value) {
+  const numeric = optionalNumber(value);
+  return numeric !== undefined && numeric > 0 ? numeric : undefined;
 }
 
 const CANONICAL_MEASUREMENTS = {
@@ -121,9 +127,10 @@ function buildDiagnosticEvidencePacket(input = {}) {
   const tsbReferences = (input.tsbReferences || []).slice(0, MAX_TSB_REFERENCES).map(compactEvidenceReference);
   const sources = boundedList(input.sources || [], 12, 80)
     .filter(source => source !== 'NHTSA_ODI' && source !== 'NHTSA ODI');
+  const resolvedDeterministicProfile = input.deterministicProfile || getVehicleRiskProfile(vehicle, input.vin || '') || null;
 
   const deterministic = {
-    vehicleProfile: compactDeterministicProfile(input.deterministicProfile),
+    vehicleProfile: compactDeterministicProfile(resolvedDeterministicProfile),
     safetyTriggered: input.localSafetyTriggered === true,
     safetyNotes: boundedText(input.safetyNotes || '', 800),
     matchedPatterns: boundedList(input.matchedPatterns || [], 12, 240)
@@ -139,13 +146,13 @@ function buildDiagnosticEvidencePacket(input = {}) {
     stage: 'DIAGNOSE',
     vehicle: {
       vin: boundedText(input.vin || '', 64) || undefined,
-      year: optionalNumber(vehicle.year),
+      year: optionalPositiveNumber(vehicle.year),
       make: boundedText(vehicle.make || '', 80) || undefined,
       model: boundedText(vehicle.model || '', 120) || undefined,
       trim: boundedText(vehicle.trim || '', 120) || undefined,
       engine: boundedText(vehicle.engine || '', 120) || undefined,
       drivetrain: boundedText(vehicle.driveType || vehicle.drivetrain || vehicle.drive || '', 80) || undefined,
-      mileage: optionalNumber(input.mileage)
+      mileage: optionalPositiveNumber(input.mileage)
     },
     observations: { customer: customerObservations, mechanic: mechanicObservations, completedWork },
     dtcs,
