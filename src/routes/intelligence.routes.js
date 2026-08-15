@@ -15,33 +15,26 @@ const router = express.Router();
 
 let orchestrator;
 let economicEngine;
+let orchestratorLoadError = null;
+let economicEngineLoadError = null;
 
 // 🛡️ REQUIRE ISOLATION GUARD: Prevents syntax/path errors in core engines from crashing server initialization
 try {
   const SKSKOrchestrator = require('../core/orchestrator/main.orchestrator');
   orchestrator = typeof SKSKOrchestrator === 'function' ? new SKSKOrchestrator() : SKSKOrchestrator;
 } catch (err) {
-  console.warn('[SKSK Intelligence Route Warning] Orchestrator failed to load, deploying API proxy:', err.message);
-  orchestrator = {
-    process: async (req) => ({
-      status: 'PROXY_SUCCESS',
-      decision: { action: 'MONITOR', urgency: 'LOW', confidence: 90, reasoning: 'Bypassed core due to dynamic module maintenance compile passes.' }
-    }),
-    health: () => ({ ok: true, layer: 'proxy' }),
-    getStats: () => ({ totalRequests: 0 })
-  };
+  orchestratorLoadError = err;
+  orchestrator = null;
+  console.error('[SKSK Intelligence Route] Orchestrator failed to load:', err.message);
 }
 
 try {
   const SKSKEconomicEngine = require('../core/economic/economic.engine');
   economicEngine = typeof SKSKEconomicEngine === 'function' ? new SKSKEconomicEngine() : SKSKEconomicEngine;
 } catch (err) {
-  console.warn('[SKSK Intelligence Route Warning] EconomicEngine failed to load, deploying API proxy:', err.message);
-  economicEngine = {
-    analyze: async () => ({ status: 'PROXY_HOLD', savings: 0 }),
-    analyzeBatch: async () => [],
-    getAssumptions: () => ({ averageLaborRate: 125 })
-  };
+  economicEngineLoadError = err;
+  economicEngine = null;
+  console.error('[SKSK Intelligence Route] EconomicEngine failed to load:', err.message);
 }
 
 const validateVehicleProfile = (req, res, next) => {
@@ -69,7 +62,25 @@ const validateVehicleProfile = (req, res, next) => {
   next();
 };
 
+function intelligenceUnavailable(res) {
+  return res.status(503).json({
+    status: 'UNAVAILABLE',
+    error: 'SKSK intelligence orchestrator is unavailable',
+    code: 'ORCHESTRATOR_UNAVAILABLE',
+    fallback: { action: 'HUMAN_HANDOFF', message: 'Automated intelligence is unavailable. Human review required.', urgency: 'HIGH' }
+  });
+}
+
+function economicUnavailable(res) {
+  return res.status(503).json({
+    status: 'UNAVAILABLE',
+    error: 'SKSK economic engine is unavailable',
+    code: 'ECONOMIC_ENGINE_UNAVAILABLE'
+  });
+}
+
 router.post('/analyze', validateVehicleProfile, async (req, res) => {
+  if (orchestratorLoadError || !orchestrator) return intelligenceUnavailable(res);
   try {
     const { input, vehicleProfile, context = {} } = req.body;
     console.log(`[API] Intelligence request for VIN ${vehicleProfile.vin}: "${input}"`);
@@ -95,6 +106,7 @@ router.post('/analyze', validateVehicleProfile, async (req, res) => {
 });
 
 router.post('/estimate', validateVehicleProfile, async (req, res) => {
+  if (orchestratorLoadError || !orchestrator) return intelligenceUnavailable(res);
   try {
     const { input, vehicleProfile, context = {} } = req.body;
     
@@ -115,6 +127,7 @@ router.post('/estimate', validateVehicleProfile, async (req, res) => {
 });
 
 router.post('/predict', validateVehicleProfile, async (req, res) => {
+  if (orchestratorLoadError || !orchestrator) return intelligenceUnavailable(res);
   try {
     const { vehicleProfile, context = {} } = req.body;
     
@@ -131,6 +144,7 @@ router.post('/predict', validateVehicleProfile, async (req, res) => {
 });
 
 router.post('/economic', async (req, res) => {
+  if (economicEngineLoadError || !economicEngine) return economicUnavailable(res);
   try {
     const { recommendation, vehicleProfile } = req.body;
     if (!recommendation || !vehicleProfile) {
@@ -146,6 +160,7 @@ router.post('/economic', async (req, res) => {
 });
 
 router.post('/batch', validateVehicleProfile, async (req, res) => {
+  if (economicEngineLoadError || !economicEngine) return economicUnavailable(res);
   try {
     const { recommendations, vehicleProfile } = req.body;
     if (!Array.isArray(recommendations)) {
@@ -161,17 +176,26 @@ router.post('/batch', validateVehicleProfile, async (req, res) => {
 });
 
 router.get('/health', (req, res) => {
+  if (orchestratorLoadError || !orchestrator) {
+    return res.status(503).json({ ok: false, layer: 'orchestrator', code: 'ORCHESTRATOR_UNAVAILABLE' });
+  }
   try {
-    return res.json(typeof orchestrator.health === 'function' ? orchestrator.health() : { ok: true, status: 'Proxy framework online' });
+    const health = typeof orchestrator.health === 'function'
+      ? orchestrator.health()
+      : { ok: false, code: 'ORCHESTRATOR_HEALTH_UNAVAILABLE' };
+    return res.status(health.ok === false ? 503 : 200).json(health);
   } catch (err) {
-    return res.json({ ok: false, error: err.message });
+    return res.status(503).json({ ok: false, error: err.message });
   }
 });
 
 router.get('/stats', (req, res) => {
+  if (orchestratorLoadError || !orchestrator) return intelligenceUnavailable(res);
   try {
     const pipeStats = typeof orchestrator.getStats === 'function' ? orchestrator.getStats() : {};
-    const assumptions = typeof economicEngine.getAssumptions === 'function' ? economicEngine.getAssumptions() : {};
+    const assumptions = economicEngine && typeof economicEngine.getAssumptions === 'function'
+      ? economicEngine.getAssumptions()
+      : { unavailable: true };
     return res.json({ status: 'SUCCESS', stats: pipeStats, economicAssumptions: assumptions });
   } catch (err) {
     return res.status(500).json({ error: err.message });
