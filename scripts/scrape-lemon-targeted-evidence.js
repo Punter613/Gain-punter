@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { resolveRepairDiagnosisUrl, classifyDrivetrain } = require('../src/services/lemon.path.resolver');
+const { resolveRepairDiagnosisUrl, classifyDrivetrain, drivetrainsConflict } = require('../src/services/lemon.path.resolver');
 const {
   cleanText,
   normalizeText,
@@ -16,6 +16,8 @@ const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-
 const MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 160);
 const MAX_DEPTH = Number(process.env.LEMON_MAX_DEPTH || 4);
 const OUTPUT_PATH = process.env.LEMON_OUTPUT_PATH || path.join(process.cwd(), 'artifacts', 'lemon-targeted-evidence.json');
+
+const VALID_DRIVETRAINS = new Set(['2WD', '4WD', 'AWD', 'FWD', 'RWD']);
 
 const SCOPE_SECTION_WEIGHTS = {
   diagnosis: { DIAGNOSIS: 30, TEST: 28, SPEC: 18, TSB: 16, REPAIR: 5, PARTS: 3, LABOR: 3, OTHER: 0 },
@@ -109,13 +111,19 @@ function getInput() {
 
   const scopeRaw = String(process.env.LEMON_SCOPE || 'diagnosis').trim().toLowerCase();
   const scope = SCOPE_SECTION_WEIGHTS[scopeRaw] ? scopeRaw : 'diagnosis';
+  const drivetrainRaw = String(process.env.LEMON_DRIVETRAIN || '').trim();
+  if (drivetrainRaw && !VALID_DRIVETRAINS.has(drivetrainRaw.toUpperCase())) {
+    throw new Error(
+      `LEMON_DRIVETRAIN must be one of 2WD, 4WD, AWD, FWD, or RWD (case-insensitive). Received: "${drivetrainRaw}"`
+    );
+  }
   const vehicle = {
     year,
     make,
     model,
     trim: String(process.env.LEMON_TRIM || '').trim(),
     engine: String(process.env.LEMON_ENGINE || '').trim(),
-    drivetrain: String(process.env.LEMON_DRIVETRAIN || '').trim()
+    drivetrain: drivetrainRaw
   };
   const context = {
     symptoms: String(process.env.LEMON_SYMPTOMS || '').trim(),
@@ -169,9 +177,6 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
 
     const kind = semanticKind(term, queryProfile);
 
-    // Broad system context in a parent path or page chrome is navigation context,
-    // not proof that the leaf page is about that system. A system term must be in
-    // the actual page title or heading to qualify the page on its own.
     if (kind === 'system' && !locations.some(location => location === 'title' || location === 'heading')) continue;
 
     const baseWeight = semanticMatchWeight(term, queryProfile, sectionType);
@@ -218,12 +223,38 @@ function decodeURIComponentSafe(value) {
   catch (_) { return String(value || ''); }
 }
 
+const TRACKING_QUERY_PARAMS = new Set([
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+  'fbclid', 'gclid', 'msclkid', 'ref', 'refid', 'session', 'sid'
+]);
+
+function normalizedRetrievalPath(url) {
+  try {
+    const parsed = new URL(url);
+    const pathname = decodeURIComponentSafe(parsed.pathname)
+      .toLowerCase()
+      .replace(/\/+$/, '');
+    const keptParams = [...parsed.searchParams.entries()]
+      .filter(([key]) => !TRACKING_QUERY_PARAMS.has(key.toLowerCase()))
+      .sort(([keyA, valueA], [keyB, valueB]) =>
+        keyA.toLowerCase().localeCompare(keyB.toLowerCase()) ||
+        valueA.toLowerCase().localeCompare(valueB.toLowerCase())
+      )
+      .map(([key, value]) => `${key.toLowerCase()}=${value.toLowerCase()}`)
+      .join('&');
+    return keptParams ? `${pathname}?${keptParams}` : pathname;
+  } catch (_) {
+    return normalizeText(url);
+  }
+}
+
 function normalizedRetrievalKey(page, relevance) {
   const title = normalizeText(page.title)
     .replace(/\b\d{4}\s+(kia|honda|ford|chevrolet|toyota|nissan|hyundai)\b.*$/i, '')
     .replace(/\bservice manual\b.*$/i, '')
     .trim();
-  return `${relevance.sectionType}|${title}`;
+  const pathKey = normalizedRetrievalPath(page.url);
+  return `${relevance.sectionType}|${title}|${pathKey}`;
 }
 
 function buildOutputPage(candidate) {
@@ -255,23 +286,37 @@ function buildOutputPage(candidate) {
   };
 }
 
-async function main() {
-  const { vehicle, context, scope } = getInput();
-  const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
-  const resolution = await resolveRepairDiagnosisUrl(vehicle);
-  const baseUrl = resolution.url;
-
-  const resolvedDrivetrain = classifyDrivetrain(decodeURIComponent(baseUrl));
-  const requestedDrivetrain = classifyDrivetrain(vehicle.drivetrain);
+function checkDrivetrainCompatibility(requestedDrivetrainRaw, resolvedUrl) {
+  const resolvedDrivetrain = classifyDrivetrain(decodeURIComponent(resolvedUrl));
+  const requestedDrivetrain = classifyDrivetrain(requestedDrivetrainRaw);
   if (!requestedDrivetrain && resolvedDrivetrain) {
     throw new Error(
       `LEMON resolved a drive-specific ${resolvedDrivetrain.toUpperCase()} manual while drivetrain is unknown. ` +
       'Set LEMON_DRIVETRAIN (for example 2WD or 4WD) before creating manufacturer evidence.'
     );
   }
-  if (requestedDrivetrain && resolvedDrivetrain && requestedDrivetrain !== resolvedDrivetrain) {
+  if (requestedDrivetrain && resolvedDrivetrain && drivetrainsConflict(requestedDrivetrain, resolvedDrivetrain)) {
     throw new Error(`LEMON drivetrain mismatch: requested ${requestedDrivetrain}, resolved ${resolvedDrivetrain}`);
   }
+  return { requestedDrivetrain, resolvedDrivetrain };
+}
+
+function buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority) {
+  return {
+    url: link.url,
+    depth: next.depth + 1,
+    priority: linkRelevance.score + dtcPriority,
+    exactDtc: next.exactDtc || dtcPriority > 0
+  };
+}
+
+async function main() {
+  const { vehicle, context, scope } = getInput();
+  const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
+  const resolution = await resolveRepairDiagnosisUrl(vehicle);
+  const baseUrl = resolution.url;
+
+  checkDrivetrainCompatibility(vehicle.drivetrain, baseUrl);
 
   console.log(`Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.engine}`.trim());
   console.log(`Scope: ${scope}`);
@@ -284,9 +329,6 @@ async function main() {
   const candidatePages = [];
 
   while (queue.length && visited.size < MAX_PAGES) {
-    // Exact requested DTC descendants are a protected retrieval lane. Once an index
-    // exposes P0300/P0171 links, follow those before spending the remaining budget on
-    // broad siblings. Otherwise traverse breadth-first and use relevance as a tie-breaker.
     queue.sort((a, b) => Number(b.exactDtc) - Number(a.exactDtc) || a.depth - b.depth || b.priority - a.priority);
     const next = queue.shift();
     if (!next || visited.has(next.url) || next.depth > MAX_DEPTH) continue;
@@ -303,12 +345,7 @@ async function main() {
         const linkRelevance = scorePage(linkPage, terms, scope, queryProfile);
         const dtcPriority = exactDtcLinkPriority(link, queryProfile);
         queued.add(link.url);
-        queue.push({
-          url: link.url,
-          depth: next.depth + 1,
-          priority: linkRelevance.score + dtcPriority,
-          exactDtc: dtcPriority > 0
-        });
+        queue.push(buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority));
       }
     } catch (error) {
       console.warn(`Fetch failed: ${next.url}: ${error.message}`);
@@ -375,7 +412,20 @@ async function main() {
   console.log(`Wrote ${OUTPUT_PATH}`);
 }
 
-main().catch(error => {
-  console.error(error.stack || error.message || String(error));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(error.stack || error.message || String(error));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  getInput,
+  checkDrivetrainCompatibility,
+  buildDescendantQueueEntry,
+  normalizedRetrievalPath,
+  normalizedRetrievalKey,
+  exactDtcLinkPriority,
+  scorePage,
+  VALID_DRIVETRAINS
+};

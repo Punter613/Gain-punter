@@ -28,6 +28,11 @@ on:
         required: false
         default: "3.8L"
         type: string
+      drivetrain:
+        description: "Optional drivetrain: 2WD, 4WD, AWD, FWD, RWD"
+        required: false
+        default: ""
+        type: string
       scope:
         description: "Evidence scope"
         required: true
@@ -55,7 +60,7 @@ on:
       max_pages:
         description: "Maximum Lemon pages to crawl"
         required: true
-        default: "80"
+        default: "160"
         type: string
 
 permissions:
@@ -76,6 +81,7 @@ jobs:
       LEMON_MODEL: ${{ inputs.model }}
       LEMON_TRIM: ${{ inputs.trim }}
       LEMON_ENGINE: ${{ inputs.engine }}
+      LEMON_DRIVETRAIN: ${{ inputs.drivetrain }}
       LEMON_SCOPE: ${{ inputs.scope }}
       LEMON_SYMPTOMS: ${{ inputs.symptoms }}
       LEMON_DTCS: ${{ inputs.dtcs }}
@@ -96,13 +102,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify normalization layer
-        run: node --test tests/automotive.normalization.test.js
+      - name: Verify normalization and scraper guards
+        run: node --test tests/automotive.normalization.test.js tests/lemon-targeted-evidence.scrape.test.js
 
       - name: Show scrape scope
         shell: bash
         run: |
           echo "Vehicle: $LEMON_YEAR $LEMON_MAKE $LEMON_MODEL $LEMON_ENGINE"
+          echo "Drivetrain: ${LEMON_DRIVETRAIN:-UNKNOWN}"
           echo "Scope: $LEMON_SCOPE"
           echo "DTCs: ${LEMON_DTCS:-NONE}"
           echo "Symptoms: ${LEMON_SYMPTOMS:-NONE}"
