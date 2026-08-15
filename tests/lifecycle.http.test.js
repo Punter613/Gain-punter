@@ -197,6 +197,38 @@ test('HTTP lifecycle: VERIFY is refused until a confirmation test is recorded', 
   });
 });
 
+test('HTTP lifecycle: positive VERIFY requires an explicit confirmed cause after testing', async () => {
+  await withServer(async base => {
+    const diagnosed = await post(base, '/api/diagnose', fixture);
+    assert.equal(diagnosed.status, 200);
+    const jobId = diagnosed.body.jobId;
+
+    const recorded = await post(base, `/api/jobs/${jobId}/tests`, {
+      name: 'Swap cylinder 1 ignition coil',
+      result: 'misfire moved to swapped cylinder',
+      notes: 'Fault followed coil'
+    });
+    assert.equal(recorded.status, 201);
+
+    for (const confirmedCause of [undefined, '   ']) {
+      const body = { confirmed: true };
+      if (confirmedCause !== undefined) body.confirmedCause = confirmedCause;
+
+      const verify = await post(base, `/api/jobs/${jobId}/verify`, body);
+      assert.equal(verify.status, 409);
+      assert.equal(verify.body.status, 'TESTING');
+      assert.match(verify.body.error, /explicit confirmed cause\/fault/i);
+    }
+
+    const job = await get(base, `/api/jobs/${jobId}`);
+    assert.equal(job.body.status, 'TESTING');
+    assert.equal(job.body.job.verification, null);
+
+    const estimate = await post(base, '/api/estimateHeuristic', { jobId });
+    assert.equal(estimate.status, 409);
+  });
+});
+
 test('HTTP lifecycle: request-body verification cannot bypass persisted job state', async () => {
   await withServer(async base => {
     const diagnosed = await post(base, '/api/diagnose', fixture);
