@@ -10,6 +10,9 @@ const {
 } = require('../contracts/estimate.ai.contract');
 const { supabase } = require('../db');
 
+const VERIFIED_CASE_ERROR = 'Verified diagnostic truth is required for estimate generation.';
+const VERIFIED_CASE_ERROR_CODE = 'VERIFIED_CASE_REQUIRED_OR_INVALID';
+
 function extractJSON(text) {
   if (!text) return null;
   text = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
@@ -78,42 +81,50 @@ function forceVerifiedTruth(ai = {}, verifiedCase, verificationRef) {
   const refs = new Set(Array.isArray(firstCandidate.evidenceRefs) ? firstCandidate.evidenceRefs : []);
   refs.add(verificationRef);
 
-  const candidate = {
-    ...firstCandidate,
-    cause: verifiedCause,
-    component: verifiedCause,
-    evidenceRefs: [...refs],
-    confirmationRequired: false,
-    confirmed: true,
-    repairAuthorized: true
-  };
-
-  const repairActions = (Array.isArray(ai.repairActions) ? ai.repairActions : [])
-    .map(action => ({
-      ...action,
+  return {
+    ...ai,
+    diagnosis: `Verified fault: ${verifiedCause}`,
+    candidates: [{
+      ...firstCandidate,
+      cause: verifiedCause,
       component: verifiedCause,
-      evidenceRefs: [...new Set([...(Array.isArray(action?.evidenceRefs) ? action.evidenceRefs : []), verificationRef])],
+      evidenceRefs: [...refs],
       confirmationRequired: false,
+      confirmed: true,
       repairAuthorized: true
-    }))
-    .slice(0, 8);
-
-  if (!repairActions.length) {
-    repairActions.push({
+    }],
+    repairActions: [{
       action: `Repair verified fault: ${verifiedCause}`,
       component: verifiedCause,
       evidenceRefs: [verificationRef],
       confirmationRequired: false,
       repairAuthorized: true
-    });
-  }
-
-  return {
-    ...ai,
-    diagnosis: `Verified fault: ${verifiedCause}`,
-    candidates: [candidate],
-    repairActions
+    }],
+    repairSteps: []
   };
+}
+
+function enforceVerifiedFinalEstimate(finalEstimate, verifiedCause, verificationRef) {
+  const evaluated = finalEstimate.candidates?.[0] || {};
+  const evidenceRefs = [...new Set([...(evaluated.evidenceRefs || []), verificationRef])];
+  const supportingEvidenceRefs = [...new Set([...(evaluated.supportingEvidenceRefs || []), verificationRef])];
+
+  finalEstimate.diagnosis = `Verified fault: ${verifiedCause}`;
+  finalEstimate.candidates = [{
+    ...evaluated,
+    cause: verifiedCause,
+    component: verifiedCause,
+    evidenceClass: 'MEASURED_FACT',
+    evidenceRefs,
+    supportingEvidenceRefs,
+    measuredSupported: true,
+    confirmationRequired: false,
+    confirmed: true,
+    repairAuthorized: true
+  }];
+  finalEstimate.probability = [{ cause: verifiedCause, likelihood: 100 }];
+  finalEstimate.repairs = [`Repair verified fault: ${verifiedCause}`];
+  finalEstimate.repairSteps = [];
 }
 
 function torqueSignatures(text) {
@@ -155,12 +166,16 @@ router.post('/', async (req, res) => {
   const startedAt = Date.now();
 
   try {
-    // Self-defend even if this router is ever mounted without estimate.authorized.js.
     const canonical = verifiedEstimateInput(req.body?.verifiedCase);
     const verifiedCase = canonical.verifiedCase;
     const packet = verifiedCase.evidencePacket;
     if (!packet || packet.stage !== 'DIAGNOSE') {
-      return res.status(409).json({ success: false, error: 'Estimate requires persisted diagnostic evidence from VERIFIED_CASE' });
+      return res.status(409).json({
+        success: false,
+        error: VERIFIED_CASE_ERROR,
+        code: VERIFIED_CASE_ERROR_CODE,
+        traceId
+      });
     }
 
     const laborRateNum = Math.max(0, Number(req.body?.laborRate ?? 65));
@@ -192,12 +207,17 @@ router.post('/', async (req, res) => {
     ledger.push({
       id: verificationRef,
       type: 'MEASURED_FACT',
-      text: [verifiedCause, verifiedCase.verification?.conclusion, verifiedCase.verification?.notes].map(clean).filter(Boolean).join(' | ')
+      text: [verifiedCause, verifiedCase.verification?.conclusion, verifiedCase.verification?.notes]
+        .map(clean)
+        .filter(Boolean)
+        .join(' | ')
     });
 
     const compactLedger = compactLedgerForModel(ledger);
     const evidenceText = JSON.stringify(compactLedger);
-    const rustBeltMultiplier = Math.max(1, Number(packet.deterministic?.vehicleProfile?.rustMultiplier) || 1);
+    const rawRustMultiplier = Number(packet.deterministic?.vehicleProfile?.rustMultiplier);
+    const hasVerifiedRustMultiplier = Number.isFinite(rawRustMultiplier) && rawRustMultiplier >= 1;
+    const rustBeltMultiplier = hasVerifiedRustMultiplier ? rawRustMultiplier : 1;
     const vehicleStr = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' ') || 'Unknown Vehicle';
 
     const systemPrompt = `You are the repair-estimate reasoning module of SKSK ProTech. Return only the JSON object required by the supplied JSON Schema.\n\nCONTRACT RULES:\n- The mechanic has already completed TEST -> VERIFY. The VERIFIED CAUSE supplied below is immutable diagnostic truth. Do not diagnose a different cause, add a competing fault, or revoke verification.\n- Your job is to cost out and describe repair of the verified fault using only the supplied VERIFIED_CASE evidence.\n- JSON booleans are real booleans: true or false.\n- Do not output laborCost, partsCost, total, or laborRate. Those are mechanic-owned/deterministic.\n- evidenceRefs may contain ONLY IDs present in the supplied EVIDENCE LEDGER.\n- Never invent a TSB, OEM procedure, torque, measurement, construction method, special tool, or vehicle-specific failure pattern.\n- repairActions and repairSteps must stay within the verified repair scope.\n- proTips that claim factory facts must cite supplied OEM/TSB evidence.\n- Probabilities/confidence are advisory only and will be normalized deterministically.`;
@@ -216,7 +236,9 @@ router.post('/', async (req, res) => {
 
     const aiText = typeof aiRes === 'string' ? aiRes : (aiRes?.choices?.[0]?.message?.content || '');
     let parsed = extractJSON(aiText);
-    if (!parsed) parsed = safeAIReasoning(verifiedCause, verificationRef, 'AI schema output could not be parsed; verified repair scope retained.');
+    if (!parsed) {
+      parsed = safeAIReasoning(verifiedCause, verificationRef, 'AI schema output could not be parsed; verified repair scope retained.');
+    }
     parsed = forceVerifiedTruth(parsed, verifiedCase, verificationRef);
 
     const finalEstimate = buildFinalEstimate(parsed, {
@@ -225,10 +247,23 @@ router.post('/', async (req, res) => {
       partsCost: partsCostNum,
       rustMultiplier: rustBeltMultiplier
     });
+    enforceVerifiedFinalEstimate(finalEstimate, verifiedCause, verificationRef);
 
-    finalEstimate.diagnosis = `Verified fault: ${verifiedCause}`;
-    finalEstimate.knownIssues = relevantTsbs.slice(0, 3).map(x => `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
+    finalEstimate.knownIssues = relevantTsbs.slice(0, 3).map(x =>
+      `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`
+    );
     const unsupportedTorqueSpecsRemoved = sanitizeUnsupportedTorque(finalEstimate, evidenceText);
+
+    finalEstimate.rustAdjustment = hasVerifiedRustMultiplier
+      ? {
+          applied: rustBeltMultiplier > 1,
+          multiplier: rustBeltMultiplier,
+          source: 'VERIFIED_CASE'
+        }
+      : {
+          applied: false,
+          reason: 'not_present_in_verified_packet'
+        };
 
     finalEstimate.notes = [
       finalEstimate.notes,
@@ -281,8 +316,8 @@ router.post('/', async (req, res) => {
     const verificationFailure = /VERIFIED_CASE|Verified case|verified/i.test(err.message || '');
     return res.status(verificationFailure ? 409 : 500).json({
       success: false,
-      error: verificationFailure ? 'Verified diagnostic truth is required for estimate generation.' : 'Estimate generation failed completely.',
-      details: err.message,
+      error: verificationFailure ? VERIFIED_CASE_ERROR : 'Estimate generation failed completely.',
+      code: verificationFailure ? VERIFIED_CASE_ERROR_CODE : 'ESTIMATE_GENERATION_FAILED',
       traceId
     });
   }
