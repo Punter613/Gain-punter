@@ -99,8 +99,13 @@ function normalizeVehicleMeasurements(vehicleProfile = {}, options = {}) {
   setNumericIfMissing(brakes, 'rotorRunout', [brakes.rotorRunoutMm]);
   setNumericIfMissing(brakes, 'brakeFluid', [brakes.brakeFluidAgeMonths]);
   if (brakes.brakeFluid === undefined || brakes.brakeFluid === null) {
-    const age = monthsSince(brakes.brakeFluidServiceDate || brakes.lastBrakeFluidServiceDate, now);
-    if (age !== undefined) brakes.brakeFluid = age;
+    for (const dateCandidate of [brakes.brakeFluidServiceDate, brakes.lastBrakeFluidServiceDate]) {
+      const age = monthsSince(dateCandidate, now);
+      if (age !== undefined) {
+        brakes.brakeFluid = age;
+        break;
+      }
+    }
   }
 
   const coolant = ensureComponent(componentData, 'coolant');
