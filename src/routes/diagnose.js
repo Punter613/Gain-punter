@@ -9,6 +9,7 @@ const { getLocalProcedure } = require('../knowledge/procedure.data');
 const { applyCompletedWorkGuard } = require('../core/orchestrator/completed.work.guard');
 const { applyDiagnosticStageGuard } = require('../core/orchestrator/diagnostic.stage.guard');
 const { recordGuardCatch } = require('../core/learning/guard.catch.recorder');
+const { buildDiagnosticEvidencePacket, compactDiagnosticEvidencePacket } = require('../core/evidence/diagnostic.evidence.packet');
 const { collectVehicleEvidence, selectRelevantTsbs } = require('../services/vehicle.evidence');
 const { resolveVehicleProfile, waitForVehicleWarmup } = require('../services/vehicle.warmup');
 
@@ -90,9 +91,26 @@ router.post('/', async (req, res) => {
       catch (err) { executionTrace.log('EVIDENCE_WARN', `Vehicle evidence unavailable: ${err.message}`); }
     }
     const relevantTsbs = selectRelevantTsbs(vehicleEvidence, evidenceContext, 12); const oemReferences = (vehicleEvidence.oem?.references || []).slice(0, 6);
-    const compactEvidence = { OEM_FACTORY_REFERENCES: oemReferences.map(x => ({ title: x.title, url: x.url, type: x.evidenceType, facts: x.extractedFacts })), TSB_CANDIDATES: relevantTsbs.slice(0, 5).map(x => ({ title: x.title, url: x.url, facts: x.extractedFacts, relevanceScore: x.relevanceScore })), SOURCES: (vehicleEvidence.sources || []).filter(source => source !== 'NHTSA_ODI' && source !== 'NHTSA ODI') };
+    const evidencePacket = buildDiagnosticEvidencePacket({
+      vin,
+      mileage,
+      vehicle: resolvedVehicle,
+      customerObservations: customerSymptomContext,
+      mechanicObservations: mechanicContext,
+      dtcs: targetCodes,
+      deterministicProfile: isProfileValidContext ? profile : null,
+      localSafetyTriggered,
+      safetyNotes,
+      matchedPatterns,
+      symptomTelemetry,
+      oemReferences,
+      tsbReferences: relevantTsbs,
+      sources: vehicleEvidence.sources || [],
+      evidenceAvailable: vehicleEvidence.available,
+      warmupStatus
+    });
 
-    let systemPrompt = `You are the expert diagnostic logic unit of SKSK ProTech — a master automotive diagnostician with 25 years of real shop experience.
+    const systemPrompt = `You are the expert diagnostic logic unit of SKSK ProTech — a master automotive diagnostician with 25 years of real shop experience.
 Output a single valid JSON object ONLY. No backticks, markdown, or text before/after.
 {"urgency":"immediate|soon|monitor","safetyRisk":false,"primaryCause":"string","secondaryCauses":["string"],"codeExplanations":{"P0300":"string"},"probability":[{"cause":"string","likelihood":80}],"knownIssues":["string"],"repairSteps":["string"],"proTips":["string"],"recommendedTests":["string"],"additionalChecks":["string"],"estimatedRepairTime":"string","notes":"string"}
 RULES:
@@ -102,22 +120,17 @@ RULES:
 - All array values must be strings.
 - DIAGNOSIS STAGE IS TEST-FIRST. No component is repair-authorized yet. repairSteps MUST contain only non-invasive inspection, measurement, verification, or confirmation steps. Do not instruct removal, teardown, replacement, installation, adjustment, lubrication-as-a-fix, or alignment as a repair. Put discriminating tests in recommendedTests. Actual repair procedure belongs only after TEST -> VERIFY.
 - Prefer tests that separate the highest-ranked candidate from the next candidate. Order tests by safety, diagnostic value, low invasiveness, then time/cost.
-- EVIDENCE HIERARCHY: verified/measured facts and deterministic knowledge outrank mechanic observations; mechanic observations outrank customer-translated symptom wording. Treat translated customer wording as no more than ~5% directional influence.
-- MECHANIC NOTICES / TECH NOTES are high-value diagnostic context and must materially affect ranking.
-- RETRIEVAL KEYWORDS are search-only metadata and must never influence diagnostic ranking directly.
-- Never invent a TSB, recall, or campaign number.
-- Never state a condition is common/known/model-specific unless supplied evidence supports it; otherwise knownIssues must be empty.
-- Never recommend replacing a component the mechanic notes already replaced. You MAY inspect or verify its installation, torque, fitment, binding, or measured condition when diagnostically relevant.
+- Treat DIAGNOSTIC_EVIDENCE_PACKET_V1 as the sole structured case context for reasoning.
+- EVIDENCE HIERARCHY: trusted measurements and deterministic knowledge outrank mechanic observations; mechanic observations outrank customer symptom wording.
+- Customer observations are directional context only and must not override trusted measurements or deterministic evidence.
+- Never invent a TSB, recall, campaign, measurement, completed repair, or vehicle-specific fact absent from the packet.
+- Never state a condition is common/known/model-specific unless packet evidence supports it; otherwise knownIssues must be empty.
+- Never recommend replacing completed work listed in observations.completedWork. You MAY inspect or verify its installation, torque, fitment, binding, or measured condition when diagnostically relevant.
 MULTI-CONDITION REASONING: When a symptom occurs under distinct operating conditions, analyze what changes mechanically in each condition and prioritize causes plausible under all conditions. Consider one common cause, multiple causes in one system, and two unrelated faults. Use overlap to narrow the diagnostic tree.
 - Output raw JSON only.`;
-    if (profile && isProfileValidContext) {
-      const profileContext = dynamicRisk === undefined || dynamicRisk === null ? { ...profile } : { ...profile, dynamicRisk };
-      systemPrompt += `\n\nVEHICLE PROFILE: ${JSON.stringify(profileContext, null, 2)}`;
-    }
-    if (assemblyData && isProfileValidContext && assemblyData.breakdowns.length > 0) systemPrompt += `\n\nLABOR: ${JSON.stringify(assemblyData.breakdowns, null, 2)}\nPARTS: ${JSON.stringify(assemblyData.partsRisks, null, 2)}`;
-    const userPrompt = `Vehicle: ${[resolvedVehicle.year, resolvedVehicle.make, resolvedVehicle.model, resolvedVehicle.trim || resolvedVehicle.engine].filter(Boolean).join(' ') || 'N/A'} | Drivetrain: ${resolvedVehicle.driveType || resolvedVehicle.drivetrain || 'unknown'} | VIN: ${vin || 'N/A'} | Mileage: ${mileage || 'N/A'} | Codes: ${targetCodes.join(', ') || 'None'} | LOW-WEIGHT CUSTOMER SYMPTOM CONTEXT (~5%): ${customerSymptomContext.join(', ') || 'N/A'} | HIGH-WEIGHT MECHANIC / TECH OBSERVATIONS: ${mechanicContext.join(', ') || 'N/A'}\n\nVEHICLE EVIDENCE:\n${JSON.stringify(compactEvidence)}`;
+    const userPrompt = `DIAGNOSTIC_EVIDENCE_PACKET_V1:\n${compactDiagnosticEvidencePacket(evidencePacket)}`;
 
-    executionTrace.log('AI_DISPATCH', 'Sending to shared AI provider router...');
+    executionTrace.log('AI_DISPATCH', 'Sending canonical diagnostic evidence packet to shared AI provider router...');
     const aiRes = await aiChat({
       messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
       max_tokens: 2500,
@@ -146,7 +159,7 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
 
     const finalResult = { ...safeResult(), ...parsed };
     finalResult.knownIssues = relevantTsbs.slice(0, 3).map(x => `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
-    finalResult.evidence = { oem: oemReferences, tsbs: relevantTsbs.slice(0, 5), sources: vehicleEvidence.sources || [], available: vehicleEvidence.available, warmup: warmupStatus };
+    finalResult.evidence = { oem: oemReferences, tsbs: relevantTsbs.slice(0, 5), sources: vehicleEvidence.sources || [], available: vehicleEvidence.available, warmup: warmupStatus, packetSchemaVersion: evidencePacket.schemaVersion };
     finalResult.probability = calibrateProbabilityArray(finalResult.probability || [], confidence);
     finalResult.diagnosticConfidence = confidence || { percentage: 30, rating: 'LOW' };
     finalResult.localVehicleTelemetry = withDynamicRisk(localProfile, dynamicRisk);
