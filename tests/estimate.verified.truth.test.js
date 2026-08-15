@@ -54,7 +54,10 @@ stubModule('../src/services/ai/aiClient', {
 
 const estimateRouter = require('../src/routes/estimate');
 
-function makeVerifiedCase() {
+function makeVerifiedCase({ rustMultiplier } = {}) {
+  const vehicleProfile = { vehicleId: 'KIA_SORENTO_TEST' };
+  if (rustMultiplier !== undefined) vehicleProfile.rustMultiplier = rustMultiplier;
+
   const evidencePacket = {
     schemaVersion: 1,
     stage: 'DIAGNOSE',
@@ -66,7 +69,7 @@ function makeVerifiedCase() {
     },
     dtcs: ['P0300'],
     measurements: { trust: 'TRUSTED_PRE_TAG_INPUT', values: {} },
-    deterministic: { vehicleProfile: { vehicleId: 'KIA_SORENTO_TEST' } },
+    deterministic: { vehicleProfile },
     evidence: {
       oem: [{ source: 'LEMON_MANUALS', title: 'Verified OEM page', url: 'https://verified.example/oem', excerpt: 'mount inspection' }],
       tsbs: [{ source: 'NHTSA_BULK', title: 'Verified TSB', url: 'https://verified.example/tsb', excerpt: 'mount concern' }],
@@ -120,11 +123,19 @@ async function post(base, body) {
   return { status: response.status, body: await response.json() };
 }
 
+function assertSafeVerifiedCaseFailure(result) {
+  assert.equal(result.status, 409);
+  assert.equal(result.body.error, 'Verified diagnostic truth is required for estimate generation.');
+  assert.equal(result.body.code, 'VERIFIED_CASE_REQUIRED_OR_INVALID');
+  assert.equal('details' in result.body, false);
+  assert.equal('estimate' in result.body, false);
+  assert.ok(result.body.traceId);
+}
+
 test('Estimate fails closed without a canonical VERIFIED_CASE', async () => {
   await withServer(async base => {
     const result = await post(base, { laborRate: 65, partsCost: 80 });
-    assert.equal(result.status, 409);
-    assert.match(result.body.details, /VERIFIED_CASE/i);
+    assertSafeVerifiedCaseFailure(result);
   });
 });
 
@@ -147,13 +158,16 @@ test('Estimate forces contradictory model diagnosis back to verified cause', asy
     assert.equal(result.body.estimate.candidates[0].component, 'Engine mount failure');
     assert.equal(result.body.estimate.candidates[0].confirmed, true);
     assert.equal(result.body.estimate.candidates[0].repairAuthorized, true);
-    assert.doesNotMatch(JSON.stringify(result.body.estimate), /Alternator failure|TAMPEREDVIN|P9999|different symptom/);
+    assert.deepEqual(result.body.estimate.probability, [{ cause: 'Engine mount failure', likelihood: 100 }]);
+    assert.deepEqual(result.body.estimate.repairs, ['Repair verified fault: Engine mount failure']);
+    assert.deepEqual(result.body.estimate.repairSteps, []);
+    assert.doesNotMatch(JSON.stringify(result.body.estimate), /alternator|TAMPEREDVIN|P9999|different symptom/i);
     assert.match(lastPrompt, /VERIFIED CAUSE: Engine mount failure/);
     assert.doesNotMatch(lastPrompt, /TAMPEREDVIN|P9999|different symptom/);
   });
 });
 
-test('Estimate uses only evidence frozen in VERIFIED_CASE', async () => {
+test('Estimate uses only evidence frozen in VERIFIED_CASE and makes missing rust adjustment explicit', async () => {
   const verifiedCase = makeVerifiedCase();
   await withServer(async base => {
     const result = await post(base, { verifiedCase, laborRate: 70, partsCost: 125 });
@@ -164,15 +178,37 @@ test('Estimate uses only evidence frozen in VERIFIED_CASE', async () => {
     assert.equal(result.body.estimate.laborCost, 105);
     assert.equal(result.body.estimate.partsCost, 125);
     assert.equal(result.body.estimate.total, 230);
+    assert.equal(result.body.appliedRustPenalty, false);
+    assert.deepEqual(result.body.estimate.rustAdjustment, {
+      applied: false,
+      reason: 'not_present_in_verified_packet'
+    });
   });
 });
 
-test('Estimate rejects a mutated VERIFIED_CASE fingerprint', async () => {
+test('Estimate applies rust adjustment only when it is persisted in VERIFIED_CASE', async () => {
+  const verifiedCase = makeVerifiedCase({ rustMultiplier: 1.2 });
+  await withServer(async base => {
+    const result = await post(base, { verifiedCase, laborRate: 100, partsCost: 50 });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.appliedRustPenalty, true);
+    assert.equal(result.body.estimate.laborCost, 180);
+    assert.equal(result.body.estimate.partsCost, 50);
+    assert.equal(result.body.estimate.total, 230);
+    assert.deepEqual(result.body.estimate.rustAdjustment, {
+      applied: true,
+      multiplier: 1.2,
+      source: 'VERIFIED_CASE'
+    });
+  });
+});
+
+test('Estimate rejects a mutated VERIFIED_CASE fingerprint without leaking internals', async () => {
   const verifiedCase = JSON.parse(JSON.stringify(makeVerifiedCase()));
   verifiedCase.verification.confirmedCause = 'Tampered steering rack failure';
   await withServer(async base => {
     const result = await post(base, { verifiedCase });
-    assert.equal(result.status, 409);
-    assert.match(result.body.details, /integrity check failed/i);
+    assertSafeVerifiedCaseFailure(result);
+    assert.doesNotMatch(JSON.stringify(result.body), /integrity check failed|steering rack/i);
   });
 });
