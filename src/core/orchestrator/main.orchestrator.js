@@ -9,6 +9,7 @@ const aiRouter = require('../../services/ai/ai.specialist.router');
 const evidenceVerifier = require('../evidence/evidence.verifier');
 const economicEngine = require('../economic/economic.engine');
 const { applyCompletedWorkGuard } = require('./completed.work.guard');
+const { normalizeVehicleMeasurements } = require('../measurement/measurement-normalizer');
 const { decodeVinNhtsa } = require('../../services/vin');
 const { collectVehicleEvidence } = require('../../services/vehicle.evidence');
 
@@ -37,7 +38,8 @@ class SKSKOrchestrator {
     this.pipelineStats.totalRequests++;
 
     try {
-      const { input, vehicleProfile = {}, context = {} } = request;
+      const { input, vehicleProfile: rawVehicleProfile = {}, context = {} } = request;
+      const vehicleProfile = normalizeVehicleMeasurements(rawVehicleProfile);
 
       console.log('[ORCHESTRATOR] Step 1: Running deterministic checks...');
       const deterministicResult = await deterministicOrchestrator.process(vehicleProfile, input);
