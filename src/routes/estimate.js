@@ -6,13 +6,14 @@ const {
   buildVerifiedRepairResolution,
   assertRepairResolutionIntegrity
 } = require('../core/evidence/verified.repair.resolution');
+const { buildEstimateSnapshot } = require('../core/evidence/estimate.snapshot');
+const { persistLockedEstimate } = require('../services/estimate.persistence');
 const {
   ESTIMATE_RESPONSE_FORMAT,
   buildEvidenceLedger,
   compactLedgerForModel,
   buildFinalEstimate
 } = require('../contracts/estimate.ai.contract');
-const { supabase } = require('../db');
 
 const VERIFIED_CASE_ERROR = 'Verified diagnostic truth is required for estimate generation.';
 const VERIFIED_CASE_ERROR_CODE = 'VERIFIED_CASE_REQUIRED_OR_INVALID';
@@ -332,20 +333,43 @@ router.post('/', async (req, res) => {
       totalRouteLatencyMs: Date.now() - startedAt
     };
 
-    try {
-      if (supabase) {
-        await supabase.from('estimates').insert({ total: finalEstimate.total, details: { ...finalEstimate, customer, vehicle } });
-      }
-    } catch (_) {}
+    const estimateSnapshot = buildEstimateSnapshot({
+      jobId: verifiedCase.jobId,
+      estimate: finalEstimate
+    });
+    const persistence = await persistLockedEstimate(estimateSnapshot);
+    finalEstimate.estimateLock = {
+      stage: estimateSnapshot.stage,
+      fingerprint: estimateSnapshot.fingerprint,
+      storage: persistence.storage,
+      recordId: persistence.recordId,
+      verifiedCaseFingerprint: estimateSnapshot.verifiedCaseFingerprint,
+      repairResolutionFingerprint: estimateSnapshot.repairResolutionFingerprint
+    };
 
-    return res.json({ success: true, appliedRustPenalty: rustBeltMultiplier > 1, estimate: finalEstimate });
+    return res.json({
+      success: true,
+      appliedRustPenalty: rustBeltMultiplier > 1,
+      estimate: finalEstimate,
+      persistence
+    });
   } catch (err) {
     console.error(`[${traceId}] [Estimate System Fault]:`, err.message);
     const verificationFailure = /VERIFIED_CASE|Verified case|verified|repair resolution/i.test(err.message || '');
-    return res.status(verificationFailure ? 409 : 500).json({
+    const persistenceFailure = /estimate persistence|estimate snapshot|locked estimate/i.test(err.message || '');
+    const status = verificationFailure ? 409 : 500;
+    return res.status(status).json({
       success: false,
-      error: verificationFailure ? VERIFIED_CASE_ERROR : 'Estimate generation failed completely.',
-      code: verificationFailure ? VERIFIED_CASE_ERROR_CODE : 'ESTIMATE_GENERATION_FAILED',
+      error: verificationFailure
+        ? VERIFIED_CASE_ERROR
+        : persistenceFailure
+          ? 'Estimate could not be persisted and was not finalized.'
+          : 'Estimate generation failed completely.',
+      code: verificationFailure
+        ? VERIFIED_CASE_ERROR_CODE
+        : persistenceFailure
+          ? 'ESTIMATE_PERSISTENCE_FAILED'
+          : 'ESTIMATE_GENERATION_FAILED',
       traceId
     });
   }
