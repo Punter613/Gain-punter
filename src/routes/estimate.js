@@ -47,7 +47,7 @@ function safeAIReasoning(verifiedCause, verificationRef, note = '') {
       modelConfidence: 90,
       evidenceRefs: [verificationRef],
       contradictions: [],
-      confirmationTests: ['Use the recorded verification test before beginning repair'],
+      confirmationTests: [],
       evidenceClass: 'MEASURED_FACT',
       factorySupported: false,
       mechanicSupported: false,
@@ -89,6 +89,7 @@ function forceVerifiedTruth(ai = {}, verifiedCase, verificationRef) {
       cause: verifiedCause,
       component: verifiedCause,
       evidenceRefs: [...refs],
+      confirmationTests: [],
       confirmationRequired: false,
       confirmed: true,
       repairAuthorized: true
@@ -118,6 +119,7 @@ function enforceVerifiedFinalEstimate(finalEstimate, verifiedCause, verification
     evidenceRefs,
     supportingEvidenceRefs,
     measuredSupported: true,
+    confirmationTests: [],
     confirmationRequired: false,
     confirmed: true,
     repairAuthorized: true
