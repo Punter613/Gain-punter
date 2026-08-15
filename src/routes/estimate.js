@@ -3,6 +3,10 @@ const router = express.Router();
 const { aiChat } = require('../services/ai/aiClient');
 const { verifiedEstimateInput } = require('../core/evidence/verified.case');
 const {
+  buildVerifiedRepairResolution,
+  assertRepairResolutionIntegrity
+} = require('../core/evidence/verified.repair.resolution');
+const {
   ESTIMATE_RESPONSE_FORMAT,
   buildEvidenceLedger,
   compactLedgerForModel,
@@ -180,7 +184,14 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const laborRateNum = Math.max(0, Number(req.body?.laborRate ?? 65));
+    const rawLaborRate = req.body?.laborRate;
+    const hasMechanicLaborRate = rawLaborRate != null
+      && typeof rawLaborRate !== 'boolean'
+      && !(typeof rawLaborRate === 'string' && rawLaborRate.trim() === '')
+      && Number.isFinite(Number(rawLaborRate))
+      && Number(rawLaborRate) >= 0;
+    const laborRateNum = hasMechanicLaborRate ? Number(rawLaborRate) : 65;
+    const laborRateSource = hasMechanicLaborRate ? 'MECHANIC_INPUT' : 'SYSTEM_DEFAULT';
     const partsCostNum = Math.max(0, Number(req.body?.partsCost ?? 0));
     const customer = req.body?.customer || {};
 
@@ -222,9 +233,9 @@ router.post('/', async (req, res) => {
     const rustBeltMultiplier = hasVerifiedRustMultiplier ? rawRustMultiplier : 1;
     const vehicleStr = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' ') || 'Unknown Vehicle';
 
-    const systemPrompt = `You are the repair-estimate reasoning module of SKSK ProTech. Return only the JSON object required by the supplied JSON Schema.\n\nCONTRACT RULES:\n- The mechanic has already completed TEST -> VERIFY. The VERIFIED CAUSE supplied below is immutable diagnostic truth. Do not diagnose a different cause, add a competing fault, or revoke verification.\n- Your job is to cost out and describe repair of the verified fault using only the supplied VERIFIED_CASE evidence.\n- JSON booleans are real booleans: true or false.\n- Do not output laborCost, partsCost, total, or laborRate. Those are mechanic-owned/deterministic.\n- evidenceRefs may contain ONLY IDs present in the supplied EVIDENCE LEDGER.\n- Never invent a TSB, OEM procedure, torque, measurement, construction method, special tool, or vehicle-specific failure pattern.\n- repairActions and repairSteps must stay within the verified repair scope.\n- proTips that claim factory facts must cite supplied OEM/TSB evidence.\n- Probabilities/confidence are advisory only and will be normalized deterministically.`;
+    const systemPrompt = `You are the repair-estimate reasoning module of SKSK ProTech. Return only the JSON object required by the supplied JSON Schema.\n\nCONTRACT RULES:\n- The mechanic has already completed TEST -> VERIFY. The VERIFIED CAUSE supplied below is immutable diagnostic truth. Do not diagnose a different cause, add a competing fault, or revoke verification.\n- Your job is to describe repair of the verified fault using only the supplied VERIFIED_CASE evidence.\n- JSON booleans are real booleans: true or false.\n- Do not output laborCost, partsCost, total, or laborRate. Those are mechanic-owned/deterministic.\n- estimatedHours is advisory only; explicit mechanic laborHours overrides it deterministically.\n- evidenceRefs may contain ONLY IDs present in the supplied EVIDENCE LEDGER.\n- Never invent a TSB, OEM procedure, torque, measurement, construction method, special tool, or vehicle-specific failure pattern.\n- repairActions and repairSteps must stay within the verified repair scope.\n- proTips that claim factory facts must cite supplied OEM/TSB evidence.\n- Probabilities/confidence are advisory only and will be normalized deterministically.`;
 
-    const userPrompt = `VERIFIED CAUSE: ${verifiedCause}\nVehicle: ${vehicleStr}\nVIN: ${vehicle.vin || 'N/A'}\nMileage: ${vehicle.mileage || 'N/A'}\nMechanic-entered labor rate: $${laborRateNum}/hr (DO NOT MODIFY)\nMechanic-entered parts cost: $${partsCostNum} (DO NOT MODIFY)\n\nVERIFIED_CASE fingerprint: ${verifiedCase.fingerprint}\nEVIDENCE LEDGER:\n${evidenceText}`;
+    const userPrompt = `VERIFIED CAUSE: ${verifiedCause}\nVehicle: ${vehicleStr}\nVIN: ${vehicle.vin || 'N/A'}\nMileage: ${vehicle.mileage || 'N/A'}\nLabor rate: $${laborRateNum}/hr (${laborRateSource})\nMechanic-entered parts cost: $${partsCostNum} (DO NOT MODIFY)\nMechanic-entered labor hours: ${req.body?.laborHours ?? 'not supplied'} (OVERRIDES ADVISORY HOURS WHEN PRESENT)\n\nVERIFIED_CASE fingerprint: ${verifiedCase.fingerprint}\nEVIDENCE LEDGER:\n${evidenceText}`;
 
     const aiStartedAt = Date.now();
     const aiRes = await aiChat({
@@ -243,13 +254,26 @@ router.post('/', async (req, res) => {
     }
     parsed = forceVerifiedTruth(parsed, verifiedCase, verificationRef);
 
+    const repairResolution = buildVerifiedRepairResolution({
+      verifiedCase,
+      laborRate: laborRateNum,
+      laborRateSource,
+      laborHours: req.body?.laborHours,
+      modelEstimatedHours: parsed.estimatedHours,
+      parts: req.body?.parts,
+      partsCost: partsCostNum
+    });
+    const lockedRepairResolution = assertRepairResolutionIntegrity(repairResolution, verifiedCase);
+    parsed = { ...parsed, estimatedHours: lockedRepairResolution.labor.hours };
+
     const finalEstimate = buildFinalEstimate(parsed, {
       ledger,
-      laborRate: laborRateNum,
-      partsCost: partsCostNum,
+      laborRate: lockedRepairResolution.labor.hourlyRate,
+      partsCost: lockedRepairResolution.partsTotal,
       rustMultiplier: rustBeltMultiplier
     });
     enforceVerifiedFinalEstimate(finalEstimate, verifiedCause, verificationRef);
+    finalEstimate.repairResolution = lockedRepairResolution;
 
     finalEstimate.knownIssues = relevantTsbs.slice(0, 3).map(x =>
       `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`
@@ -270,6 +294,7 @@ router.post('/', async (req, res) => {
     finalEstimate.notes = [
       finalEstimate.notes,
       `Diagnostic truth source: VERIFIED_CASE ${verifiedCase.fingerprint}.`,
+      `Repair resolution source: ${lockedRepairResolution.fingerprint}.`,
       `Completed repairs excluded from diagnostic re-interpretation: ${completedWork.join(', ') || 'none'}.`
     ].filter(Boolean).join(' ');
 
@@ -283,6 +308,7 @@ router.post('/', async (req, res) => {
       unsupportedTorqueSpecsRemoved,
       packetSchemaVersion: packet.schemaVersion,
       verifiedCaseFingerprint: verifiedCase.fingerprint,
+      repairResolutionFingerprint: lockedRepairResolution.fingerprint,
       ledger: compactLedger.map(ref => ({ id: ref.id, type: ref.type, title: ref.title || '', url: ref.url || '' })),
       claimTrace: finalEstimate.candidates.map(candidate => ({
         cause: candidate.cause,
@@ -315,7 +341,7 @@ router.post('/', async (req, res) => {
     return res.json({ success: true, appliedRustPenalty: rustBeltMultiplier > 1, estimate: finalEstimate });
   } catch (err) {
     console.error(`[${traceId}] [Estimate System Fault]:`, err.message);
-    const verificationFailure = /VERIFIED_CASE|Verified case|verified/i.test(err.message || '');
+    const verificationFailure = /VERIFIED_CASE|Verified case|verified|repair resolution/i.test(err.message || '');
     return res.status(verificationFailure ? 409 : 500).json({
       success: false,
       error: verificationFailure ? VERIFIED_CASE_ERROR : 'Estimate generation failed completely.',
