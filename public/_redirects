@@ -1,13 +1,8 @@
+# SKSK ProTech public frontend now enters through the verified lifecycle UI.
+# Keep the legacy index.html available directly during rollout.
+/ /lifecycle.html 200
+
 # Proxy all /api/* calls from skskprotech.pages.dev straight through to the
 # Render backend. Status 200 = transparent proxy (rewrite), not a redirect,
-# so the browser URL bar never changes and no CORS preflight is needed -
-# the request is same-origin from the browser's point of view; Cloudflare's
-# edge does the cross-origin hop server-side.
-#
-# This exists because public/js/sksk-frontend.js calls fetch('/api/...')
-# with relative paths (correct when served by the Node/Express backend
-# itself, since that server also serves these static files - see
-# api/server.js section 5). On Cloudflare Pages there is no Express server
-# behind these static files, so a relative /api/* call would otherwise hit
-# pages.dev itself and 404. This file closes that gap without touching JS.
+# so the browser URL bar never changes and no CORS preflight is needed.
 /api/* https://p613-backend.onrender.com/api/:splat 200
