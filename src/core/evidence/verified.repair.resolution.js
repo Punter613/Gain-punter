@@ -20,6 +20,8 @@ function money(value) {
 }
 
 function hours(value) {
+  if (value == null || typeof value === 'boolean') return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return null;
   return Math.min(40, Math.round(n * 4) / 4);
@@ -27,7 +29,10 @@ function hours(value) {
 
 function normalizeParts(parts = [], aggregatePartsCost = 0) {
   if (Array.isArray(parts) && parts.length) {
-    return parts.slice(0, MAX_PART_LINES).map((part, index) => {
+    if (parts.length > MAX_PART_LINES) {
+      throw new Error(`Verified repair resolution supports at most ${MAX_PART_LINES} part lines`);
+    }
+    return parts.map((part, index) => {
       const quantity = Math.max(0, Number(part?.quantity) || 0);
       const unitPrice = money(part?.unitPrice);
       return {
@@ -59,6 +64,7 @@ function normalizeParts(parts = [], aggregatePartsCost = 0) {
 function buildVerifiedRepairResolution({
   verifiedCase,
   laborRate,
+  laborRateSource = 'MECHANIC_INPUT',
   laborHours,
   modelEstimatedHours,
   parts,
@@ -86,7 +92,7 @@ function buildVerifiedRepairResolution({
       hours: resolvedHours,
       hourlyRate: rate,
       hoursSource: laborHoursSource,
-      rateSource: 'MECHANIC_INPUT'
+      rateSource: clean(laborRateSource, 80) || 'UNKNOWN'
     },
     parts: partLines,
     partsTotal,
@@ -114,7 +120,9 @@ function assertRepairResolutionIntegrity(resolution, verifiedCase) {
 
 module.exports = {
   SCHEMA_VERSION,
+  MAX_PART_LINES,
   buildVerifiedRepairResolution,
   assertRepairResolutionIntegrity,
-  normalizeParts
+  normalizeParts,
+  hours
 };
