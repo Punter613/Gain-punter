@@ -1,10 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { runDiagnosticPipeline } = require('../services/pipeline.engine');
 const { aiChat } = require('../services/ai/aiClient');
-const { collectVehicleEvidence, selectRelevantTsbs } = require('../services/vehicle.evidence');
-const { resolveVehicleProfile, waitForVehicleWarmup } = require('../services/vehicle.warmup');
-const { extractCompletedWork } = require('../core/orchestrator/completed.work.guard');
+const { verifiedEstimateInput } = require('../core/evidence/verified.case');
 const {
   ESTIMATE_RESPONSE_FORMAT,
   buildEvidenceLedger,
@@ -13,7 +10,8 @@ const {
 } = require('../contracts/estimate.ai.contract');
 const { supabase } = require('../db');
 
-const MIN_TSB_RELEVANCE = 12;
+const VERIFIED_CASE_ERROR = 'Verified diagnostic truth is required for estimate generation.';
+const VERIFIED_CASE_ERROR_CODE = 'VERIFIED_CASE_REQUIRED_OR_INVALID';
 
 function extractJSON(text) {
   if (!text) return null;
@@ -34,27 +32,37 @@ function extractJSON(text) {
   return null;
 }
 
-function safeAIReasoning(note = '') {
+function clean(value, max = 500) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function safeAIReasoning(verifiedCause, verificationRef, note = '') {
   return {
     priority: 'medium',
-    diagnosis: 'Manual inspection required',
+    diagnosis: `Verified fault: ${verifiedCause}`,
     estimatedHours: 1,
     candidates: [{
-      cause: 'Insufficient validated evidence for a component-level diagnosis',
-      component: 'undetermined',
-      modelConfidence: 0,
-      evidenceRefs: [],
+      cause: verifiedCause,
+      component: verifiedCause,
+      modelConfidence: 90,
+      evidenceRefs: [verificationRef],
       contradictions: [],
-      confirmationTests: ['Perform targeted mechanical inspection and record the result'],
-      evidenceClass: 'MODEL_INFERENCE',
+      confirmationTests: [],
+      evidenceClass: 'MEASURED_FACT',
       factorySupported: false,
       mechanicSupported: false,
-      measuredSupported: false,
-      confirmationRequired: true,
-      confirmed: false,
-      repairAuthorized: false
+      measuredSupported: true,
+      confirmationRequired: false,
+      confirmed: true,
+      repairAuthorized: true
     }],
-    repairActions: [],
+    repairActions: [{
+      action: `Repair verified fault: ${verifiedCause}`,
+      component: verifiedCause,
+      evidenceRefs: [verificationRef],
+      confirmationRequired: false,
+      repairAuthorized: true
+    }],
     repairSteps: [],
     proTips: [],
     additionalChecks: [],
@@ -62,16 +70,63 @@ function safeAIReasoning(note = '') {
   };
 }
 
-function normalizeCompletedWork(mechanicNotices) {
-  return extractCompletedWork(mechanicNotices);
+function forceVerifiedTruth(ai = {}, verifiedCase, verificationRef) {
+  const verifiedCause = clean(
+    verifiedCase?.verification?.confirmedCause || verifiedCase?.repairScope?.[0]?.cause,
+    300
+  );
+  if (!verifiedCause) throw new Error('VERIFIED_CASE is missing an explicit confirmed cause');
+
+  const firstCandidate = Array.isArray(ai.candidates) && ai.candidates.length ? ai.candidates[0] : {};
+  const refs = new Set(Array.isArray(firstCandidate.evidenceRefs) ? firstCandidate.evidenceRefs : []);
+  refs.add(verificationRef);
+
+  return {
+    ...ai,
+    diagnosis: `Verified fault: ${verifiedCause}`,
+    candidates: [{
+      ...firstCandidate,
+      cause: verifiedCause,
+      component: verifiedCause,
+      evidenceRefs: [...refs],
+      confirmationTests: [],
+      confirmationRequired: false,
+      confirmed: true,
+      repairAuthorized: true
+    }],
+    repairActions: [{
+      action: `Repair verified fault: ${verifiedCause}`,
+      component: verifiedCause,
+      evidenceRefs: [verificationRef],
+      confirmationRequired: false,
+      repairAuthorized: true
+    }],
+    repairSteps: []
+  };
 }
 
-function filterCompletedRepairs(repairs, completedWork) {
-  if (!Array.isArray(repairs) || !completedWork.length) return repairs;
-  return repairs.filter(repair => {
-    const value = String(repair || '').toLowerCase();
-    return !completedWork.some(done => done.split(' ').every(term => value.includes(term)));
-  });
+function enforceVerifiedFinalEstimate(finalEstimate, verifiedCause, verificationRef) {
+  const evaluated = finalEstimate.candidates?.[0] || {};
+  const evidenceRefs = [...new Set([...(evaluated.evidenceRefs || []), verificationRef])];
+  const supportingEvidenceRefs = [...new Set([...(evaluated.supportingEvidenceRefs || []), verificationRef])];
+
+  finalEstimate.diagnosis = `Verified fault: ${verifiedCause}`;
+  finalEstimate.candidates = [{
+    ...evaluated,
+    cause: verifiedCause,
+    component: verifiedCause,
+    evidenceClass: 'MEASURED_FACT',
+    evidenceRefs,
+    supportingEvidenceRefs,
+    measuredSupported: true,
+    confirmationTests: [],
+    confirmationRequired: false,
+    confirmed: true,
+    repairAuthorized: true
+  }];
+  finalEstimate.probability = [{ cause: verifiedCause, likelihood: 100 }];
+  finalEstimate.repairs = [`Repair verified fault: ${verifiedCause}`];
+  finalEstimate.repairSteps = [];
 }
 
 function torqueSignatures(text) {
@@ -105,7 +160,6 @@ function sanitizeUnsupportedTorque(finalEstimate, evidenceText) {
   for (const key of ['repairs', 'repairSteps', 'proTips', 'additionalChecks']) {
     if (Array.isArray(finalEstimate[key])) finalEstimate[key] = finalEstimate[key].map(sanitize);
   }
-
   return removed;
 }
 
@@ -114,134 +168,67 @@ router.post('/', async (req, res) => {
   const startedAt = Date.now();
 
   try {
-    const {
-      vehicle = {},
-      obdCodes = [],
-      customerStates = [],
-      mechanicNotices = [],
-      keywords = [],
-      diagnosticTests = [],
-      laborRate = 65,
-      partsCost = 0,
-      mileage = 0,
-      vin = '',
-      customer = {}
-    } = req.body;
-
-    const laborRateNum = Math.max(0, Number(laborRate));
-    const partsCostNum = Math.max(0, Number(partsCost));
-
-    let pipelineResults = {};
-    let rustBeltMultiplier = 1.0;
-    try {
-      pipelineResults = runDiagnosticPipeline({
-        vehicle,
-        vin,
-        symptoms: [...customerStates, ...mechanicNotices],
-        codes: obdCodes,
-        mileage,
-        laborRate: laborRateNum
-      }, { log: () => {} });
-      if (pipelineResults.profile?.rustMultiplier > 1.0) rustBeltMultiplier = pipelineResults.profile.rustMultiplier;
-    } catch (e) {
-      console.warn(`[${traceId}] [Estimate Engine] Pipeline background pass skipped:`, e.message);
+    const canonical = verifiedEstimateInput(req.body?.verifiedCase);
+    const verifiedCase = canonical.verifiedCase;
+    const packet = verifiedCase.evidencePacket;
+    if (!packet || packet.stage !== 'DIAGNOSE') {
+      return res.status(409).json({
+        success: false,
+        error: VERIFIED_CASE_ERROR,
+        code: VERIFIED_CASE_ERROR_CODE,
+        traceId
+      });
     }
 
-    let evidenceVehicle = vehicle;
-    try {
-      evidenceVehicle = await resolveVehicleProfile(vin, vehicle);
-    } catch (err) {
-      console.warn(`[${traceId}] [Estimate Evidence] VIN/profile resolution failed (non-fatal):`, err.message);
-    }
+    const laborRateNum = Math.max(0, Number(req.body?.laborRate ?? 65));
+    const partsCostNum = Math.max(0, Number(req.body?.partsCost ?? 0));
+    const customer = req.body?.customer || {};
 
-    const evidenceContext = {
-      symptoms: customerStates.join(' '),
-      mechanicNotices,
-      obdCodes,
-      keywords
-    };
+    const vehicle = verifiedCase.vehicle || packet.vehicle || {};
+    const customerStates = packet.observations?.customer || [];
+    const mechanicNotices = packet.observations?.mechanic || [];
+    const obdCodes = packet.dtcs || [];
+    const diagnosticTests = verifiedCase.tests || [];
+    const completedWork = packet.observations?.completedWork || [];
+    const verifiedCause = clean(verifiedCase.verification?.confirmedCause || verifiedCase.repairScope?.[0]?.cause, 300);
+    if (!verifiedCause) throw new Error('VERIFIED_CASE is missing an explicit confirmed cause');
 
-    const warmupStatus = await waitForVehicleWarmup(evidenceVehicle, 2500);
-
-    let vehicleEvidence = {
-      available: false,
-      oem: { references: [] },
-      tsbs: { references: [] },
-      recalls: [],
-      knownIssues: [],
-      sources: [],
-      errors: []
-    };
-
-    try {
-      vehicleEvidence = await collectVehicleEvidence(evidenceVehicle, evidenceContext, { includeNhtsa: false });
-    } catch (e) {
-      console.warn(`[${traceId}] [Estimate Evidence] Collection failed:`, e.message);
-      vehicleEvidence.errors = [e.message];
-    }
-
-    const completedWork = normalizeCompletedWork(mechanicNotices);
-    const vehicleStr = [evidenceVehicle.year, evidenceVehicle.make, evidenceVehicle.model, evidenceVehicle.trim]
-      .filter(Boolean)
-      .join(' ') || 'Unknown Vehicle';
-
-    const relevantTsbs = selectRelevantTsbs(vehicleEvidence, evidenceContext, MIN_TSB_RELEVANCE);
-    const oemReferences = (vehicleEvidence.oem?.references || []).slice(0, 8);
-    const estimateSources = (vehicleEvidence.sources || [])
-      .filter(source => source !== 'NHTSA_ODI' && source !== 'NHTSA ODI')
-      .filter(source => source !== 'LEMON_MANUALS' || oemReferences.length || relevantTsbs.length);
+    const oemReferences = (packet.evidence?.oem || []).slice(0, 8);
+    const relevantTsbs = (packet.evidence?.tsbs || []).slice(0, 6);
+    const estimateSources = (packet.evidence?.sources || []).filter(source => source !== 'NHTSA_ODI' && source !== 'NHTSA ODI');
 
     const ledger = buildEvidenceLedger({
       oemReferences,
-      relevantTsbs: relevantTsbs.slice(0, 6),
+      relevantTsbs,
       customerStates,
       mechanicNotices,
       obdCodes,
       diagnosticTests
     });
+    const verificationRef = 'VERIFY_001';
+    ledger.push({
+      id: verificationRef,
+      type: 'MEASURED_FACT',
+      text: [verifiedCause, verifiedCase.verification?.conclusion, verifiedCase.verification?.notes]
+        .map(clean)
+        .filter(Boolean)
+        .join(' | ')
+    });
+
     const compactLedger = compactLedgerForModel(ledger);
     const evidenceText = JSON.stringify(compactLedger);
+    const rawRustMultiplier = Number(packet.deterministic?.vehicleProfile?.rustMultiplier);
+    const hasVerifiedRustMultiplier = Number.isFinite(rawRustMultiplier) && rawRustMultiplier >= 1;
+    const rustBeltMultiplier = hasVerifiedRustMultiplier ? rawRustMultiplier : 1;
+    const vehicleStr = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' ') || 'Unknown Vehicle';
 
-    const systemPrompt = `You are the reasoning module of SKSK ProTech. Return only the JSON object required by the supplied JSON Schema.
+    const systemPrompt = `You are the repair-estimate reasoning module of SKSK ProTech. Return only the JSON object required by the supplied JSON Schema.\n\nCONTRACT RULES:\n- The mechanic has already completed TEST -> VERIFY. The VERIFIED CAUSE supplied below is immutable diagnostic truth. Do not diagnose a different cause, add a competing fault, or revoke verification.\n- Your job is to cost out and describe repair of the verified fault using only the supplied VERIFIED_CASE evidence.\n- JSON booleans are real booleans: true or false.\n- Do not output laborCost, partsCost, total, or laborRate. Those are mechanic-owned/deterministic.\n- evidenceRefs may contain ONLY IDs present in the supplied EVIDENCE LEDGER.\n- Never invent a TSB, OEM procedure, torque, measurement, construction method, special tool, or vehicle-specific failure pattern.\n- repairActions and repairSteps must stay within the verified repair scope.\n- proTips that claim factory facts must cite supplied OEM/TSB evidence.\n- Probabilities/confidence are advisory only and will be normalized deterministically.`;
 
-CONTRACT RULES:
-- JSON booleans are real booleans: true or false. Never return "true" or "false" as strings.
-- Do not output laborCost, partsCost, total, or laborRate. Those fields are mechanic-owned/deterministic and the AI has zero authority to change them.
-- evidenceRefs may contain ONLY IDs present in the supplied EVIDENCE LEDGER.
-- factorySupported=true only when an OEM_ or TSB_ reference directly supports that exact candidate/component claim.
-- mechanicSupported=true only when a MECH_ reference directly supports that exact candidate/component claim.
-- measuredSupported=true only when a CODE_ or TEST_ reference directly supports the candidate.
-- A historical code is evidence that a fault was observed previously; it does not by itself prove the component must be replaced now.
-- confirmed=true only when supplied measured/test evidence actually confirms the candidate. A model inference is never confirmation.
-- repairAuthorized=true only when confirmed=true. If confirmation is missing, repairAuthorized MUST be false and confirmationRequired MUST be true.
-- When repairAuthorized=false, give discriminating confirmationTests instead of jumping to replacement.
-- Completed work may still be verified for installation/fitment/failure, but do not casually recommend repeating the same replacement.
-- EVIDENCE HIERARCHY: measured/test facts > directly applicable OEM/TSB evidence > mechanic observations > customer statements > model inference.
-- Customer statements preserve symptom/condition but are not proof of a component failure.
-- Mechanic observations are high-value context but still distinguish observation/history from measured confirmation.
-- Never invent a TSB, OEM procedure, torque, measurement, construction method, special tool, or vehicle-specific failure pattern.
-- When two operating conditions are reported, preserve both branches unless evidence proves one component explains both.
-- Probabilities/confidence are advisory model confidence only. SKSK will cap and normalize them deterministically after your response.
-- repairSteps are allowed only for repairAuthorized candidates. Otherwise return an empty repairSteps array; SKSK will display confirmation tests.
-- proTips must cite evidenceRefs when they claim vehicle-specific/factory facts. If a tip is only general shop reasoning, use an empty evidenceRefs array and factorySupported=false.`;
-
-    const userPrompt = `Vehicle: ${vehicleStr}\nVIN: ${vin || 'N/A'}\nVehicle applicability: ${evidenceVehicle.driveType || evidenceVehicle.drivetrain || 'drivetrain not decoded'}\nMileage: ${mileage || 'N/A'}\nMechanic-entered labor rate: $${laborRateNum}/hr (DO NOT MODIFY)\nMechanic-entered parts cost: $${partsCostNum} (DO NOT MODIFY)\nCompleted Work Detected: ${completedWork.join(', ') || 'None'}\n\nEVIDENCE LEDGER:\n${evidenceText}`;
-
-    console.log(`[${traceId}] [Estimate AI] dispatch`, {
-      ledgerEntries: ledger.length,
-      oemRefs: oemReferences.length,
-      tsbRefs: relevantTsbs.length,
-      mechanicRefs: mechanicNotices.length,
-      customerRefs: customerStates.length,
-      measuredRefs: obdCodes.length + diagnosticTests.length
-    });
+    const userPrompt = `VERIFIED CAUSE: ${verifiedCause}\nVehicle: ${vehicleStr}\nVIN: ${vehicle.vin || 'N/A'}\nMileage: ${vehicle.mileage || 'N/A'}\nMechanic-entered labor rate: $${laborRateNum}/hr (DO NOT MODIFY)\nMechanic-entered parts cost: $${partsCostNum} (DO NOT MODIFY)\n\nVERIFIED_CASE fingerprint: ${verifiedCase.fingerprint}\nEVIDENCE LEDGER:\n${evidenceText}`;
 
     const aiStartedAt = Date.now();
     const aiRes = await aiChat({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
       max_tokens: 2500,
       temperature: 0.15,
       reasoning_effort: 'low',
@@ -249,13 +236,12 @@ CONTRACT RULES:
     });
     const aiMs = Date.now() - aiStartedAt;
 
-    const aiText = typeof aiRes === 'string'
-      ? aiRes
-      : (aiRes?.choices?.[0]?.message?.content || '');
-    if (!aiText) throw new Error('AI provider returned an empty estimate response');
-
+    const aiText = typeof aiRes === 'string' ? aiRes : (aiRes?.choices?.[0]?.message?.content || '');
     let parsed = extractJSON(aiText);
-    if (!parsed) parsed = safeAIReasoning('AI schema output could not be parsed; manual inspection required.');
+    if (!parsed) {
+      parsed = safeAIReasoning(verifiedCause, verificationRef, 'AI schema output could not be parsed; verified repair scope retained.');
+    }
+    parsed = forceVerifiedTruth(parsed, verifiedCase, verificationRef);
 
     const finalEstimate = buildFinalEstimate(parsed, {
       ledger,
@@ -263,35 +249,40 @@ CONTRACT RULES:
       partsCost: partsCostNum,
       rustMultiplier: rustBeltMultiplier
     });
-
-    finalEstimate.repairs = filterCompletedRepairs(finalEstimate.repairs, completedWork);
-    if (!finalEstimate.repairs.length) finalEstimate.repairs = ['Perform targeted confirmation tests before replacement'];
+    enforceVerifiedFinalEstimate(finalEstimate, verifiedCause, verificationRef);
 
     finalEstimate.knownIssues = relevantTsbs.slice(0, 3).map(x =>
       `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`
     );
-
     const unsupportedTorqueSpecsRemoved = sanitizeUnsupportedTorque(finalEstimate, evidenceText);
 
-    const sourceLabel = estimateSources.join(', ') || 'No external OEM/TSB evidence source returned';
+    finalEstimate.rustAdjustment = hasVerifiedRustMultiplier
+      ? {
+          applied: rustBeltMultiplier > 1,
+          multiplier: rustBeltMultiplier,
+          source: 'VERIFIED_CASE'
+        }
+      : {
+          applied: false,
+          reason: 'not_present_in_verified_packet'
+        };
+
     finalEstimate.notes = [
       finalEstimate.notes,
-      `Evidence available: ${sourceLabel}.`,
-      `Direct factory-supported candidates: ${finalEstimate.validation.factorySupportedCandidateCount}.`,
-      `Model-only candidates: ${finalEstimate.validation.modelInferenceCandidateCount}.`,
-      `Completed repairs excluded: ${completedWork.join(', ') || 'none'}.`
+      `Diagnostic truth source: VERIFIED_CASE ${verifiedCase.fingerprint}.`,
+      `Completed repairs excluded from diagnostic re-interpretation: ${completedWork.join(', ') || 'none'}.`
     ].filter(Boolean).join(' ');
 
     finalEstimate.evidence = {
       oem: oemReferences,
-      tsbs: relevantTsbs.slice(0, 6),
+      tsbs: relevantTsbs,
       sources: estimateSources,
       available: !!(oemReferences.length || relevantTsbs.length),
       completedWorkExcluded: completedWork,
-      drivetrain: evidenceVehicle.driveType || evidenceVehicle.drivetrain || '',
-      tsbRelevanceFloor: MIN_TSB_RELEVANCE,
+      drivetrain: vehicle.drivetrain || '',
       unsupportedTorqueSpecsRemoved,
-      warmupStatus: warmupStatus.status,
+      packetSchemaVersion: packet.schemaVersion,
+      verifiedCaseFingerprint: verifiedCase.fingerprint,
       ledger: compactLedger.map(ref => ({ id: ref.id, type: ref.type, title: ref.title || '', url: ref.url || '' })),
       claimTrace: finalEstimate.candidates.map(candidate => ({
         cause: candidate.cause,
@@ -299,12 +290,7 @@ CONTRACT RULES:
         evidenceClass: candidate.evidenceClass,
         evidenceRefs: candidate.evidenceRefs,
         supportingEvidenceRefs: candidate.supportingEvidenceRefs,
-        modelConfidence: candidate.modelConfidence,
-        confidenceCap: candidate.confidenceCap,
         finalConfidence: candidate.finalConfidence,
-        factorySupported: candidate.factorySupported,
-        mechanicSupported: candidate.mechanicSupported,
-        measuredSupported: candidate.measuredSupported,
         confirmed: candidate.confirmed,
         repairAuthorized: candidate.repairAuthorized
       }))
@@ -322,27 +308,20 @@ CONTRACT RULES:
 
     try {
       if (supabase) {
-        await supabase.from('estimates').insert({
-          total: finalEstimate.total,
-          details: { ...finalEstimate, customer, vehicle: evidenceVehicle }
-        });
+        await supabase.from('estimates').insert({ total: finalEstimate.total, details: { ...finalEstimate, customer, vehicle } });
       }
-    } catch (e) {
-      // DB target optional
-    }
+    } catch (_) {}
 
-    console.log(`[${traceId}] [Estimate Ready]`, {
-      provider: finalEstimate.aiTrace.provider,
-      fallbackReason: finalEstimate.aiTrace.fallbackReason,
-      probabilityTotal: finalEstimate.probability.reduce((sum, item) => sum + item.likelihood, 0),
-      authorizedRepairs: finalEstimate.candidates.filter(candidate => candidate.repairAuthorized).length,
-      totalMs: finalEstimate.aiTrace.totalRouteLatencyMs
-    });
-
-    res.json({ success: true, appliedRustPenalty: rustBeltMultiplier > 1.0, estimate: finalEstimate });
+    return res.json({ success: true, appliedRustPenalty: rustBeltMultiplier > 1, estimate: finalEstimate });
   } catch (err) {
     console.error(`[${traceId}] [Estimate System Fault]:`, err.message);
-    res.status(500).json({ success: false, error: 'Estimate generation failed completely.', details: err.message, traceId });
+    const verificationFailure = /VERIFIED_CASE|Verified case|verified/i.test(err.message || '');
+    return res.status(verificationFailure ? 409 : 500).json({
+      success: false,
+      error: verificationFailure ? VERIFIED_CASE_ERROR : 'Estimate generation failed completely.',
+      code: verificationFailure ? VERIFIED_CASE_ERROR_CODE : 'ESTIMATE_GENERATION_FAILED',
+      traceId
+    });
   }
 });
 

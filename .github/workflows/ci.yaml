@@ -55,5 +55,8 @@ jobs:
     - name: Verified Case Handoff Checks
       run: npm run test:verified-case
 
+    - name: Estimate Verified Truth Checks
+      run: npm run test:estimate-verified-truth
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
