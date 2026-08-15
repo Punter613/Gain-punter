@@ -1,18 +1,60 @@
 'use strict';
 
 const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30;
+const STRICT_NUMERIC = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+const STRICT_SERVICE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+/**
+ * Safety-boundary contract:
+ * componentData aliases normalized here must come from mechanic-entered values or
+ * trusted instrumentation/structured vehicle data. AI/OCR/vision-extracted values
+ * must not be promoted into componentData aliases before TAG without a separate
+ * provenance/confidence gate.
+ */
 function toFiniteNumber(value) {
-  if (value === undefined || value === null || value === '') return undefined;
-  const numeric = typeof value === 'number' ? value : Number(value);
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (typeof value !== 'string') return undefined;
+
+  const text = value.trim();
+  if (!text || !STRICT_NUMERIC.test(text)) return undefined;
+
+  const numeric = Number(text);
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+function parseServiceDate(value) {
+  if (typeof value !== 'string') return undefined;
+
+  const match = STRICT_SERVICE_DATE.exec(value.trim());
+  if (!match) return undefined;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+
+  return date;
+}
+
 function monthsSince(dateValue, now = Date.now()) {
-  if (!dateValue) return undefined;
-  const timestamp = new Date(dateValue).getTime();
+  const date = parseServiceDate(dateValue);
+  if (!date) return undefined;
+
+  const timestamp = date.getTime();
   const nowMs = now instanceof Date ? now.getTime() : Number(now);
-  if (!Number.isFinite(timestamp) || !Number.isFinite(nowMs) || timestamp > nowMs) return undefined;
+  if (!Number.isFinite(nowMs) || timestamp > nowMs) return undefined;
+
   return (nowMs - timestamp) / MS_PER_MONTH;
 }
 
@@ -28,6 +70,7 @@ function setNumericIfMissing(target, key, candidates) {
   if (target[key] !== undefined && target[key] !== null) {
     const normalized = toFiniteNumber(target[key]);
     if (normalized !== undefined) target[key] = normalized;
+    else delete target[key];
     return;
   }
 
@@ -88,5 +131,6 @@ function normalizeVehicleMeasurements(vehicleProfile = {}, options = {}) {
 module.exports = {
   normalizeVehicleMeasurements,
   monthsSince,
+  parseServiceDate,
   toFiniteNumber
 };
