@@ -3,6 +3,7 @@ const router = express.Router();
 const estimateRouter = require('./estimate');
 const { getJob } = require('../services/job.lifecycle');
 const { authorizeJobRepair } = require('../middleware/repair.authorization.middleware');
+const { verifiedEstimateInput } = require('../core/evidence/verified.case');
 
 router.post('/', async (req, res, next) => {
   try {
@@ -31,13 +32,22 @@ router.post('/', async (req, res, next) => {
       });
     }
 
+    const canonical = verifiedEstimateInput(job.verifiedCase);
+    const packet = canonical.verifiedCase.evidencePacket || {};
+    const vehicle = packet.vehicle || canonical.verifiedCase.vehicle || job.vehicle || {};
     req.repairAuthorization = result;
     req.body = {
       ...(req.body || {}),
       jobId,
-      diagnosisVerified: true,
-      verificationStatus: 'VERIFIED',
-      verifiedFaults: result.repairScope
+      ...canonical,
+      vehicle,
+      vin: vehicle.vin || '',
+      mileage: vehicle.mileage,
+      customerStates: packet.observations?.customer || [],
+      mechanicNotices: packet.observations?.mechanic || [],
+      obdCodes: packet.dtcs || [],
+      diagnosticTests: canonical.diagnosticTests,
+      verifiedDiagnosis: canonical.verifiedCase.verification
     };
     return next();
   } catch (err) {

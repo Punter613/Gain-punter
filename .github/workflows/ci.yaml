@@ -52,5 +52,8 @@ jobs:
     - name: Diagnostic Evidence Packet Checks
       run: npm run test:evidence-packet
 
+    - name: Verified Case Handoff Checks
+      run: npm run test:verified-case
+
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty

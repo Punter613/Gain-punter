@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { getJob, addTest, verifyJob } = require('../services/job.lifecycle');
+const { getJob, patchJob, addTest, verifyJob } = require('../services/job.lifecycle');
+const { buildVerifiedCase } = require('../core/evidence/verified.case');
 
 router.get('/:id', async (req, res) => {
   const job = await getJob(req.params.id);
@@ -33,8 +34,13 @@ router.post('/:id/tests', async (req, res) => {
 
 router.post('/:id/verify', async (req, res) => {
   try {
-    const job = await verifyJob(req.params.id, req.body || {});
+    let job = await verifyJob(req.params.id, req.body || {});
     if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
+
+    if (job.status === 'VERIFIED') {
+      const verifiedCase = buildVerifiedCase(job);
+      job = await patchJob(job.jobId, { verifiedCase });
+    }
 
     return res.json({
       success: true,
@@ -42,6 +48,7 @@ router.post('/:id/verify', async (req, res) => {
       invoiceNumber: job.invoiceNumber,
       status: job.status,
       verification: job.verification,
+      verifiedCase: job.verifiedCase || null,
       estimateReady: job.status === 'VERIFIED'
     });
   } catch (err) {
