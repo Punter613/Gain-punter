@@ -5,7 +5,10 @@ const {
   assertVerifiedEstimateSnapshot
 } = require('../core/evidence/verified.estimate.snapshot');
 
-const VALID_STATES = new Set(['DIAGNOSING', 'TESTING', 'VERIFIED', 'ESTIMATED', 'INVOICED', 'DIAG_FAILED']);
+const VALID_STATES = new Set([
+  'DIAGNOSING', 'TESTING', 'VERIFIED', 'ESTIMATED', 'INVOICED', 'DIAG_FAILED',
+  'REPAIR_COMPLETED', 'OUTCOME_CONFIRMED'
+]);
 
 function nowIso() {
   return new Date().toISOString();

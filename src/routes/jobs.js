@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { getJob, patchJob, addTest, verifyJob } = require('../services/job.lifecycle');
 const { buildVerifiedCase } = require('../core/evidence/verified.case');
+const { buildRepairCompletedEvent, buildOutcomeEvent } = require('../core/evidence/confirmed.repair.case');
+const { recordOutcomeEvent, getJobOutcomeEvents } = require('../services/job.outcome.events');
 
 router.get('/:id', async (req, res) => {
   const job = await getJob(req.params.id);
@@ -53,6 +55,75 @@ router.post('/:id/verify', async (req, res) => {
     });
   } catch (err) {
     return res.status(409).json({ success: false, error: err.message, jobId: req.params.id });
+  }
+});
+
+// completedBy/recordedBy below are self-reported request-body values, not
+// authenticated server identity - there is no auth middleware wired into
+// this API yet (see AGENTS.md landmines). They're recorded honestly as
+// claimed provenance, not treated or labeled as verified identity. Wire
+// this to real auth context once it exists instead of trusting the body.
+
+router.post('/:id/repair-completed', async (req, res) => {
+  try {
+    const job = await getJob(req.params.id);
+    if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
+
+    const { operationIds, completedBy, notes } = req.body || {};
+    const event = buildRepairCompletedEvent({ job, operationIds, completedBy, notes });
+    await recordOutcomeEvent(event);
+    const updated = await getJob(req.params.id);
+
+    return res.status(201).json({
+      success: true,
+      jobId: req.params.id,
+      status: updated?.status || 'REPAIR_COMPLETED',
+      event
+    });
+  } catch (err) {
+    return res.status(409).json({ success: false, error: err.message, jobId: req.params.id });
+  }
+});
+
+router.post('/:id/outcome', async (req, res) => {
+  try {
+    const job = await getJob(req.params.id);
+    if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
+
+    const events = await getJobOutcomeEvents(req.params.id);
+    const completionEvent = events.filter(e => e.eventType === 'REPAIR_COMPLETED').slice(-1)[0];
+    if (!completionEvent) {
+      return res.status(409).json({ success: false, error: 'No REPAIR_COMPLETED event recorded for this job yet', jobId: req.params.id });
+    }
+
+    const { result, symptomResolved, remainingSymptoms, notes, evidenceRefs, recordedBy, supersedesEventFingerprint } = req.body || {};
+    const event = buildOutcomeEvent({
+      job,
+      completionEvent,
+      outcome: { result, symptomResolved, remainingSymptoms, notes, evidenceRefs },
+      recordedBy,
+      supersedesEventFingerprint
+    });
+    await recordOutcomeEvent(event);
+    const updated = await getJob(req.params.id);
+
+    return res.status(201).json({
+      success: true,
+      jobId: req.params.id,
+      status: updated?.status || 'OUTCOME_CONFIRMED',
+      event
+    });
+  } catch (err) {
+    return res.status(409).json({ success: false, error: err.message, jobId: req.params.id });
+  }
+});
+
+router.get('/:id/outcome-events', async (req, res) => {
+  try {
+    const events = await getJobOutcomeEvents(req.params.id);
+    return res.json({ success: true, jobId: req.params.id, events });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message, jobId: req.params.id });
   }
 });
 
