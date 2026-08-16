@@ -1,5 +1,6 @@
 const groq = require('./providers/groq');
 const gemini = require('./providers/gemini');
+const { prepareGeminiDiagnosePayload } = require('./diagnose.schema');
 
 const providers = { groq, gemini };
 
@@ -39,12 +40,16 @@ function fallbackReason(error) {
   return 'PROVIDER_RETRYABLE_ERROR';
 }
 
-function geminiFallbackPayload(payload, reason) {
-  return {
+function geminiPayload(payload, extra = {}) {
+  return prepareGeminiDiagnosePayload({
     ...payload,
-    model: payload.gemini_model || process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash',
-    fallbackReason: reason
-  };
+    ...extra,
+    model: payload.gemini_model || process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash'
+  });
+}
+
+function geminiFallbackPayload(payload, reason) {
+  return geminiPayload(payload, { fallbackReason: reason });
 }
 
 async function routeProvider(payload) {
@@ -57,6 +62,9 @@ async function routeProvider(payload) {
   }
 
   try {
+    if (activeProvider === 'gemini') {
+      return await gemini.chat(geminiPayload(payload));
+    }
     return await provider.chat(payload);
   } catch (error) {
     const canFallback = activeProvider === 'groq' && gemini.isConfigured() && isRetryableProviderError(error);
