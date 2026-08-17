@@ -4,8 +4,9 @@ const assert = require('node:assert/strict');
 const { buildCanonicalSearchTerms } = require('../src/core/automotive.normalization');
 const { extractPage, scorePage } = require('../scripts/scrape-lemon-targeted-evidence');
 const { targetedToManual } = require('../src/services/lemon');
+const { QuickAskRetriever } = require('../src/core/knowledge/quick.ask.retriever');
 
-test('A/C clutch query expands into factory-manual HVAC terms', () => {
+test('A/C clutch query expands into factory-manual HVAC and component terms', () => {
   const { profile, terms } = buildCanonicalSearchTerms(
     { year: 2008, make: 'Kia', model: 'Sorento' },
     { query: 'ac clutch whining when on', symptoms: 'ac clutch whining when on' }
@@ -16,6 +17,8 @@ test('A/C clutch query expands into factory-manual HVAC terms', () => {
   assert.ok(terms.includes('hvac'));
   assert.ok(terms.includes('air conditioning'));
   assert.ok(terms.includes('compressor clutch'));
+  assert.ok(terms.includes('clutch'));
+  assert.ok(terms.includes('compressor'));
 });
 
 test('tuned parser keeps corrected regex behavior and follows manual hosts', () => {
@@ -35,19 +38,56 @@ test('tuned parser keeps corrected regex behavior and follows manual hosts', () 
   assert.doesNotMatch(page.bodyText, /const fake|evil\.example/);
 });
 
-test('tuned scorer ranks compressor clutch manual page for A/C query', () => {
+test('tuned scorer ranks compressor clutch page above generic HVAC sensor pages', () => {
   const context = { query: 'ac clutch whining when on', symptoms: 'ac clutch whining when on' };
   const { profile, terms } = buildCanonicalSearchTerms({}, context);
-  const relevance = scorePage({
+
+  const clutch = scorePage({
     title: 'Compressor Clutch Relay - Testing and Inspection',
     headings: ['Heating and Air Conditioning', 'Compressor Clutch Relay'],
     url: 'https://charm.li/example/Repair%20and%20Diagnosis/HVAC/Compressor%20Clutch%20Relay/',
     bodyText: 'Inspect the air conditioning compressor clutch relay when compressor clutch operation is abnormal.'
   }, terms, 'diagnosis', profile);
 
-  assert.ok(relevance.score > 0);
-  assert.ok(relevance.matchedTerms.includes('air conditioning'));
-  assert.ok(relevance.matchedTerms.includes('compressor clutch'));
+  const ambient = scorePage({
+    title: 'Ambient Temperature Sensor / Switch HVAC',
+    headings: ['Heating and Air Conditioning', 'Ambient Temperature Sensor / Switch HVAC'],
+    url: 'https://lemon-manuals.la/example/Repair%20and%20Diagnosis/Heating%20and%20Air%20Conditioning/Ambient%20Temperature%20Sensor/',
+    bodyText: 'Ambient temperature sensor testing and inspection for the HVAC system.'
+  }, terms, 'diagnosis', profile);
+
+  assert.ok(clutch.score > 0);
+  assert.ok(clutch.matchedTerms.includes('air conditioning'));
+  assert.ok(clutch.matchedTerms.includes('compressor clutch'));
+  assert.ok(clutch.matchedTerms.includes('clutch'));
+  assert.ok(clutch.matchedTerms.includes('compressor'));
+  assert.ok(clutch.score > ambient.score, `${clutch.score} should outrank generic HVAC ${ambient.score}`);
+});
+
+test('Quick Ask collapses duplicate manual paths with the same factory title', async () => {
+  const manualProvider = async () => ({
+    source: 'LEMON_MANUALS',
+    items: [
+      {
+        title: 'Compressor Clutch Relay — 2008 Kia Sorento 2WD V6-3.3L',
+        url: 'https://lemon-manuals.la/direct/Compressor%20Clutch%20Relay/',
+        meta: { headings: 'Heating and Air Conditioning | Compressor Clutch Relay', snippet: 'Air conditioning compressor clutch relay testing.' }
+      },
+      {
+        title: 'Compressor Clutch Relay — 2008 Kia Sorento 2WD V6-3.3L',
+        url: 'https://lemon-manuals.la/HVAC/Relays/Compressor%20Clutch%20Relay/',
+        meta: { headings: 'HVAC | Relays | Compressor Clutch Relay', snippet: 'Air conditioning compressor clutch relay testing and inspection.' }
+      }
+    ]
+  });
+
+  const out = await new QuickAskRetriever(null, manualProvider).ask({
+    vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
+    query: 'ac clutch'
+  });
+
+  assert.equal(out.repairDiagnosisEvidence.length, 1);
+  assert.match(out.repairDiagnosisEvidence[0].title, /compressor clutch relay/i);
 });
 
 test('live manual adapter preserves targeted scraper provenance', () => {
@@ -77,7 +117,7 @@ test('live manual adapter preserves targeted scraper provenance', () => {
     }]
   });
 
-  assert.equal(manual.schemaVersion, 4);
+  assert.equal(manual.schemaVersion, 5);
   assert.equal(manual.source, 'CHARM');
   assert.equal(manual.items.length, 1);
   assert.equal(manual.items[0].title, 'Compressor Clutch Relay');
