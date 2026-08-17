@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'lifecycle.html'), 'utf8');
 const redirects = fs.readFileSync(path.join(__dirname, '..', 'public', '_redirects'), 'utf8');
+const serverSource = fs.readFileSync(path.join(__dirname, '..', 'api', 'server.js'), 'utf8');
 
 test('public root enters the verified lifecycle UI', () => {
   assert.match(redirects, /^\/ \/lifecycle\.html 200/m);
@@ -47,6 +48,11 @@ test('Quick Ask presents focused service-manual pointers rather than scraped tex
   assert.match(html, /No focused service-manual reference found for these keywords/);
   assert.doesNotMatch(html, /\$\{m\.snippet\?/);
   assert.doesNotMatch(html, /\$\{esc\(m\.source\|\|d\.repairDiagnosisSource/);
+});
+
+test('Render PR preview can call its own API without opening CORS to arbitrary Render apps', () => {
+  assert.match(serverSource, /\^p613-backend-pr-\\d\+\\\.onrender\\\.com\$/);
+  assert.doesNotMatch(serverSource, /hostname\.endsWith\(['"]\.onrender\.com['"]\)/);
 });
 
 test('estimate and invoice follow the same persisted job', () => {
