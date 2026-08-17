@@ -27,6 +27,20 @@ test('frontend captures engine trim and sends engine plus DTC context through re
   assert.match(html, /query:retrievalQuery/);
 });
 
+test('lifecycle restores explicit VIN decode autofill and customer-to-tech translation', () => {
+  assert.match(html, /id="decodeVin"[^>]*>🔍 Decode/);
+  assert.match(html, /post\('\/api\/vehicle\/decode',\{vin\}\)/);
+  assert.match(html, /\$\('year'\)\.value=v\.year\|\|''/);
+  assert.match(html, /\$\('make'\)\.value=v\.make\|\|''/);
+  assert.match(html, /\$\('model'\)\.value=v\.model\|\|''/);
+  assert.match(html, /\$\('engine'\)\.value=engineLabel/);
+  assert.match(html, /id="translateSymptoms"[^>]*>🔄 Translate to Tech/);
+  assert.match(html, /post\('\/api\/translate',\{text:raw\}\)/);
+  assert.match(html, /\$\('symptoms'\)\.value=d\.translated/);
+  assert.match(serverSource, /app\.use\('\/api\/translate'/);
+  assert.match(serverSource, /app\.use\('\/api\/vehicle'/);
+});
+
 test('frontend exposes explicit verify action before estimate unlock', () => {
   assert.match(html, /id="verify"[^>]*>✅ VERIFY FAULT — Unlock Estimate/);
   assert.match(html, /\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/tests/);
