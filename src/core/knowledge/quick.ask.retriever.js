@@ -4,6 +4,7 @@
 
 const { supabase: defaultSupabase } = require('../../db');
 const { scrapeLEMONManuals } = require('../../services/lemon');
+const { buildCanonicalSearchTerms, extractCanonicalProfile, normalizeText } = require('../automotive.normalization');
 
 const STOP = new Set(['the','a','an','and','or','of','to','in','on','for','with','is','it','this','that','what','would','could','cause','causes','issue','issues','problem','problems','most','common']);
 const SHORT_TOKENS = new Set(['ac','cv','tp','o2']);
@@ -125,7 +126,59 @@ function manualItemText(item = {}) {
 function isTsbManualItem(item = {}) {
   return /\btsb\b|technical service bulletin|service bulletin/i.test(manualItemText(item));
 }
-function normalizeManualItem(item = {}, source = 'LEMON_MANUALS') {
+
+function manualFocusScore(item = {}, query = '') {
+  const { profile: queryProfile } = buildCanonicalSearchTerms({}, { query, symptoms: query });
+  const meta = item.meta || {};
+  const itemProfile = extractCanonicalProfile({
+    title: item.title,
+    headings: [meta.headings],
+    url: item.url,
+    bodyText: [meta.snippet, meta.matchedKeywords, meta.facts].filter(Boolean).join(' ')
+  });
+
+  const queryComponents = queryProfile.components || [];
+  const itemComponents = new Set(itemProfile.components || []);
+  const highSignal = normalizeText([item.title, meta.headings, item.url].filter(Boolean).join(' '));
+  const matchedComponents = queryComponents.filter(component =>
+    itemComponents.has(component) || highSignal.includes(normalizeText(component))
+  );
+
+  // When the mechanic names a component, system-only matches are navigation
+  // hints, not focused answers. Refuse to surface them as Quick Ask references.
+  if (queryComponents.length && !matchedComponents.length) {
+    return { eligible: false, score: 0, matchedKeywords: [], matchedComponents: [] };
+  }
+
+  const matchedSounds = (queryProfile.sounds || []).filter(value => (itemProfile.sounds || []).includes(value));
+  const matchedConditions = (queryProfile.conditions || []).filter(value => (itemProfile.conditions || []).includes(value));
+  const matchedSystems = (queryProfile.systems || []).filter(value => (itemProfile.systems || []).includes(value));
+  const matchedDtcs = (queryProfile.dtcs || []).filter(value => (itemProfile.dtcs || []).includes(value));
+  const scraperScore = Math.max(0, Math.min(25, Number(meta.relevanceScore || 0) / 4));
+
+  const score =
+    matchedDtcs.length * 120 +
+    matchedComponents.length * 100 +
+    matchedSounds.length * 20 +
+    matchedConditions.length * 15 +
+    matchedSystems.length * 5 +
+    scraperScore;
+
+  return {
+    eligible: score > 0,
+    score,
+    matchedComponents,
+    matchedKeywords: [...new Set([
+      ...matchedDtcs,
+      ...matchedComponents,
+      ...matchedSounds,
+      ...matchedConditions,
+      ...matchedSystems
+    ])]
+  };
+}
+
+function normalizeManualItem(item = {}, source = 'LEMON_MANUALS', focus = null) {
   const meta = item.meta || {};
   return {
     title: cleanEvidenceText(item.title || 'Repair & Diagnosis reference', 180),
@@ -133,7 +186,10 @@ function normalizeManualItem(item = {}, source = 'LEMON_MANUALS') {
     source: clean(source || 'LEMON_MANUALS'),
     headings: cleanEvidenceText(meta.headings, 220),
     snippet: cleanEvidenceText(meta.snippet, 420),
-    matchedKeywords: cleanEvidenceText(meta.matchedKeywords, 180),
+    matchedKeywords: cleanEvidenceText(
+      focus?.matchedKeywords?.length ? focus.matchedKeywords.join(', ') : meta.matchedKeywords,
+      180
+    ),
     evidenceType: 'REPAIR_DIAGNOSIS'
   };
 }
@@ -190,15 +246,14 @@ class QuickAskRetriever {
       const best = new Map();
       for (const item of manual?.items || []) {
         if (isTsbManualItem(item)) continue;
-        const relevance = relevanceScore(manualItemText(item), qt);
-        if (relevance <= 0) continue;
-        const ref = normalizeManualItem(item, source);
+        const focus = manualFocusScore(item, query);
+        if (!focus.eligible) continue;
+        const ref = normalizeManualItem(item, source, focus);
         // The same factory page is often reachable through both a direct component
-        // path and a category/subtree path. Prefer the best-ranked copy by title so
-        // the mechanic does not see duplicate Ambient/Coolant/etc. cards.
+        // path and a category/subtree path. Prefer the best-focused copy by title.
         const key = norm(ref.title) || norm(ref.url);
         const current = best.get(key);
-        if (!current || relevance > current.relevance) best.set(key, { ref, relevance });
+        if (!current || focus.score > current.relevance) best.set(key, { ref, relevance: focus.score });
       }
       return {
         references: [...best.values()].sort((a,b) => b.relevance - a.relevance).slice(0, limit).map(x => x.ref),
@@ -302,6 +357,7 @@ module.exports = {
   normalizeSearchText,
   relevanceScore,
   manualItemText,
+  manualFocusScore,
   normalizeManualItem,
   isTsbManualItem
 };
