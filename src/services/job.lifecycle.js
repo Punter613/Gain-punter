@@ -96,6 +96,16 @@ async function getJob(jobId) {
   }
 }
 
+// Drops the in-memory cached copy of a job so the next getJob() call is
+// forced to re-read from Supabase. Needed after any write that bypasses
+// persist() (like record_job_outcome_event's direct SQL update to
+// service_jobs) - without this, getJob() would keep returning the stale
+// pre-write copy it cached on an earlier call, even though the DB itself
+// is already correct.
+function invalidateJobCache(jobId) {
+  delete memoryStore()[jobId];
+}
+
 async function createJob(input = {}) {
   const jobId = input.jobId || makeJobId();
   const createdAt = nowIso();
@@ -268,5 +278,6 @@ module.exports = {
   attachEstimate,
   attachInvoice,
   hydrateEstimateInput,
-  hydrateInvoiceInput
+  hydrateInvoiceInput,
+  invalidateJobCache
 };

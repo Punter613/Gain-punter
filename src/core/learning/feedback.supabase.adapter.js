@@ -17,11 +17,30 @@ class FeedbackSupabaseAdapter {
     }
   }
 
+  // labels is a flexible jsonb bag, same as metadata - repurposed here to
+  // carry the actual training-relevant payload (rawAiOutput,
+  // mechanicAssessment, actualRepair, economicActual, confirmedRepairCase,
+  // vehicle, teachingSignal). Previously only bookkeeping fields
+  // (id/requestId/mechanicId/weight/metadata/signals) were persisted here
+  // at all - getTrainingDataset()'s filters on rawAiOutput/mechanicAssessment
+  // /actualRepair would always come back empty against real Supabase
+  // storage even though everything looked fine against the memory adapter.
   async save(example) {
     example.metadata = example.metadata || {};
     if (!example.metadata.feedbackVersion) example.metadata.feedbackVersion = 1;
     if (!example.id) example.id = `fb_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     example.storedAt = new Date().toISOString();
+
+    const labels = {
+      ...(example.labels || {}),
+      rawAiOutput: example.rawAiOutput ?? null,
+      mechanicAssessment: example.mechanicAssessment ?? null,
+      actualRepair: example.actualRepair ?? null,
+      economicActual: example.economicActual ?? null,
+      confirmedRepairCase: example.confirmedRepairCase ?? null,
+      vehicle: example.vehicle ?? null,
+      teachingSignal: example.teachingSignal ?? null
+    };
 
     const { error } = await supabase
       .from('feedback_examples')
@@ -30,7 +49,7 @@ class FeedbackSupabaseAdapter {
         request_id: example.requestId || null,
         mechanic_id: example.mechanicId || null,
         weight: example.weight || 0,
-        labels: example.labels || {},
+        labels,
         metadata: example.metadata || {},
         signals: example.signals || [],
         stored_at: example.storedAt
@@ -90,7 +109,14 @@ class FeedbackSupabaseAdapter {
       labels: row.labels,
       metadata: row.metadata,
       signals: row.signals,
-      storedAt: row.stored_at
+      storedAt: row.stored_at,
+      rawAiOutput: row.labels?.rawAiOutput ?? null,
+      mechanicAssessment: row.labels?.mechanicAssessment ?? null,
+      actualRepair: row.labels?.actualRepair ?? null,
+      economicActual: row.labels?.economicActual ?? null,
+      confirmedRepairCase: row.labels?.confirmedRepairCase ?? null,
+      vehicle: row.labels?.vehicle ?? null,
+      teachingSignal: row.labels?.teachingSignal ?? null
     }));
   }
 

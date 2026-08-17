@@ -167,7 +167,8 @@ class MechanicFeedbackLoop {
       confirmedRepairCase: {
         fingerprint: confirmedRepairCase.fingerprint,
         verifiedCaseFingerprint: confirmedRepairCase.verifiedCaseFingerprint,
-        sourceEventFingerprint: confirmedRepairCase.sourceEventFingerprint
+        sourceEventFingerprint: confirmedRepairCase.sourceEventFingerprint,
+        correctionCount: confirmedRepairCase.correctionCount || 0
       },
       metadata: {
         feedbackVersion: metadata.feedbackVersion || 1,
@@ -196,10 +197,36 @@ class MechanicFeedbackLoop {
     // self-reported feedback masquerade as ground truth. Now it requires
     // the example to actually be tagged trustedForTraining, which only
     // recordConfirmedOutcome() (a real CONFIRMED_REPAIR_CASE) can set.
+    //
+    // A job's outcome can be corrected (WRONG -> CORRECT or vice versa)
+    // after it's already been recorded as trusted once. Corrections are
+    // append-only on the outcome-event side (confirmed.repair.case.js
+    // never mutates history there) - but the adapter storage here is the
+    // same append-only shape, so a stale trusted example from before a
+    // correction would otherwise sit in this table forever, still tagged
+    // trusted, and get picked up by training right alongside its own
+    // correction. Group by job (requestId) and keep only the example with
+    // the highest correctionCount - that's the one built from the current
+    // active outcome, not a since-superseded one.
     const all = await this.adapter.getExamples(limit * 2);
-    const valid = all.filter(e =>
+    const trusted = all.filter(e =>
       e.rawAiOutput && e.mechanicAssessment && e.actualRepair && e.metadata?.trustedForTraining === true
     );
+
+    const latestByJob = new Map();
+    for (const example of trusted) {
+      const jobKey = example.requestId;
+      const current = latestByJob.get(jobKey);
+      const correctionCount = example.confirmedRepairCase?.correctionCount || 0;
+      const currentCorrectionCount = current?.confirmedRepairCase?.correctionCount || 0;
+      const isNewer = !current
+        || correctionCount > currentCorrectionCount
+        || (correctionCount === currentCorrectionCount
+          && new Date(example.metadata?.createdAt || 0) > new Date(current.metadata?.createdAt || 0));
+      if (isNewer) latestByJob.set(jobKey, example);
+    }
+
+    const valid = [...latestByJob.values()];
     valid.sort((a, b) => (b.teachingSignal?.totalWeight || 0) - (a.teachingSignal?.totalWeight || 0));
     return valid.slice(0, limit);
   }
