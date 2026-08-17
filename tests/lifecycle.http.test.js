@@ -317,3 +317,82 @@ test('HTTP lifecycle: request-body verification cannot bypass persisted job stat
     assert.equal(aiCalls, 1, 'only Diagnose may call AI before persisted VERIFY');
   });
 });
+
+test('HTTP lifecycle: unverified diagnosis returns a best diagnosis but cannot unlock Estimate', async () => {
+  await withServer(async base => {
+    const diagnosed = await post(base, '/api/diagnose', fixture);
+    assert.equal(diagnosed.status, 200);
+    const jobId = diagnosed.body.jobId;
+
+    const fallback = await post(base, `/api/jobs/${jobId}/unverified-diagnosis`, {});
+    assert.equal(fallback.status, 200);
+    assert.equal(fallback.body.status, 'TESTING');
+    assert.equal(fallback.body.diagnosisState, 'UNVERIFIED_DIAGNOSIS');
+    assert.equal(fallback.body.unverifiedDiagnosis.state, 'UNVERIFIED_DIAGNOSIS');
+    assert.equal(fallback.body.unverifiedDiagnosis.mostLikelyCause, 'Cylinder 1 ignition fault requires confirmation');
+    assert.equal(fallback.body.unverifiedDiagnosis.physicallyVerified, false);
+    assert.equal(fallback.body.unverifiedDiagnosis.repairAuthorized, false);
+    assert.equal(fallback.body.unverifiedDiagnosis.estimateReady, false);
+    assert.equal(fallback.body.unverifiedDiagnosis.learningEligible, false);
+    assert.match(fallback.body.unverifiedDiagnosis.warning, /not been physically verified/i);
+    assert.equal(fallback.body.verifiedCase, null);
+    assert.equal(fallback.body.estimateReady, false);
+    assert.equal(aiCalls, 1, 'fallback must use persisted diagnosis/evidence rather than minting a second unverifiable model answer');
+
+    const estimate = await post(base, '/api/estimateHeuristic', {
+      jobId,
+      diagnosisVerified: true,
+      verificationStatus: 'UNVERIFIED_DIAGNOSIS',
+      verifiedFaults: [fallback.body.unverifiedDiagnosis.mostLikelyCause]
+    });
+    assert.equal(estimate.status, 409);
+
+    const job = await get(base, `/api/jobs/${jobId}`);
+    assert.equal(job.body.job.status, 'TESTING');
+    assert.equal(job.body.job.verification, null);
+    assert.equal(job.body.job.verifiedCase, undefined);
+    assert.equal(job.body.unverifiedDiagnosis.state, 'UNVERIFIED_DIAGNOSIS');
+  });
+});
+
+test('HTTP lifecycle: later physical VERIFY supersedes but never converts UNVERIFIED_DIAGNOSIS into verified truth', async () => {
+  await withServer(async base => {
+    const diagnosed = await post(base, '/api/diagnose', fixture);
+    const jobId = diagnosed.body.jobId;
+
+    const fallback = await post(base, `/api/jobs/${jobId}/unverified-diagnosis`, {});
+    assert.equal(fallback.status, 200);
+
+    const noTestVerify = await post(base, `/api/jobs/${jobId}/verify`, {
+      confirmed: true,
+      confirmedCause: fallback.body.unverifiedDiagnosis.mostLikelyCause,
+      conclusion: 'SKSK said it was likely.',
+      evidenceTestIds: []
+    });
+    assert.equal(noTestVerify.status, 409);
+
+    const recorded = await post(base, `/api/jobs/${jobId}/tests`, {
+      name: 'Swap cylinder 1 ignition coil',
+      result: 'misfire moved to swapped cylinder'
+    });
+    assert.equal(recorded.status, 201);
+
+    const verified = await post(base, `/api/jobs/${jobId}/verify`, {
+      confirmed: true,
+      confirmedCause: 'Cylinder 1 ignition coil failure',
+      conclusion: 'Misfire moved with the selected coil swap test, physically confirming the coil fault.',
+      evidenceTestIds: [recorded.body.test.id]
+    });
+    assert.equal(verified.status, 200);
+    assert.equal(verified.body.status, 'VERIFIED');
+    assert.equal(verified.body.verifiedCase.stage, 'VERIFIED');
+    assert.equal(verified.body.verifiedCase.verification.confirmedCause, 'Cylinder 1 ignition coil failure');
+    assert.ok(!JSON.stringify(verified.body.verifiedCase).includes('UNVERIFIED_DIAGNOSIS'));
+
+    const job = await get(base, `/api/jobs/${jobId}`);
+    assert.equal(job.body.job.unverifiedDiagnosis.state, 'UNVERIFIED_DIAGNOSIS');
+    assert.equal(job.body.job.unverifiedDiagnosis.supersededBy, 'VERIFIED_CASE');
+    assert.ok(job.body.job.unverifiedDiagnosis.supersededAt);
+    assert.equal(job.body.job.verifiedCase.verification.confirmedCause, 'Cylinder 1 ignition coil failure');
+  });
+});
