@@ -1,4 +1,5 @@
 const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy']);
+const CHARM_HOST = 'charm.li';
 const resolutionCache = new Map();
 
 function clean(value) {
@@ -54,11 +55,8 @@ function getVehicleSignals(vehicle = {}) {
 function drivetrainsConflict(requested, candidate) {
   if (!requested || !candidate) return false;
   if (requested === candidate) return false;
-
-  // 2WD is a broad class; FWD/RWD are compatible with a generic 2WD signal.
   if (requested === '2wd' && (candidate === 'fwd' || candidate === 'rwd')) return false;
   if (candidate === '2wd' && (requested === 'fwd' || requested === 'rwd')) return false;
-
   return true;
 }
 
@@ -69,11 +67,7 @@ function scoreVehicleFolderCandidate(candidate, vehicle) {
   if (!signals.model || !text.includes(signals.model)) return -1000;
 
   const candidateDrivetrain = classifyDrivetrain(decoded);
-  if (drivetrainsConflict(signals.drivetrain, candidateDrivetrain)) {
-    // Vehicle applicability is a control boundary, not a soft ranking hint.
-    // If VIN/profile says 4WD, a folder explicitly labeled 2WD must never win.
-    return -1000;
-  }
+  if (drivetrainsConflict(signals.drivetrain, candidateDrivetrain)) return -1000;
 
   let score = 100;
   const modelTokens = signals.model.split(' ').filter(Boolean);
@@ -103,7 +97,7 @@ function decodeURIComponentSafe(value) {
   catch (_) { return String(value || ''); }
 }
 
-function extractLinks(html, baseUrl) {
+function extractLinks(html, baseUrl, allowedHosts) {
   const links = [];
   const regex = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let match;
@@ -113,7 +107,7 @@ function extractLinks(html, baseUrl) {
     if (!href || href.startsWith('#') || /^javascript:/i.test(href)) continue;
     try {
       const absolute = new URL(href, baseUrl).toString();
-      if (!LEMON_HOSTS.has(new URL(absolute).hostname.toLowerCase())) continue;
+      if (!allowedHosts.has(new URL(absolute).hostname.toLowerCase())) continue;
       links.push({ url: absolute, text });
     } catch (_) {}
   }
@@ -128,7 +122,7 @@ async function fetchHtml(url, timeoutMs = 9000) {
       signal: controller.signal,
       headers: {
         Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.5; lemon-path-resolver)'
+        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.5; manual-path-resolver)'
       }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -144,26 +138,33 @@ function ensureRepairDiagnosisUrl(url) {
   return `${url.replace(/\/$/, '')}/Repair%20and%20Diagnosis/`;
 }
 
-function buildDirectCandidates(vehicle) {
-  const make = titleCase(vehicle.make);
-  const year = clean(vehicle.year);
+function buildVehicleLabels(vehicle) {
   const model = clean(vehicle.model);
   const signals = getVehicleSignals(vehicle);
   const labels = [];
-
-  // Most-specific candidates first. A known drivetrain must not lose to a
-  // generic/sibling variant merely because that URL responds first.
   if (signals.cylinders && signals.displacement && signals.drivetrain) {
     labels.push(`${model} ${signals.drivetrain.toUpperCase()} V${signals.cylinders}-${signals.displacement}L`);
   }
   if (signals.cylinders && signals.displacement) labels.push(`${model} V${signals.cylinders}-${signals.displacement}L`);
   if (vehicle.trim) labels.push(`${model} ${clean(vehicle.trim)}`);
   labels.push(model);
+  return [...new Set(labels)];
+}
 
-  return [...new Set(labels)].map(label => ({
-    label,
-    url: `https://lemon-manuals.la/${encodeURIComponent(make)}/${encodeURIComponent(year)}/${encodeURIComponent(label)}/Repair%20and%20Diagnosis/`
-  }));
+function buildDirectCandidates(vehicle, host, makeLabels) {
+  const year = clean(vehicle.year);
+  const labels = buildVehicleLabels(vehicle);
+  const candidates = [];
+  for (const make of makeLabels) {
+    for (const label of labels) {
+      candidates.push({
+        label,
+        make,
+        url: `https://${host}/${encodeURIComponent(make)}/${encodeURIComponent(year)}/${encodeURIComponent(label)}/Repair%20and%20Diagnosis/`
+      });
+    }
+  }
+  return candidates;
 }
 
 async function probeRepairUrl(url) {
@@ -175,45 +176,83 @@ async function probeRepairUrl(url) {
   }
 }
 
-async function resolveLemonVehiclePathUncached(vehicle = {}) {
-  if (!vehicle.make || !vehicle.year || !vehicle.model) {
-    throw new Error('Vehicle make, year, and model are required for LEMON path resolution');
-  }
-
+async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, source }) {
   const signals = getVehicleSignals(vehicle);
-  for (const candidate of buildDirectCandidates(vehicle)) {
+  for (const candidate of buildDirectCandidates(vehicle, host, makeLabels)) {
     if (signals.drivetrain && drivetrainsConflict(signals.drivetrain, classifyDrivetrain(candidate.label))) continue;
     if (await probeRepairUrl(candidate.url)) {
-      return { url: candidate.url, method: 'direct-candidate', candidate: candidate.label, drivetrain: signals.drivetrain };
-    }
-  }
-
-  const make = titleCase(vehicle.make);
-  const year = clean(vehicle.year);
-  const yearUrl = `https://lemon-manuals.la/${encodeURIComponent(make)}/${encodeURIComponent(year)}/`;
-  const html = await fetchHtml(yearUrl);
-  const yearRoot = decodeURIComponentSafe(yearUrl).toLowerCase();
-  const ranked = extractLinks(html, yearUrl)
-    .filter(link => decodeURIComponentSafe(link.url).toLowerCase().startsWith(yearRoot))
-    .map(link => ({ ...link, score: scoreVehicleFolderCandidate(link, vehicle) }))
-    .filter(link => link.score > 0)
-    .sort((a, b) => b.score - a.score);
-
-  for (const candidate of ranked.slice(0, 12)) {
-    const repairUrl = ensureRepairDiagnosisUrl(candidate.url);
-    if (await probeRepairUrl(repairUrl)) {
       return {
-        url: repairUrl,
-        method: 'year-index-discovery',
-        candidate: clean(candidate.text) || decodeURIComponentSafe(candidate.url),
-        score: candidate.score,
+        url: candidate.url,
+        method: 'direct-candidate',
+        candidate: candidate.label,
         drivetrain: signals.drivetrain,
-        yearIndexUrl: yearUrl
+        source
       };
     }
   }
 
-  throw new Error(`No matching LEMON vehicle folder found under ${yearUrl}`);
+  for (const make of makeLabels) {
+    const yearUrl = `https://${host}/${encodeURIComponent(make)}/${encodeURIComponent(clean(vehicle.year))}/`;
+    let html;
+    try {
+      html = await fetchHtml(yearUrl);
+    } catch (_) {
+      continue;
+    }
+    const yearRoot = decodeURIComponentSafe(yearUrl).toLowerCase();
+    const ranked = extractLinks(html, yearUrl, allowedHosts)
+      .filter(link => decodeURIComponentSafe(link.url).toLowerCase().startsWith(yearRoot))
+      .map(link => ({ ...link, score: scoreVehicleFolderCandidate(link, vehicle) }))
+      .filter(link => link.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    for (const candidate of ranked.slice(0, 12)) {
+      const repairUrl = ensureRepairDiagnosisUrl(candidate.url);
+      if (await probeRepairUrl(repairUrl)) {
+        return {
+          url: repairUrl,
+          method: 'year-index-discovery',
+          candidate: clean(candidate.text) || decodeURIComponentSafe(candidate.url),
+          score: candidate.score,
+          drivetrain: signals.drivetrain,
+          yearIndexUrl: yearUrl,
+          source
+        };
+      }
+    }
+  }
+
+  throw new Error(`No matching ${source} vehicle folder found`);
+}
+
+async function resolveRepairDiagnosisUrlUncached(vehicle = {}) {
+  if (!vehicle.make || !vehicle.year || !vehicle.model) {
+    throw new Error('Vehicle make, year, and model are required for Repair & Diagnosis path resolution');
+  }
+
+  const make = titleCase(vehicle.make);
+  let lemonError;
+  try {
+    return await resolveFromSource(vehicle, {
+      host: 'lemon-manuals.la',
+      makeLabels: [make],
+      allowedHosts: LEMON_HOSTS,
+      source: 'LEMON_MANUALS'
+    });
+  } catch (error) {
+    lemonError = error;
+  }
+
+  try {
+    return await resolveFromSource(vehicle, {
+      host: CHARM_HOST,
+      makeLabels: [make, `${make} Truck`],
+      allowedHosts: new Set([CHARM_HOST]),
+      source: 'CHARM'
+    });
+  } catch (charmError) {
+    throw new Error(`LEMON failed (${lemonError.message}); CHARM failed (${charmError.message})`);
+  }
 }
 
 async function resolveRepairDiagnosisUrl(vehicle = {}) {
@@ -222,7 +261,7 @@ async function resolveRepairDiagnosisUrl(vehicle = {}) {
     .join('|');
 
   if (!resolutionCache.has(key)) {
-    resolutionCache.set(key, resolveLemonVehiclePathUncached(vehicle).catch(error => {
+    resolutionCache.set(key, resolveRepairDiagnosisUrlUncached(vehicle).catch(error => {
       resolutionCache.delete(key);
       throw error;
     }));
@@ -236,5 +275,7 @@ module.exports = {
   scoreVehicleFolderCandidate,
   getVehicleSignals,
   classifyDrivetrain,
-  drivetrainsConflict
+  drivetrainsConflict,
+  buildVehicleLabels,
+  buildDirectCandidates
 };
