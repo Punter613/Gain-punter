@@ -1,4 +1,4 @@
-const { getCachedManual, saveScrapedManual, buildManualCacheKey } = require('../db');
+const { getCachedManual, getCachedManualPathHint, saveScrapedManual, buildManualCacheKey } = require('../db');
 const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
 const {
   scrapeTargetedEvidence,
@@ -87,10 +87,17 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
       return { ...cached.data, fromCache: true, cachedAt: cached.scraped_at };
     }
 
+    const manualPathHint = typeof getCachedManualPathHint === 'function'
+      ? await getCachedManualPathHint(vehicle, context)
+      : '';
+    if (manualPathHint) {
+      console.log(`[Scraper] Reusing cached manual path hint for ${cacheKey}`);
+    }
+
     console.log(`[Scraper] Context cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} - tuned targeted Repair & Diagnosis scrape`);
     try {
       const targeted = await scrapeTargetedEvidence(
-        vehicle,
+        manualPathHint ? { ...vehicle, manualPathHint } : vehicle,
         {
           ...context,
           query: context.query || '',
@@ -107,6 +114,10 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
         }
       );
       const freshResult = targetedToManual(targeted);
+      console.log(
+        `[Scraper] Targeted retrieval ${cacheKey} completed in ${Number(targeted.elapsedMs || 0)}ms ` +
+        `(${Number(targeted.crawledPages || 0)} crawled / ${Number(targeted.selectedPages || 0)} selected)`
+      );
       if (freshResult.items.length > 0) await saveScrapedManual(vehicle, freshResult, context);
       return { ...freshResult, fromCache: false };
     } catch (error) {
