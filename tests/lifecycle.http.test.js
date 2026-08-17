@@ -151,6 +151,7 @@ test('HTTP lifecycle: Diagnose -> Test -> VERIFY -> Estimate', async () => {
     });
     assert.equal(recorded.status, 201);
     assert.equal(recorded.body.status, 'TESTING');
+    assert.ok(recorded.body.test.id);
 
     const prematureEstimate = await post(base, '/api/estimateHeuristic', { jobId });
     assert.equal(prematureEstimate.status, 409);
@@ -159,11 +160,15 @@ test('HTTP lifecycle: Diagnose -> Test -> VERIFY -> Estimate', async () => {
     const verified = await post(base, `/api/jobs/${jobId}/verify`, {
       confirmed: true,
       confirmedCause: 'Cylinder 1 ignition coil failure',
-      notes: 'Misfire moved with coil swap'
+      conclusion: 'Misfire moved with the selected coil swap test, confirming the coil as the fault.',
+      notes: 'Misfire moved with coil swap',
+      evidenceTestIds: [recorded.body.test.id]
     });
     assert.equal(verified.status, 200);
     assert.equal(verified.body.status, 'VERIFIED');
     assert.equal(verified.body.estimateReady, true);
+    assert.deepEqual(verified.body.verification.evidenceTestIds, [recorded.body.test.id]);
+    assert.deepEqual(verified.body.verifiedCase.verification.evidenceTestIds, [recorded.body.test.id]);
 
     const estimated = await post(base, '/api/estimateHeuristic', { jobId, laborRate: 65, partsCost: 80 });
     assert.equal(estimated.status, 200);
@@ -175,6 +180,25 @@ test('HTTP lifecycle: Diagnose -> Test -> VERIFY -> Estimate', async () => {
   });
 });
 
+test('HTTP lifecycle: placeholder test results do not count as evidence', async () => {
+  await withServer(async base => {
+    const diagnosed = await post(base, '/api/diagnose', fixture);
+    const jobId = diagnosed.body.jobId;
+
+    for (const result of ['?', 'unknown', 'N/A']) {
+      const recorded = await post(base, `/api/jobs/${jobId}/tests`, {
+        name: 'Swap cylinder 1 ignition coil',
+        result
+      });
+      assert.equal(recorded.status, 409);
+      assert.match(recorded.body.error, /actual observation or measurement|placeholders/i);
+    }
+
+    const job = await get(base, `/api/jobs/${jobId}`);
+    assert.equal(job.body.job.tests.length, 0);
+  });
+});
+
 test('HTTP lifecycle: VERIFY is refused until a confirmation test is recorded', async () => {
   await withServer(async base => {
     const diagnosed = await post(base, '/api/diagnose', fixture);
@@ -183,10 +207,12 @@ test('HTTP lifecycle: VERIFY is refused until a confirmation test is recorded', 
 
     const verify = await post(base, `/api/jobs/${jobId}/verify`, {
       confirmed: true,
-      confirmedCause: 'Cylinder 1 ignition coil failure'
+      confirmedCause: 'Cylinder 1 ignition coil failure',
+      conclusion: 'Coil swap confirmed the failure.',
+      evidenceTestIds: ['missing-test']
     });
     assert.equal(verify.status, 409);
-    assert.match(verify.body.error, /recorded test/i);
+    assert.match(verify.body.error, /recorded test|persisted/i);
 
     const estimate = await post(base, '/api/estimateHeuristic', { jobId });
     assert.equal(estimate.status, 409);
@@ -211,7 +237,11 @@ test('HTTP lifecycle: positive VERIFY requires an explicit confirmed cause after
     assert.equal(recorded.status, 201);
 
     for (const confirmedCause of [undefined, '   ']) {
-      const body = { confirmed: true };
+      const body = {
+        confirmed: true,
+        conclusion: 'Misfire moved with the selected coil test.',
+        evidenceTestIds: [recorded.body.test.id]
+      };
       if (confirmedCause !== undefined) body.confirmedCause = confirmedCause;
 
       const verify = await post(base, `/api/jobs/${jobId}/verify`, body);
@@ -226,6 +256,47 @@ test('HTTP lifecycle: positive VERIFY requires an explicit confirmed cause after
 
     const estimate = await post(base, '/api/estimateHeuristic', { jobId });
     assert.equal(estimate.status, 409);
+  });
+});
+
+test('HTTP lifecycle: positive VERIFY requires selected persisted evidence and mechanic conclusion', async () => {
+  await withServer(async base => {
+    const diagnosed = await post(base, '/api/diagnose', fixture);
+    const jobId = diagnosed.body.jobId;
+    const recorded = await post(base, `/api/jobs/${jobId}/tests`, {
+      name: 'Swap cylinder 1 ignition coil',
+      result: 'misfire moved to swapped cylinder'
+    });
+    assert.equal(recorded.status, 201);
+
+    const noEvidence = await post(base, `/api/jobs/${jobId}/verify`, {
+      confirmed: true,
+      confirmedCause: 'Cylinder 1 ignition coil failure',
+      conclusion: 'Misfire moved with coil swap.'
+    });
+    assert.equal(noEvidence.status, 409);
+    assert.match(noEvidence.body.error, /selected supporting test/i);
+
+    const foreignEvidence = await post(base, `/api/jobs/${jobId}/verify`, {
+      confirmed: true,
+      confirmedCause: 'Cylinder 1 ignition coil failure',
+      conclusion: 'Misfire moved with coil swap.',
+      evidenceTestIds: ['not-this-job']
+    });
+    assert.equal(foreignEvidence.status, 409);
+    assert.match(foreignEvidence.body.error, /persisted on this job/i);
+
+    const noConclusion = await post(base, `/api/jobs/${jobId}/verify`, {
+      confirmed: true,
+      confirmedCause: 'Cylinder 1 ignition coil failure',
+      evidenceTestIds: [recorded.body.test.id]
+    });
+    assert.equal(noConclusion.status, 409);
+    assert.match(noConclusion.body.error, /mechanic conclusion/i);
+
+    const job = await get(base, `/api/jobs/${jobId}`);
+    assert.equal(job.body.status, 'TESTING');
+    assert.equal(job.body.job.verification, null);
   });
 });
 
