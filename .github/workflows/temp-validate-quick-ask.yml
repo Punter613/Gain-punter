@@ -1,0 +1,43 @@
+name: TEMP Validate Quick Ask
+
+on:
+  push:
+    branches:
+      - feature/quick-ask-knowledge-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci || npm install
+      - name: Unit boundary tests
+        run: npm run test:quick-ask
+      - name: Live Supabase retrieval
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { QuickAskRetriever } = require('./src/core/knowledge/quick.ask.retriever');
+          (async () => {
+            const out = await new QuickAskRetriever().ask({
+              vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
+              query: 'common problems whining ac brakes lean misfire',
+              limit: 5
+            });
+            console.log(JSON.stringify(out, null, 2));
+            if (out.mode !== 'RETRIEVAL_ONLY') throw new Error('wrong mode');
+            if (!Array.isArray(out.publishedEvidence)) throw new Error('publishedEvidence missing');
+            if (!Array.isArray(out.commonConfirmedRepairs)) throw new Error('commonConfirmedRepairs missing');
+            if (!out.warnings.some(w => /not diagnostic probability/i.test(w))) throw new Error('probability warning missing');
+          })().catch(e => { console.error(e); process.exit(1); });
+          NODE
