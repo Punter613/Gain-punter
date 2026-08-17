@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -8,7 +9,7 @@ if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
 }
 
-const CURRENT_MANUAL_SCHEMA = 3;
+const CURRENT_MANUAL_SCHEMA = 5;
 
 function normalizeDriveType(vehicle = {}) {
   const raw = String(vehicle.drivetrain || vehicle.driveType || vehicle.drive || '').toLowerCase();
@@ -27,9 +28,32 @@ function buildVehicleCacheKey({ year, make, model, engine, drivetrain, driveType
     .join('|');
 }
 
-async function getCachedManual(vehicle) {
+function normalizeManualContext(context = {}) {
+  const values = [
+    context.query,
+    context.symptoms,
+    ...(Array.isArray(context.mechanicNotices) ? context.mechanicNotices : [context.mechanicNotices]),
+    ...(Array.isArray(context.obdCodes) ? context.obdCodes : [context.obdCodes]),
+    ...(Array.isArray(context.keywords) ? context.keywords : [context.keywords])
+  ]
+    .filter(Boolean)
+    .map(value => String(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
+    .filter(Boolean)
+    .sort();
+  return [...new Set(values)].join('|');
+}
+
+function buildManualCacheKey(vehicle, context = {}) {
+  const vehicleKey = buildVehicleCacheKey(vehicle);
+  const normalizedContext = normalizeManualContext(context);
+  if (!normalizedContext) return vehicleKey;
+  const contextHash = crypto.createHash('sha1').update(normalizedContext).digest('hex').slice(0, 16);
+  return `${vehicleKey}|ctx-${contextHash}`;
+}
+
+async function getCachedManual(vehicle, context = {}) {
   if (!supabase) return null;
-  const cacheKey = buildVehicleCacheKey(vehicle);
+  const cacheKey = buildManualCacheKey(vehicle, context);
 
   try {
     const { data, error } = await supabase
@@ -56,9 +80,9 @@ async function getCachedManual(vehicle) {
   }
 }
 
-async function saveScrapedManual(vehicle, manualData) {
+async function saveScrapedManual(vehicle, manualData, context = {}) {
   if (!supabase) return null;
-  const cacheKey = buildVehicleCacheKey(vehicle);
+  const cacheKey = buildManualCacheKey(vehicle, context);
 
   try {
     const { error } = await supabase
@@ -81,4 +105,13 @@ async function saveScrapedManual(vehicle, manualData) {
   }
 }
 
-module.exports = { supabase, getCachedManual, saveScrapedManual, buildVehicleCacheKey, CURRENT_MANUAL_SCHEMA, normalizeDriveType };
+module.exports = {
+  supabase,
+  getCachedManual,
+  saveScrapedManual,
+  buildVehicleCacheKey,
+  buildManualCacheKey,
+  normalizeManualContext,
+  CURRENT_MANUAL_SCHEMA,
+  normalizeDriveType
+};

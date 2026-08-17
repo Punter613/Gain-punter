@@ -12,9 +12,9 @@ const {
   buildCanonicalSearchTerms
 } = require('../src/core/automotive.normalization');
 
-const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy']);
-const MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 160);
-const MAX_DEPTH = Number(process.env.LEMON_MAX_DEPTH || 4);
+const MANUAL_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy', 'charm.li']);
+const DEFAULT_MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 160);
+const DEFAULT_MAX_DEPTH = Number(process.env.LEMON_MAX_DEPTH || 4);
 const OUTPUT_PATH = process.env.LEMON_OUTPUT_PATH || path.join(process.cwd(), 'artifacts', 'lemon-targeted-evidence.json');
 
 const VALID_DRIVETRAINS = new Set(['2WD', '4WD', 'AWD', 'FWD', 'RWD']);
@@ -67,7 +67,7 @@ function extractPage(html, url) {
     try {
       const absolute = new URL(href, url).toString();
       const parsed = new URL(absolute);
-      if (!LEMON_HOSTS.has(parsed.hostname.toLowerCase())) continue;
+      if (!MANUAL_HOSTS.has(parsed.hostname.toLowerCase())) continue;
       if (/\.(pdf|jpg|jpeg|png|gif|zip)(\?|$)/i.test(absolute)) continue;
       links.push({ url: absolute, text });
     } catch (_) {}
@@ -176,7 +176,6 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
     if (!locations.length) continue;
 
     const kind = semanticKind(term, queryProfile);
-
     if (kind === 'system' && !locations.some(location => location === 'title' || location === 'heading')) continue;
 
     const baseWeight = semanticMatchWeight(term, queryProfile, sectionType);
@@ -257,11 +256,11 @@ function normalizedRetrievalKey(page, relevance) {
   return `${relevance.sectionType}|${title}|${pathKey}`;
 }
 
-function buildOutputPage(candidate) {
+function buildOutputPage(candidate, source) {
   const { page, relevance, alternates = [] } = candidate;
   return {
     sourceEvidence: {
-      source: 'LEMON_MANUALS',
+      source,
       sourceUrl: page.url,
       alternateSourceUrls: alternates.map(item => item.page.url).filter(url => url !== page.url),
       title: page.title,
@@ -286,19 +285,27 @@ function buildOutputPage(candidate) {
   };
 }
 
-function checkDrivetrainCompatibility(requestedDrivetrainRaw, resolvedUrl) {
-  const resolvedDrivetrain = classifyDrivetrain(decodeURIComponent(resolvedUrl));
+function checkDrivetrainCompatibility(requestedDrivetrainRaw, resolvedUrl, options = {}) {
+  const resolvedDrivetrain = classifyDrivetrain(decodeURIComponentSafe(resolvedUrl));
   const requestedDrivetrain = classifyDrivetrain(requestedDrivetrainRaw);
   if (!requestedDrivetrain && resolvedDrivetrain) {
+    if (options.allowUnknown === true) {
+      return { requestedDrivetrain, resolvedDrivetrain, exact: false, requiresVerification: true };
+    }
     throw new Error(
       `LEMON resolved a drive-specific ${resolvedDrivetrain.toUpperCase()} manual while drivetrain is unknown. ` +
       'Set LEMON_DRIVETRAIN (for example 2WD or 4WD) before creating manufacturer evidence.'
     );
   }
   if (requestedDrivetrain && resolvedDrivetrain && drivetrainsConflict(requestedDrivetrain, resolvedDrivetrain)) {
-    throw new Error(`LEMON drivetrain mismatch: requested ${requestedDrivetrain}, resolved ${resolvedDrivetrain}`);
+    throw new Error(`Manual drivetrain mismatch: requested ${requestedDrivetrain}, resolved ${resolvedDrivetrain}`);
   }
-  return { requestedDrivetrain, resolvedDrivetrain };
+  return {
+    requestedDrivetrain,
+    resolvedDrivetrain,
+    exact: !!requestedDrivetrain && (!resolvedDrivetrain || requestedDrivetrain === resolvedDrivetrain),
+    requiresVerification: false
+  };
 }
 
 function buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority) {
@@ -310,45 +317,49 @@ function buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority) {
   };
 }
 
-async function main() {
-  const { vehicle, context, scope } = getInput();
+async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis', options = {}) {
+  if (!vehicle?.year || !vehicle?.make || !vehicle?.model) {
+    throw new Error('Vehicle year, make, and model are required for targeted manual retrieval');
+  }
+  const normalizedScope = SCOPE_SECTION_WEIGHTS[scope] ? scope : 'diagnosis';
+  const maxPages = Math.max(1, Number(options.maxPages || DEFAULT_MAX_PAGES));
+  const maxDepth = Math.max(0, Number(options.maxDepth ?? DEFAULT_MAX_DEPTH));
   const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
   const resolution = await resolveRepairDiagnosisUrl(vehicle);
   const baseUrl = resolution.url;
-
-  checkDrivetrainCompatibility(vehicle.drivetrain, baseUrl);
-
-  console.log(`Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.engine}`.trim());
-  console.log(`Scope: ${scope}`);
-  console.log(`Resolved Lemon path (${resolution.method}): ${baseUrl}`);
-  console.log('Canonical query profile:', queryProfile);
+  const source = resolution.source || (new URL(baseUrl).hostname.toLowerCase() === 'charm.li' ? 'CHARM' : 'LEMON_MANUALS');
+  const applicability = checkDrivetrainCompatibility(
+    vehicle.drivetrain || vehicle.driveType || vehicle.drive,
+    baseUrl,
+    { allowUnknown: options.allowUnknownDrivetrain === true }
+  );
 
   const queue = [{ url: baseUrl, depth: 0, priority: 1000, exactDtc: false }];
   const queued = new Set([baseUrl]);
   const visited = new Set();
   const candidatePages = [];
 
-  while (queue.length && visited.size < MAX_PAGES) {
+  while (queue.length && visited.size < maxPages) {
     queue.sort((a, b) => Number(b.exactDtc) - Number(a.exactDtc) || a.depth - b.depth || b.priority - a.priority);
     const next = queue.shift();
-    if (!next || visited.has(next.url) || next.depth > MAX_DEPTH) continue;
+    if (!next || visited.has(next.url) || next.depth > maxDepth) continue;
     visited.add(next.url);
 
     try {
       const page = { ...extractPage(await fetchHtml(next.url), next.url), url: next.url };
-      const relevance = scorePage(page, terms, scope, queryProfile);
+      const relevance = scorePage(page, terms, normalizedScope, queryProfile);
       candidatePages.push({ page, relevance, depth: next.depth });
 
       for (const link of page.links) {
-        if (visited.has(link.url) || queued.has(link.url) || next.depth + 1 > MAX_DEPTH) continue;
+        if (visited.has(link.url) || queued.has(link.url) || next.depth + 1 > maxDepth) continue;
         const linkPage = { title: link.text, headings: [], bodyText: link.text, url: link.url };
-        const linkRelevance = scorePage(linkPage, terms, scope, queryProfile);
+        const linkRelevance = scorePage(linkPage, terms, normalizedScope, queryProfile);
         const dtcPriority = exactDtcLinkPriority(link, queryProfile);
         queued.add(link.url);
         queue.push(buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority));
       }
     } catch (error) {
-      console.warn(`Fetch failed: ${next.url}: ${error.message}`);
+      if (options.onFetchError) options.onFetchError(next.url, error);
     }
   }
 
@@ -378,12 +389,12 @@ async function main() {
 
   const selected = [...byRetrievalKey.values()]
     .sort((a, b) => b.relevance.score - a.relevance.score)
-    .slice(0, 60)
-    .map(buildOutputPage);
+    .slice(0, Number(options.limit || 60))
+    .map(candidate => buildOutputPage(candidate, source));
 
-  const output = {
-    schemaVersion: 1,
-    source: 'LEMON_MANUALS',
+  return {
+    schemaVersion: 2,
+    source,
     evidencePolicy: {
       sourceEvidenceImmutable: true,
       derivedIndexRebuildable: true,
@@ -391,13 +402,14 @@ async function main() {
     },
     vehicle,
     query: {
-      scope,
-      symptoms: context.symptoms,
-      mechanicNotices: context.mechanicNotices,
-      dtcs: context.obdCodes,
+      scope: normalizedScope,
+      symptoms: context.symptoms || context.query || '',
+      mechanicNotices: context.mechanicNotices || [],
+      dtcs: context.obdCodes || [],
       canonicalProfile: queryProfile,
       canonicalSearchTerms: terms
     },
+    applicability,
     resolvedUrl: baseUrl,
     pathResolution: resolution.method,
     crawledPages: visited.size,
@@ -405,10 +417,20 @@ async function main() {
     pages: selected,
     scrapedAt: new Date().toISOString()
   };
+}
 
+async function main() {
+  const { vehicle, context, scope } = getInput();
+  console.log(`Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.engine}`.trim());
+  console.log(`Scope: ${scope}`);
+  const output = await scrapeTargetedEvidence(vehicle, context, scope, {
+    onFetchError: (url, error) => console.warn(`Fetch failed: ${url}: ${error.message}`)
+  });
+  console.log(`Resolved ${output.source} path (${output.pathResolution}): ${output.resolvedUrl}`);
+  console.log('Canonical query profile:', output.query.canonicalProfile);
   fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
   fs.writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2));
-  console.log(`Selected ${selected.length} relevant page(s) from ${visited.size} crawled page(s)`);
+  console.log(`Selected ${output.selectedPages} relevant page(s) from ${output.crawledPages} crawled page(s)`);
   console.log(`Wrote ${OUTPUT_PATH}`);
 }
 
@@ -420,7 +442,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  scrapeTargetedEvidence,
   getInput,
+  extractPage,
   checkDrivetrainCompatibility,
   buildDescendantQueueEntry,
   normalizedRetrievalPath,

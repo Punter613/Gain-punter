@@ -27,12 +27,13 @@ function makeVerifiedCase(confirmedCause = 'Ignition coil failure') {
     status: 'VERIFIED',
     vehicle: evidencePacket.vehicle,
     diagnosis: { result: { primaryCause: confirmedCause, probability: [] }, evidencePacket },
-    tests: [{ name: 'confirmation test', result: 'fault confirmed' }],
+    tests: [{ id: 'T1', name: 'confirmation test', result: 'fault confirmed' }],
     verification: {
       confirmed: true,
       confirmedCause,
       conclusion: 'Confirmed by test',
       notes: 'Edge-case fixture',
+      evidenceTestIds: ['T1'],
       verifiedAt: '2026-08-15T00:00:00.000Z'
     }
   });

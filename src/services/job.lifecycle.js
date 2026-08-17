@@ -10,6 +10,20 @@ const VALID_STATES = new Set([
   'REPAIR_COMPLETED', 'OUTCOME_CONFIRMED'
 ]);
 
+const PLACEHOLDER_RESULTS = new Set([
+  '?', '??', '???', 'unknown', 'tbd', 'pending', 'n/a', 'na', 'not sure', 'not tested', 'not performed'
+]);
+
+function clean(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function isMeaningfulTestResult(value) {
+  const result = clean(value);
+  if (!result || !/[a-z0-9]/i.test(result)) return false;
+  return !PLACEHOLDER_RESULTS.has(result.toLowerCase());
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -160,12 +174,20 @@ async function addTest(jobId, test = {}) {
   if (!['TESTING', 'DIAGNOSING'].includes(job.status)) {
     throw new Error(`Tests cannot be added while job is ${job.status}`);
   }
+
+  const name = clean(test.name || test.test);
+  const result = clean(test.result);
+  if (!name) throw new Error('Recorded test requires a test name');
+  if (!isMeaningfulTestResult(result)) {
+    throw new Error('Recorded test requires an actual observation or measurement; placeholders do not count as evidence');
+  }
+
   const entry = {
     id: test.id || crypto.randomUUID(),
-    name: test.name || test.test || '',
-    result: test.result ?? '',
-    units: test.units || '',
-    notes: test.notes || '',
+    name,
+    result,
+    units: clean(test.units),
+    notes: clean(test.notes),
     passed: typeof test.passed === 'boolean' ? test.passed : null,
     recordedAt: nowIso()
   };
@@ -186,9 +208,10 @@ async function verifyJob(jobId, verification = {}) {
   if (!confirmed) {
     job.verification = {
       confirmed: false,
-      conclusion: verification.conclusion || '',
-      confirmedCause: verification.confirmedCause || '',
-      notes: verification.notes || '',
+      conclusion: clean(verification.conclusion),
+      confirmedCause: clean(verification.confirmedCause),
+      evidenceTestIds: [],
+      notes: clean(verification.notes),
       verifiedAt: nowIso()
     };
     job.status = 'TESTING';
@@ -197,11 +220,34 @@ async function verifyJob(jobId, verification = {}) {
     return job;
   }
 
+  const confirmedCause = clean(verification.confirmedCause);
+  if (!confirmedCause) throw new Error('Verification requires an explicit confirmed cause/fault');
+
+  const conclusion = clean(verification.conclusion || verification.notes);
+  if (!conclusion) {
+    throw new Error('Verification requires a mechanic conclusion explaining why the selected test evidence confirms the fault');
+  }
+
+  const evidenceTestIds = [...new Set(
+    (Array.isArray(verification.evidenceTestIds) ? verification.evidenceTestIds : [])
+      .map(clean)
+      .filter(Boolean)
+  )];
+  if (!evidenceTestIds.length) throw new Error('Verification requires at least one explicitly selected supporting test');
+
+  const testsById = new Map(job.tests.map(test => [clean(test.id), test]));
+  const selectedTests = evidenceTestIds.map(id => testsById.get(id));
+  if (selectedTests.some(test => !test)) throw new Error('Verification evidence must reference tests persisted on this job');
+  if (selectedTests.some(test => !isMeaningfulTestResult(test.result))) {
+    throw new Error('Selected verification evidence contains a placeholder or empty result');
+  }
+
   job.verification = {
     confirmed: true,
-    conclusion: verification.conclusion || '',
-    confirmedCause: verification.confirmedCause || job.diagnosis.result.primaryCause || '',
-    notes: verification.notes || '',
+    conclusion,
+    confirmedCause,
+    evidenceTestIds,
+    notes: clean(verification.notes),
     verifiedAt: nowIso()
   };
   job.status = 'VERIFIED';
@@ -279,5 +325,6 @@ module.exports = {
   attachInvoice,
   hydrateEstimateInput,
   hydrateInvoiceInput,
-  invalidateJobCache
+  invalidateJobCache,
+  isMeaningfulTestResult
 };

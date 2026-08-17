@@ -45,6 +45,53 @@ const SYSTEM_ALIASES = {
   visibility: ['visibility', 'mirror', 'windshield', 'wiper']
 };
 
+// Component vocabulary is deliberately distinct from system vocabulary.
+// If the mechanic names a component, that is a stronger retrieval instruction
+// than merely being in the same vehicle system.
+const COMPONENT_ALIASES = {
+  'compressor clutch': ['compressor clutch', 'a/c clutch', 'ac clutch', 'air conditioning clutch'],
+  compressor: ['a/c compressor', 'ac compressor', 'air conditioning compressor', 'compressor'],
+  'clutch relay': ['compressor clutch relay', 'a/c clutch relay', 'ac clutch relay', 'clutch relay'],
+  'blower motor': ['blower motor', 'hvac blower'],
+  'blower resistor': ['blower resistor', 'blower motor resistor', 'power transistor hvac'],
+  'ambient temperature sensor': ['ambient temperature sensor', 'ambient temp sensor'],
+  'pressure switch': ['a/c pressure switch', 'ac pressure switch', 'pressure switch hvac'],
+  'engine mount': ['engine mount', 'motor mount', 'torque mount', 'roll restrictor'],
+  'transmission mount': ['transmission mount', 'trans mount'],
+  'control arm': ['control arm'],
+  bushing: ['bushing', 'bushings'],
+  'ball joint': ['ball joint', 'ball joints'],
+  'tie rod': ['tie rod', 'tie-rod'],
+  'steering rack': ['steering rack', 'rack and pinion'],
+  'wheel bearing': ['wheel bearing', 'hub bearing'],
+  'cv axle': ['cv axle', 'cv shaft', 'constant velocity axle'],
+  driveshaft: ['driveshaft', 'drive shaft', 'propeller shaft'],
+  differential: ['differential', 'diff'],
+  caliper: ['brake caliper', 'caliper'],
+  rotor: ['brake rotor', 'rotor'],
+  'brake pad': ['brake pad', 'brake pads'],
+  strut: ['strut', 'struts'],
+  shock: ['shock absorber', 'shock', 'shocks'],
+  'sway bar': ['sway bar', 'stabilizer bar'],
+  'sway bar link': ['sway bar link', 'stabilizer link'],
+  thermostat: ['thermostat'],
+  'water pump': ['water pump'],
+  radiator: ['radiator'],
+  'cooling fan': ['cooling fan', 'radiator fan'],
+  alternator: ['alternator'],
+  starter: ['starter motor', 'starter'],
+  battery: ['battery'],
+  'fuel pump': ['fuel pump'],
+  injector: ['fuel injector', 'injector'],
+  'ignition coil': ['ignition coil', 'coil pack'],
+  'spark plug': ['spark plug', 'spark plugs'],
+  'throttle body': ['throttle body'],
+  'mass air flow sensor': ['mass air flow sensor', 'maf sensor', 'maf'],
+  'map sensor': ['map sensor', 'manifold absolute pressure sensor'],
+  'oxygen sensor': ['oxygen sensor', 'o2 sensor'],
+  'catalytic converter': ['catalytic converter', 'catalyst']
+};
+
 const SECTION_PATTERNS = [
   ['DIAGNOSIS', /diagnos|troubleshoot|symptom|dtc|trouble code|fault code|pinpoint test/],
   ['TEST', /test(?:ing)?|inspection|inspect|check|measurement|verification|verify/],
@@ -88,6 +135,7 @@ function collectAliases(text, map) {
 
 function extractCanonicalProfile(input = {}) {
   const complaintText = [
+    input.query,
     input.symptoms,
     input.customerStates,
     ...(Array.isArray(input.mechanicNotices) ? input.mechanicNotices : [input.mechanicNotices])
@@ -108,15 +156,20 @@ function extractCanonicalProfile(input = {}) {
   const staticConditions = collectAliases(joined, CONDITION_ALIASES);
   const conditions = [...new Set([...staticConditions, ...triggers])];
   const systems = collectAliases(joined, SYSTEM_ALIASES);
+  if (/(^|[^a-z0-9])(?:a\s*[\/.\-]?\s*c|ac|hvac)(?=$|[^a-z0-9])|air[ -]?condition(?:ing)?/i.test(joined) && !systems.includes('hvac')) {
+    systems.push('hvac');
+  }
+  const components = collectAliases(joined, COMPONENT_ALIASES);
 
   const canonicalTerms = [...new Set([
     ...dtcs.map(code => code.toLowerCase()),
+    ...components,
     ...sounds,
     ...conditions,
     ...systems
   ])];
 
-  return { dtcs, sounds, conditions, systems, triggers, canonicalTerms };
+  return { dtcs, components, sounds, conditions, systems, triggers, canonicalTerms };
 }
 
 function sectionPathText(url) {
@@ -163,6 +216,12 @@ function buildCanonicalSearchTerms(vehicle = {}, context = {}) {
   // "accelerator release" -> "Fuel Pressure Release".
   const terms = [...profile.canonicalTerms];
 
+  // Canonical HVAC is an internal system name; service manuals commonly spell
+  // the tree out as "Air Conditioning". Preserve useful parent-navigation terms
+  // without weakening the component keyword itself.
+  if (profile.systems.includes('hvac')) terms.push('air conditioning');
+  if (profile.components.includes('compressor clutch')) terms.push('clutch', 'compressor');
+
   const vehicleTerms = [vehicle.make, vehicle.model, vehicle.trim, vehicle.engine]
     .map(normalizeText)
     .filter(Boolean);
@@ -181,5 +240,6 @@ module.exports = {
   extractCanonicalProfile,
   classifyManualSection,
   buildCanonicalSearchTerms,
-  sectionPathText
+  sectionPathText,
+  COMPONENT_ALIASES
 };

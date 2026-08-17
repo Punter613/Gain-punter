@@ -34,6 +34,21 @@ function buildVerifiedCase(job = {}) {
   if (!job.diagnosis?.result) throw new Error('Verified case requires a persisted diagnosis');
   if (!Array.isArray(job.tests) || job.tests.length === 0) throw new Error('Verified case requires recorded tests');
 
+  const conclusion = clean(verification.conclusion, 1000);
+  if (!conclusion) throw new Error('Verified case requires an explicit mechanic conclusion');
+
+  const evidenceTestIds = [...new Set(
+    (Array.isArray(verification.evidenceTestIds) ? verification.evidenceTestIds : [])
+      .map(id => clean(id, 200))
+      .filter(Boolean)
+  )];
+  if (!evidenceTestIds.length) throw new Error('Verified case requires explicitly selected supporting test evidence');
+
+  const testIds = new Set(job.tests.map(test => clean(test.id, 200)).filter(Boolean));
+  if (evidenceTestIds.some(id => !testIds.has(id))) {
+    throw new Error('Verified case evidence must reference persisted job tests');
+  }
+
   const sourcePacket = clone(job.diagnosis.evidencePacket || null);
   const verifiedCase = {
     schemaVersion: SCHEMA_VERSION,
@@ -50,7 +65,8 @@ function buildVerifiedCase(job = {}) {
     verification: {
       confirmed: true,
       confirmedCause,
-      conclusion: clean(verification.conclusion, 1000),
+      conclusion,
+      evidenceTestIds,
       notes: clean(verification.notes, 1000),
       verifiedAt: verification.verifiedAt || null
     },

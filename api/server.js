@@ -13,8 +13,9 @@ const app = express();
 const defaultAllowedOrigins = [
   'https://skskprotech.pages.dev',
   'https://p613-backend.onrender.com',
-  'http://localhost:3000'
-];
+  'http://localhost:3000',
+  process.env.RENDER_EXTERNAL_URL
+].filter(Boolean);
 
 const configuredOrigins = [
   ...(process.env.CORS_ORIGINS || '').split(','),
@@ -24,14 +25,15 @@ const configuredOrigins = [
 const allowedOrigins = new Set([...defaultAllowedOrigins, ...configuredOrigins]);
 
 function isAllowedOrigin(origin) {
-  if (!origin) return true; // curl, server-to-server, same-origin requests without Origin
+  if (!origin) return true;
   if (allowedOrigins.has(origin)) return true;
-
-  // Cloudflare Pages branch/deployment previews for this project.
   try {
     const url = new URL(origin);
-    return url.protocol === 'https:' &&
+    const isCloudflareClient = url.protocol === 'https:' &&
       (url.hostname === 'skskprotech.pages.dev' || url.hostname.endsWith('.skskprotech.pages.dev'));
+    const isSkskRenderPreview = url.protocol === 'https:' &&
+      /^p613-backend-pr-\d+\.onrender\.com$/i.test(url.hostname);
+    return isCloudflareClient || isSkskRenderPreview;
   } catch {
     return false;
   }
@@ -56,7 +58,6 @@ app.use((req, res, next) => {
 });
 
 // 2. 🚨 STRIPE WEBHOOK CONTROLLER CORE (MOUNTED FIRST FOR RAW PAYLOAD RETENTION)
-// FIXED: Mounts raw buffer intercept cleanly before global JSON objects alter the body stream
 try {
   const webhookRouter = require('../src/routes/webhooks');
   app.use('/api/payments/webhook', express.raw({ type: 'application/json' }), webhookRouter);
@@ -69,7 +70,6 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // 4. ROUTE INFRASTRUCTURE LANES
-// FIXED: Adjusted all relative paths to look outward into the parent root directory folder ('../src')
 const diagnose = require('../src/routes/diagnose');
 const estimateHeuristic = require('../src/routes/estimate.authorized');
 const invoice = require('../src/routes/invoice');
@@ -81,6 +81,7 @@ const jobsRouter = require('../src/routes/jobs.protected');
 const partsLookupRouter = require('../src/routes/partsLookup');
 const fleetRouter = require('../src/routes/fleet');
 const vehicleRouter = require('../src/routes/vehicle');
+const quickAskRouter = require('../src/routes/quick.ask');
 const {
   diagnosisLifecycle,
   estimateLifecycle,
@@ -92,9 +93,6 @@ app.use('/api/parts', partsRouter);
 app.use('/api/full-estimate', fullEstimateRouter);
 app.use('/api/jobs', jobsRouter);
 
-// Job lifecycle spine:
-// DIAG -> TEST -> VERIFY -> ESTIMATE -> optional INVOICE.
-// Legacy standalone estimate/invoice calls remain valid when no jobId is supplied.
 app.use('/api/diagnose', diagnosisLifecycle, diagnose);
 app.use('/api/estimateHeuristic', estimateLifecycle, estimateHeuristic);
 app.use('/api/invoice', invoiceLifecycle, invoice);
@@ -103,6 +101,7 @@ app.use('/api/translate', require('../src/routes/translate'));
 app.use('/api/parts-lookup', partsLookupRouter);
 app.use('/api/fleet', fleetRouter);
 app.use('/api/vehicle', vehicleRouter);
+app.use('/api/quick-ask', quickAskRouter);
 app.use(oemRouter);
 
 // ─── SKSK MODULE REBUILD ADDITIONS (As Clean Side-by-Side Lanes) ───
@@ -126,8 +125,8 @@ if (process.env.STRIPE_SECRET_KEY) {
 }
 
 // 5. STATIC CORPORATE WEB PLATFORM ASSETS
-// FIXED: Targets your authentic public paths out in the root tree safely
 app.get('/fleet', (req, res) => res.sendFile(path.join(__dirname, '../public/fleet.html')));
+app.get('/lifecycle', (req, res) => res.sendFile(path.join(__dirname, '../public/lifecycle.html')));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // 6. HEALTH & SYSTEM MONITORING TELEMETRY
@@ -164,7 +163,6 @@ app.use((err, req, res, next) => {
 });
 
 // 8. LIFECYCLE BACKGROUND SERVICE INITIALIZATION
-// FIXED: Executed completely before application port bindings resolve to avoid racing bugs
 try {
   const { startKeepAwakeLoop } = require('../src/services/db_keepawake');
   startKeepAwakeLoop();

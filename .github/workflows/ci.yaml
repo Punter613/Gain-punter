@@ -49,6 +49,9 @@ jobs:
     - name: Evidence Retrieval Regression Checks
       run: npm run test:evidence
 
+    - name: Quick Ask Retrieval Boundary Checks
+      run: npm run test:quick-ask
+
     - name: Diagnose Pipeline Contract Checks
       run: npm run test:diagnose-pipeline
 

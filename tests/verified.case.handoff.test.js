@@ -11,8 +11,7 @@ function jobFixture() {
     mileage: 150000,
     vehicle: {
       year: 2008,
-      make: 'Kia',
-      model: 'Sorento',
+      make: 'Kia', model: 'Sorento',
       engine: '3.8L',
       drivetrain: '4WD',
       componentData: { brakes: { padThicknessMm: 0 } }
@@ -37,27 +36,31 @@ function jobFixture() {
       confirmed: true,
       confirmedCause: 'Engine mount failure',
       conclusion: 'Excess engine movement observed under load',
+      evidenceTestIds: ['T1'],
       notes: 'Fault confirmed by technician',
       verifiedAt: '2026-08-15T00:01:00.000Z'
     }
   };
 }
 
-test('VERIFIED_CASE freezes the persisted diagnosis packet, tests, and explicit confirmed fault', () => {
+test('VERIFIED_CASE freezes the persisted diagnosis packet, tests, explicit fault, and selected supporting evidence', () => {
   const source = jobFixture();
   const verifiedCase = buildVerifiedCase(source);
 
   assert.equal(verifiedCase.schemaVersion, 1);
   assert.equal(verifiedCase.stage, 'VERIFIED');
   assert.equal(verifiedCase.verification.confirmedCause, 'Engine mount failure');
+  assert.deepEqual(verifiedCase.verification.evidenceTestIds, ['T1']);
   assert.equal(verifiedCase.tests[0].result, 'excess movement');
   assert.equal(verifiedCase.evidencePacket.dtcs[0], 'P0300');
   assert.equal(verifiedCase.evidencePacket.measurements.values.brakes.padThickness, 0);
   assert.ok(verifiedCase.fingerprint);
 
   source.tests[0].result = 'request body tried to rewrite test';
+  source.verification.evidenceTestIds[0] = 'OTHER';
   source.diagnosis.evidencePacket.dtcs[0] = 'P9999';
   assert.equal(verifiedCase.tests[0].result, 'excess movement');
+  assert.deepEqual(verifiedCase.verification.evidenceTestIds, ['T1']);
   assert.equal(verifiedCase.evidencePacket.dtcs[0], 'P0300');
 });
 
@@ -77,7 +80,7 @@ test('tampering with a persisted VERIFIED_CASE fails integrity validation', () =
   assert.throws(() => verifiedEstimateInput(verifiedCase), /integrity check failed/i);
 });
 
-test('verified case cannot be created from unverified state or an implicit cause', () => {
+test('verified case cannot be created from unverified state, implicit cause, or unbound evidence', () => {
   const unverified = jobFixture();
   unverified.status = 'TESTING';
   assert.throws(() => buildVerifiedCase(unverified), /VERIFIED status/i);
@@ -85,4 +88,12 @@ test('verified case cannot be created from unverified state or an implicit cause
   const missingCause = jobFixture();
   missingCause.verification.confirmedCause = '   ';
   assert.throws(() => buildVerifiedCase(missingCause), /explicit confirmed cause/i);
+
+  const missingEvidence = jobFixture();
+  missingEvidence.verification.evidenceTestIds = [];
+  assert.throws(() => buildVerifiedCase(missingEvidence), /selected supporting test evidence/i);
+
+  const foreignEvidence = jobFixture();
+  foreignEvidence.verification.evidenceTestIds = ['NOT-A-JOB-TEST'];
+  assert.throws(() => buildVerifiedCase(foreignEvidence), /persisted job tests/i);
 });
