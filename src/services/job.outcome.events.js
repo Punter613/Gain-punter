@@ -1,6 +1,7 @@
 'use strict';
 
 const { supabase } = require('../db');
+const { invalidateJobCache } = require('./job.lifecycle');
 
 function memoryStore() {
   global.__jobOutcomeEvents = global.__jobOutcomeEvents || {};
@@ -57,12 +58,17 @@ async function recordOutcomeEvent(event) {
       p_performed_repair: event.performedRepair,
       p_completion_event_fingerprint: event.completionEventFingerprint,
       p_outcome: event.outcome,
-      p_supersedes_event_id: event.supersedesEventId || null,
+      p_supersedes_event_fingerprint: event.supersedesEventFingerprint || null,
       p_recorded_by: event.recordedBy || event.performedRepair?.completedBy || event.outcome?.recordedBy || null,
       p_schema_version: event.schemaVersion,
       p_fingerprint: event.fingerprint
     });
     if (error) throw new Error(`record_job_outcome_event failed: ${error.message}`);
+    // The RPC already updated service_jobs (both the status column and the
+    // embedded payload.status) atomically. Drop any stale local cache so
+    // the next getJob() call re-reads the now-correct row instead of
+    // returning what it cached before this write.
+    invalidateJobCache(event.jobId);
     return { row: data, event };
   }
 
@@ -105,7 +111,7 @@ function fromRow(row) {
     performedRepair: row.performed_repair,
     completionEventFingerprint: row.completion_event_fingerprint,
     outcome: row.outcome,
-    supersedesEventFingerprint: row.supersedes_event_id ? row.supersedes_event_id : null,
+    supersedesEventFingerprint: row.supersedes_event_fingerprint || null,
     fingerprint: row.fingerprint
   };
 }

@@ -50,16 +50,25 @@ create table if not exists job_outcome_events (
   completion_event_fingerprint text,
   outcome jsonb,
 
-  -- Append-only correction chain. A correction is a new row whose
-  -- supersedes_event_id points at the row it replaces. "Active" outcome
-  -- for a job = the OUTCOME_RECORDED row that is not the target of any
-  -- other row's supersedes_event_id.
-  supersedes_event_id uuid references job_outcome_events (id),
-
   recorded_by text,
   recorded_at timestamptz not null default now(),
   schema_version int not null default 1,
-  fingerprint text not null,
+
+  -- unique (not just indexed) so it can itself be an FK target below -
+  -- fingerprint, not the internal uuid id, is this table's one identity
+  -- concept for cross-referencing rows.
+  fingerprint text not null unique,
+
+  -- Append-only correction chain. A correction is a new row whose
+  -- supersedes_event_fingerprint points at the row it replaces, by that
+  -- row's own content fingerprint - the same identity used everywhere
+  -- else in this table and in the JS contract (confirmed.repair.case.js).
+  -- Deliberately not a UUID FK to the internal id column: mixing UUID and
+  -- fingerprint identity for the same concept is exactly the kind of seam
+  -- bug this design is trying to prevent elsewhere. "Active" outcome for a
+  -- job = the OUTCOME_RECORDED row that is not the target of any other
+  -- row's supersedes_event_fingerprint.
+  supersedes_event_fingerprint text references job_outcome_events (fingerprint),
 
   constraint job_outcome_events_completed_shape check (
     (event_type = 'REPAIR_COMPLETED' and performed_repair is not null and outcome is null and completion_event_fingerprint is null)
@@ -70,8 +79,7 @@ create table if not exists job_outcome_events (
 
 create index if not exists idx_job_outcome_events_job_id on job_outcome_events (job_id);
 create index if not exists idx_job_outcome_events_type on job_outcome_events (job_id, event_type);
-create index if not exists idx_job_outcome_events_supersedes on job_outcome_events (supersedes_event_id) where supersedes_event_id is not null;
-create unique index if not exists idx_job_outcome_events_fingerprint on job_outcome_events (fingerprint);
+create index if not exists idx_job_outcome_events_supersedes on job_outcome_events (supersedes_event_fingerprint) where supersedes_event_fingerprint is not null;
 
 alter table job_outcome_events enable row level security;
 drop policy if exists "service role full access" on job_outcome_events;
@@ -105,11 +113,21 @@ create trigger job_outcome_events_no_delete
 -- be able to write one without the other. This function does the insert
 -- and the status update in a single transaction, and locks the job row
 -- with FOR UPDATE so two concurrent calls can't both read a stale status
--- and both believe their transition is legal. The application builds and
--- fingerprints the event in JS (src/core/evidence/confirmed.repair.case.js
--- owns that validation - it isn't duplicated here), then makes exactly one
--- call to this function. There is no code path that inserts a row without
--- also moving the job's status, or vice versa.
+-- and both believe their transition is legal.
+--
+-- service_jobs carries the job's status in two places: a top-level status
+-- column (what most of job.lifecycle.js reads/writes) and a copy embedded
+-- in payload jsonb (what getJob() actually returns to callers, since it
+-- selects payload, not status). Updating only the column and leaving the
+-- embedded copy stale would mean the DB status, the JSON payload status,
+-- and whatever the caller displays could all disagree with each other -
+-- so both are set together here, in the same statement.
+--
+-- The application builds and fingerprints the event in JS
+-- (src/core/evidence/confirmed.repair.case.js owns that validation - it
+-- isn't duplicated here), then makes exactly one call to this function.
+-- There is no code path that inserts a row without also moving the job's
+-- status, or vice versa.
 create or replace function record_job_outcome_event(
   p_job_id text,
   p_event_type text,
@@ -120,7 +138,7 @@ create or replace function record_job_outcome_event(
   p_performed_repair jsonb,
   p_completion_event_fingerprint text,
   p_outcome jsonb,
-  p_supersedes_event_id uuid,
+  p_supersedes_event_fingerprint text,
   p_recorded_by text,
   p_schema_version int,
   p_fingerprint text
@@ -158,18 +176,20 @@ begin
   insert into job_outcome_events (
     job_id, event_type, verified_case_fingerprint, repair_resolution_fingerprint,
     estimate_fingerprint, invoiced_estimate_fingerprint, performed_repair,
-    completion_event_fingerprint, outcome, supersedes_event_id, recorded_by,
+    completion_event_fingerprint, outcome, supersedes_event_fingerprint, recorded_by,
     schema_version, fingerprint
   ) values (
     p_job_id, p_event_type, p_verified_case_fingerprint, p_repair_resolution_fingerprint,
     p_estimate_fingerprint, p_invoiced_estimate_fingerprint, p_performed_repair,
-    p_completion_event_fingerprint, p_outcome, p_supersedes_event_id, p_recorded_by,
+    p_completion_event_fingerprint, p_outcome, p_supersedes_event_fingerprint, p_recorded_by,
     p_schema_version, p_fingerprint
   )
   returning * into v_event;
 
   update service_jobs
-    set status = v_next_status, updated_at = now()
+    set status = v_next_status,
+        payload = jsonb_set(coalesce(payload, '{}'::jsonb), '{status}', to_jsonb(v_next_status)),
+        updated_at = now()
     where job_id = p_job_id;
 
   return v_event;

@@ -2,7 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { getJob, patchJob, addTest, verifyJob } = require('../services/job.lifecycle');
 const { buildVerifiedCase } = require('../core/evidence/verified.case');
-const { buildRepairCompletedEvent, buildOutcomeEvent } = require('../core/evidence/confirmed.repair.case');
+const {
+  buildRepairCompletedEvent,
+  buildOutcomeEvent,
+  buildConfirmedRepairCase,
+  deriveActiveOutcomeEvent
+} = require('../core/evidence/confirmed.repair.case');
 const { recordOutcomeEvent, getJobOutcomeEvents } = require('../services/job.outcome.events');
 
 router.get('/:id', async (req, res) => {
@@ -107,11 +112,39 @@ router.post('/:id/outcome', async (req, res) => {
     await recordOutcomeEvent(event);
     const updated = await getJob(req.params.id);
 
+    // This is the actual outcome -> learning-corpus binding #91 exists to
+    // add - the event above is durable truth regardless of what happens
+    // here, so a failure in this step doesn't fail the request or lose
+    // the recorded outcome. It's surfaced in the response instead of
+    // swallowed, so a broken ingestion path doesn't go unnoticed.
+    let learningIngested = false;
+    let learningError = null;
+    try {
+      const allEvents = await getJobOutcomeEvents(req.params.id);
+      const activeOutcome = deriveActiveOutcomeEvent(allEvents);
+      if (activeOutcome && activeOutcome.fingerprint === event.fingerprint) {
+        const confirmedRepairCase = buildConfirmedRepairCase(job, allEvents);
+        const { feedbackLoop } = require('../core/learning');
+        await feedbackLoop.recordConfirmedOutcome({
+          confirmedRepairCase,
+          aiRecommendation: job.diagnosis?.result || null,
+          vehicle: job.vehicle,
+          mechanicId: recordedBy || null
+        });
+        learningIngested = true;
+      }
+    } catch (learningErr) {
+      learningError = learningErr.message;
+      console.warn(`[jobs] outcome recorded for ${req.params.id} but learning-corpus ingestion failed:`, learningErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       jobId: req.params.id,
       status: updated?.status || 'OUTCOME_CONFIRMED',
-      event
+      event,
+      learningIngested,
+      ...(learningError ? { learningError } : {})
     });
   } catch (err) {
     return res.status(409).json({ success: false, error: err.message, jobId: req.params.id });
