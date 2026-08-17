@@ -11,6 +11,15 @@ const SHORT_TOKENS = new Set(['ac','cv','tp','o2']);
 const AC_DOMAIN_TOKENS = new Set(['ac','hvac','airconditioning']);
 const LEMON_SHELL = /(?:\bservice manual\s*[~\-]?\s*lemon manuals\b|\blemon manuals\s*:\s*even more car manuals\b|\bhome\s*>>|\bjuly\s+1\s*:\s*so it begins\b)/i;
 
+// Production retrieval contract: deterministic paging with hard candidate ceilings.
+// TSBs are scoped by year/make/model before paging. Confirmed repair rows are
+// scoped by trusted flag + labels.vehicle before paging, then correction-deduped
+// locally because the newest correction determines whether an outcome is active.
+const QUICK_ASK_SCAN_BOUNDS = Object.freeze({
+  tsbs: Object.freeze({ pageSize: 250, maxScan: 5000 }),
+  confirmedRepairs: Object.freeze({ pageSize: 500, maxScan: 5000 })
+});
+
 function clean(v) { return String(v ?? '').trim(); }
 function norm(v) { return clean(v).toLowerCase().replace(/\s+/g, ' '); }
 function normalizeSearchText(v) {
@@ -134,6 +143,17 @@ function isManualContainerItem(item = {}) {
     /free car service manuals/i.test(title) ||
     /\/Repair and Diagnosis(?: \(Single Page\))?\/?$/i.test(path);
 }
+function scanTelemetry(source, bounds, rowsScanned, scanLimitReached, vehicleFilterStage) {
+  return {
+    source,
+    pageSize: bounds.pageSize,
+    maxScan: bounds.maxScan,
+    rowsScanned,
+    scanLimitReached: !!scanLimitReached,
+    resultsMayBePartial: !!scanLimitReached,
+    vehicleFilterStage
+  };
+}
 
 function manualFocusScore(item = {}, query = '') {
   const { profile: queryProfile } = buildCanonicalSearchTerms({}, { query, symptoms: query });
@@ -231,26 +251,31 @@ class QuickAskRetriever {
   }
 
   async _tsbs(vehicle, query, limit) {
-    if (!this.client) return [];
+    const bounds = QUICK_ASK_SCAN_BOUNDS.tsbs;
+    if (!this.client) return { ranked: [], telemetry: scanTelemetry('vehicle_tsb_corpus', bounds, 0, false, 'database') };
     const qt = tokens(query);
-    if (!qt.length) return [];
+    if (!qt.length) return { ranked: [], telemetry: scanTelemetry('vehicle_tsb_corpus', bounds, 0, false, 'database') };
 
-    // Rank the complete vehicle corpus. Limiting before relevance scoring can hide
-    // the best bulletin on vehicles with large TSB histories.
-    const pageSize = 250;
+    // Scope to the requested vehicle before any page is read, then score locally.
     const rows = [];
-    for (let offset = 0; ; offset += pageSize) {
+    let exhausted = false;
+    for (let offset = 0; offset < bounds.maxScan; offset += bounds.pageSize) {
+      const requestSize = Math.min(bounds.pageSize, bounds.maxScan - offset);
       let q = this.client.from('vehicle_tsb_corpus').select('year,make,model,title,bulletin_number,bulletin_date,group_name,subject,body_text,source,source_url');
       if (vehicle.year) q = q.eq('year', Number(vehicle.year));
       if (vehicle.make) q = q.ilike('make', clean(vehicle.make));
       if (vehicle.model) q = q.ilike('model', clean(vehicle.model));
       q = q.order('id', { ascending: true });
-      const { data, error } = await q.range(offset, offset + pageSize - 1);
+      const { data, error } = await q.range(offset, offset + requestSize - 1);
       if (error) throw new Error(`vehicle_tsb_corpus lookup failed: ${error.message}`);
       const page = data || [];
       rows.push(...page);
-      if (page.length < pageSize) break;
+      if (page.length < requestSize) {
+        exhausted = true;
+        break;
+      }
     }
+    const scanLimitReached = !exhausted && rows.length >= bounds.maxScan;
 
     const scored = rows.map(raw => {
       const row = normalizeTsbRow(raw);
@@ -271,10 +296,13 @@ class QuickAskRetriever {
       if (better) bestByBulletin.set(key, item);
     }
 
-    return [...bestByBulletin.values()]
-      .sort((a,b) => b.relevance - a.relevance || String(b.row.bulletin_date || '').localeCompare(String(a.row.bulletin_date || '')))
-      .slice(0, limit)
-      .map(({ row }) => row);
+    return {
+      ranked: [...bestByBulletin.values()]
+        .sort((a,b) => b.relevance - a.relevance || String(b.row.bulletin_date || '').localeCompare(String(a.row.bulletin_date || '')))
+        .slice(0, limit)
+        .map(({ row }) => row),
+      telemetry: scanTelemetry('vehicle_tsb_corpus', bounds, rows.length, scanLimitReached, 'database')
+    };
   }
 
   async _manualEvidence(vehicle, query, limit) {
@@ -308,24 +336,36 @@ class QuickAskRetriever {
   }
 
   async _confirmedRepairs(vehicle, query, limit) {
-    if (!this.client) return { sampleSize: 0, ranked: [] };
+    const bounds = QUICK_ASK_SCAN_BOUNDS.confirmedRepairs;
+    if (!this.client) return { sampleSize: 0, ranked: [], telemetry: scanTelemetry('feedback_examples', bounds, 0, false, 'database-json') };
 
-    // Do not cap the newest examples globally before vehicle filtering. A quieter
-    // vehicle's confirmed outcomes must remain visible even after the corpus grows.
-    const pageSize = 500;
+    // Trusted confirmed outcomes persist vehicle identity in labels.vehicle. Apply
+    // those JSON filters before paging so high global feedback volume does not make
+    // an unrelated vehicle consume this request's scan budget.
     const rows = [];
-    for (let offset = 0; ; offset += pageSize) {
-      const q = this.client
+    let exhausted = false;
+    for (let offset = 0; offset < bounds.maxScan; offset += bounds.pageSize) {
+      const requestSize = Math.min(bounds.pageSize, bounds.maxScan - offset);
+      let q = this.client
         .from('feedback_examples')
         .select('id,request_id,labels,metadata,stored_at')
+        .eq('metadata->trustedForTraining', true);
+      if (vehicle.year) q = q.eq('labels->vehicle->year', Number(vehicle.year));
+      if (vehicle.make) q = q.ilike('labels->vehicle->>make', clean(vehicle.make));
+      if (vehicle.model) q = q.ilike('labels->vehicle->>model', clean(vehicle.model));
+      q = q
         .order('stored_at', { ascending: false })
         .order('id', { ascending: true });
-      const { data, error } = await q.range(offset, offset + pageSize - 1);
+      const { data, error } = await q.range(offset, offset + requestSize - 1);
       if (error) throw new Error(`feedback_examples lookup failed: ${error.message}`);
       const page = data || [];
       rows.push(...page);
-      if (page.length < pageSize) break;
+      if (page.length < requestSize) {
+        exhausted = true;
+        break;
+      }
     }
+    const scanLimitReached = !exhausted && rows.length >= bounds.maxScan;
 
     const qt = tokens(query);
     let matched = activeTrustedExamples(rows)
@@ -355,7 +395,11 @@ class QuickAskRetriever {
         observedRepairShare: total ? Number((g.count / total).toFixed(3)) : null,
         evidenceStrength: total >= 20 ? 'HIGH' : total >= 5 ? 'MEDIUM' : total > 0 ? 'LOW' : 'NONE'
       }));
-    return { sampleSize: total, ranked };
+    return {
+      sampleSize: total,
+      ranked,
+      telemetry: scanTelemetry('feedback_examples', bounds, rows.length, scanLimitReached, 'database-json')
+    };
   }
 
   async ask({ vehicle = {}, query = '', limit = 5 } = {}) {
@@ -375,6 +419,12 @@ class QuickAskRetriever {
       'Published TSB frequency is not repair probability.',
       'Quick Ask does not verify a fault or unlock repair authorization.'
     ];
+    if (tsbs.telemetry.scanLimitReached) {
+      warnings.unshift(`Published TSB retrieval reached its ${tsbs.telemetry.maxScan}-row vehicle-scoped scan bound; results may be partial.`);
+    }
+    if (repairs.telemetry.scanLimitReached) {
+      warnings.unshift(`Confirmed-repair retrieval reached its ${repairs.telemetry.maxScan}-row vehicle-scoped scan bound; observed repair shares may be partial.`);
+    }
     if (manual.error) warnings.unshift(`Repair & Diagnosis lookup unavailable: ${manual.error}`);
     if (!tokens(queryText).length) {
       warnings.unshift('No question or symptom text was provided; published and manual evidence are not ranked without a query.');
@@ -390,7 +440,11 @@ class QuickAskRetriever {
       repairDiagnosisFromCache: manual.fromCache,
       commonConfirmedRepairs: repairs.ranked,
       confirmedRepairSampleSize: repairs.sampleSize,
-      publishedEvidence: tsbs,
+      publishedEvidence: tsbs.ranked,
+      retrievalTelemetry: {
+        tsbs: tsbs.telemetry,
+        confirmedRepairs: repairs.telemetry
+      },
       warnings
     };
   }
@@ -398,6 +452,7 @@ class QuickAskRetriever {
 
 module.exports = {
   QuickAskRetriever,
+  QUICK_ASK_SCAN_BOUNDS,
   tokens,
   activeTrustedExamples,
   vehicleMatches,
@@ -412,5 +467,6 @@ module.exports = {
   manualFocusScore,
   normalizeManualItem,
   isTsbManualItem,
-  isManualContainerItem
+  isManualContainerItem,
+  scanTelemetry
 };
