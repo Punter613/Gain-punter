@@ -124,7 +124,7 @@ class EconomicEngine {
     switch (component) {
       case 'battery':
       case 'coolant':
-        return profile.componentData?.[component]?.ageMonths || 
+        return profile.componentData?.[component]?.ageMonths ??
                (profile.lastServiceDate ? this._monthsSince(profile.lastServiceDate) : 12);
       case 'engine_oil':
         return profile.mileage - (profile.lastOilChangeMiles || profile.mileage - 3000);
