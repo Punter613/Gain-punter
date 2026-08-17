@@ -342,6 +342,7 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     baseUrl,
     { allowUnknown: options.allowUnknownDrivetrain === true }
   );
+  const crawlStartedAt = Date.now();
 
   const queue = [{ url: baseUrl, depth: 0, priority: 1000, exactDtc: false }];
   const queued = new Set([baseUrl]);
@@ -350,7 +351,7 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
   let timeBudgetExceeded = false;
 
   while (queue.length && visited.size < maxPages) {
-    if (maxElapsedMs > 0 && Date.now() - startedAt >= maxElapsedMs) {
+    if (maxElapsedMs > 0 && Date.now() - crawlStartedAt >= maxElapsedMs) {
       timeBudgetExceeded = true;
       break;
     }
@@ -361,7 +362,7 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     visited.add(next.url);
 
     try {
-      const remainingMs = maxElapsedMs > 0 ? maxElapsedMs - (Date.now() - startedAt) : fetchTimeoutMs;
+      const remainingMs = maxElapsedMs > 0 ? maxElapsedMs - (Date.now() - crawlStartedAt) : fetchTimeoutMs;
       if (maxElapsedMs > 0 && remainingMs <= 0) {
         timeBudgetExceeded = true;
         break;
