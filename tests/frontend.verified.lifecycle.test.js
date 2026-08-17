@@ -39,6 +39,16 @@ test('frontend requires selected persisted tests and mechanic conclusion for pos
   assert.match(html, /placeholders do not count as evidence/i);
 });
 
+test('Quick Ask presents focused service-manual pointers rather than scraped text dumps', () => {
+  assert.match(html, /Service Manual Reference/);
+  assert.match(html, /Matched keywords:/);
+  assert.match(html, /Open service-manual reference/);
+  assert.match(html, /External service-manual reference/);
+  assert.match(html, /No focused service-manual reference found for these keywords/);
+  assert.doesNotMatch(html, /\$\{m\.snippet\?/);
+  assert.doesNotMatch(html, /\$\{esc\(m\.source\|\|d\.repairDiagnosisSource/);
+});
+
 test('estimate and invoice follow the same persisted job', () => {
   assert.match(html, /post\(['"]\/api\/estimateHeuristic['"],\{jobId/);
   assert.match(html, /post\(['"]\/api\/invoice\/build['"],\{jobId\}\)/);
