@@ -20,6 +20,8 @@ const DEFAULT_WEIGHTS = {
   ESTIMATE_WRONG: 3.0
 };
 
+const { eligibleForTrustedLearning } = require('../evidence/confirmed.repair.case');
+
 function nowISO() {
   return new Date().toISOString();
 }
@@ -121,7 +123,60 @@ class MechanicFeedbackLoop {
         createdAt: metadata.createdAt || nowISO(),
         source: metadata.source || source,
         processed: metadata.processed || false,
-        usedInRetrain: metadata.usedInRetrain || false
+        usedInRetrain: metadata.usedInRetrain || false,
+        // Free-form, self-reported feedback is useful signal for UX/prompt
+        // quality but must never silently promote itself into the trusted
+        // training corpus - only recordConfirmedOutcome() (fed by a real
+        // CONFIRMED_REPAIR_CASE, bound to a job's fingerprint lineage) can
+        // set this true. See getTrainingDataset().
+        trustedForTraining: false
+      }
+    };
+
+    return this.adapter.save(example);
+  }
+
+  // The only path into the trusted learning corpus. confirmedRepairCase
+  // must already be a valid, integrity-checked CONFIRMED_REPAIR_CASE
+  // (src/core/evidence/confirmed.repair.case.js) - this method re-verifies
+  // that itself via eligibleForTrustedLearning rather than trusting the
+  // caller, since nothing else is allowed around this gate.
+  async recordConfirmedOutcome({ confirmedRepairCase, aiRecommendation = null, vehicle = null, mechanicId = null, shopId = null, metadata = {} } = {}) {
+    if (!eligibleForTrustedLearning(confirmedRepairCase)) {
+      throw new Error('recordConfirmedOutcome requires a valid, non-superseded CONFIRMED_REPAIR_CASE');
+    }
+
+    const result = confirmedRepairCase.outcome.result;
+    const mechanicAssessment = {
+      diagnosisCorrect: result === 'CORRECT' ? 'correct' : result === 'PARTIAL' ? 'partial' : 'wrong',
+      fixWorked: result === 'CORRECT' ? true : result === 'WRONG' ? false : null
+    };
+    const teachingSignal = this._calculateTeachingSignal(mechanicAssessment, null);
+
+    const example = {
+      id: null,
+      requestId: confirmedRepairCase.jobId,
+      vehicle,
+      rawAiOutput: aiRecommendation,
+      mechanicAssessment,
+      actualRepair: confirmedRepairCase.performedRepair,
+      economicActual: null,
+      mechanicId,
+      shopId,
+      teachingSignal,
+      confirmedRepairCase: {
+        fingerprint: confirmedRepairCase.fingerprint,
+        verifiedCaseFingerprint: confirmedRepairCase.verifiedCaseFingerprint,
+        sourceEventFingerprint: confirmedRepairCase.sourceEventFingerprint,
+        correctionCount: confirmedRepairCase.correctionCount || 0
+      },
+      metadata: {
+        feedbackVersion: metadata.feedbackVersion || 1,
+        createdAt: metadata.createdAt || nowISO(),
+        source: 'confirmed_repair_case',
+        processed: false,
+        usedInRetrain: false,
+        trustedForTraining: true
       }
     };
 
@@ -137,13 +192,41 @@ class MechanicFeedbackLoop {
   }
 
   async getTrainingDataset(limit = 1000) {
-    // Returns only full repair examples (exclude incomplete/quick)
+    // Returns only trusted examples. Presence of the four raw fields used
+    // to be treated as sufficient - that's exactly the seam that let
+    // self-reported feedback masquerade as ground truth. Now it requires
+    // the example to actually be tagged trustedForTraining, which only
+    // recordConfirmedOutcome() (a real CONFIRMED_REPAIR_CASE) can set.
+    //
+    // A job's outcome can be corrected (WRONG -> CORRECT or vice versa)
+    // after it's already been recorded as trusted once. Corrections are
+    // append-only on the outcome-event side (confirmed.repair.case.js
+    // never mutates history there) - but the adapter storage here is the
+    // same append-only shape, so a stale trusted example from before a
+    // correction would otherwise sit in this table forever, still tagged
+    // trusted, and get picked up by training right alongside its own
+    // correction. Group by job (requestId) and keep only the example with
+    // the highest correctionCount - that's the one built from the current
+    // active outcome, not a since-superseded one.
     const all = await this.adapter.getExamples(limit * 2);
-    // Filter: require rawAiOutput, mechanicAssessment, actualRepair, economicActual (minimum)
-    const valid = all.filter(e =>
-      e.rawAiOutput && e.mechanicAssessment && e.actualRepair && e.economicActual && e.metadata
+    const trusted = all.filter(e =>
+      e.rawAiOutput && e.mechanicAssessment && e.actualRepair && e.metadata?.trustedForTraining === true
     );
-    // Sort by weight desc (adapter getExamples already sorts; ensure stable)
+
+    const latestByJob = new Map();
+    for (const example of trusted) {
+      const jobKey = example.requestId;
+      const current = latestByJob.get(jobKey);
+      const correctionCount = example.confirmedRepairCase?.correctionCount || 0;
+      const currentCorrectionCount = current?.confirmedRepairCase?.correctionCount || 0;
+      const isNewer = !current
+        || correctionCount > currentCorrectionCount
+        || (correctionCount === currentCorrectionCount
+          && new Date(example.metadata?.createdAt || 0) > new Date(current.metadata?.createdAt || 0));
+      if (isNewer) latestByJob.set(jobKey, example);
+    }
+
+    const valid = [...latestByJob.values()];
     valid.sort((a, b) => (b.teachingSignal?.totalWeight || 0) - (a.teachingSignal?.totalWeight || 0));
     return valid.slice(0, limit);
   }

@@ -5,7 +5,10 @@ const {
   assertVerifiedEstimateSnapshot
 } = require('../core/evidence/verified.estimate.snapshot');
 
-const VALID_STATES = new Set(['DIAGNOSING', 'TESTING', 'VERIFIED', 'ESTIMATED', 'INVOICED', 'DIAG_FAILED']);
+const VALID_STATES = new Set([
+  'DIAGNOSING', 'TESTING', 'VERIFIED', 'ESTIMATED', 'INVOICED', 'DIAG_FAILED',
+  'REPAIR_COMPLETED', 'OUTCOME_CONFIRMED'
+]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -91,6 +94,16 @@ async function getJob(jobId) {
   } catch {
     return null;
   }
+}
+
+// Drops the in-memory cached copy of a job so the next getJob() call is
+// forced to re-read from Supabase. Needed after any write that bypasses
+// persist() (like record_job_outcome_event's direct SQL update to
+// service_jobs) - without this, getJob() would keep returning the stale
+// pre-write copy it cached on an earlier call, even though the DB itself
+// is already correct.
+function invalidateJobCache(jobId) {
+  delete memoryStore()[jobId];
 }
 
 async function createJob(input = {}) {
@@ -265,5 +278,6 @@ module.exports = {
   attachEstimate,
   attachInvoice,
   hydrateEstimateInput,
-  hydrateInvoiceInput
+  hydrateInvoiceInput,
+  invalidateJobCache
 };
