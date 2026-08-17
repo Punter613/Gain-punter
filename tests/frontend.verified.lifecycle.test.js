@@ -26,7 +26,7 @@ test('frontend captures engine trim and sends engine plus DTC context through re
   assert.match(html, /query:retrievalQuery/);
 });
 
-test('lifecycle restores explicit VIN decode autofill and customer-to-tech translation', () => {
+test('lifecycle restores explicit VIN decode autofill and shared customer-language normalization', () => {
   assert.match(html, /id="decodeVin"[^>]*>🔍 Decode/);
   assert.match(html, /post\('\/api\/vehicle\/decode',\{vin\}\)/);
   assert.match(html, /\$\('year'\)\.value=v\.year\|\|''/);
@@ -42,12 +42,11 @@ test('lifecycle restores explicit VIN decode autofill and customer-to-tech trans
   assert.match(serverSource, /app\.use\('\/api\/vehicle'/);
 });
 
-test('normalizer preserves raw customer words while sending normalized symptom context and keywords', () => {
+test('normalizer keywords narrow both diagnosis evidence and Customer States fallback Quick Ask', () => {
   assert.match(html, /function translatedSymptomContext\(\)/);
-  assert.match(html, /customerStates:lines\(rawCustomerStates\)/);
-  assert.match(html, /symptoms:translated\.translation\?lines\(translated\.translation\):\[\]/);
   assert.match(html, /keywords:translated\.keywords/);
   assert.match(html, /const retrievalQuery=\[query,translatedContext,keywordContext,codeContext\]/);
+  assert.match(html, /symptoms:lines\(\$\('symptoms'\)\.value\)/);
 });
 
 test('Run Diagnosis and Ask SKSK are equally prominent major actions', () => {
