@@ -133,7 +133,12 @@ function evidenceRetrievalProfile() {
   return {
     vinWarmup: 'stored-only',
     manualPathResolutionBudgetMs: Number(process.env.LEMON_RESOLVER_MAX_ELAPSED_MS || 10000),
-    liveManualCrawlBudgetMs: Number(process.env.LEMON_LIVE_MAX_ELAPSED_MS || 20000)
+    liveManualCrawlBudgetMs: Number(process.env.LEMON_LIVE_MAX_ELAPSED_MS || 20000),
+    quickAskSourceBudgetsMs: {
+      confirmedRepairs: Number(process.env.QUICK_ASK_CONFIRMED_REPAIRS_TIMEOUT_MS || 5000),
+      tsbs: Number(process.env.QUICK_ASK_TSB_TIMEOUT_MS || 5000),
+      manual: Number(process.env.QUICK_ASK_MANUAL_TIMEOUT_MS || 32000)
+    }
   };
 }
 
@@ -227,6 +232,7 @@ if (process.env.IS_PULL_REQUEST === 'true') {
           repairDiagnosisFromCache: quickAskBody?.repairDiagnosisFromCache ?? null,
           repairDiagnosisReferenceCount: references.length,
           referenceTitles: references.slice(0, 5).map(item => item.title),
+          retrievalTelemetry: quickAskBody?.retrievalTelemetry || null,
           warnings: quickAskBody?.warnings || [],
           error: quickAskBody?.error || null
         },
@@ -282,11 +288,13 @@ try {
 const port = process.env.PORT || 3000;
 const server = app.listen(port, () => {
   const retrieval = evidenceRetrievalProfile();
+  const quickAsk = retrieval.quickAskSourceBudgetsMs;
   console.log(`[Server] SKSK ProTech running inside API framework layer on port ${port}`);
   console.log(`[Server] Testing Target Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(
     `[Server] Evidence retrieval profile: stored-only VIN warmup; ` +
-    `manual path <=${retrieval.manualPathResolutionBudgetMs}ms; live crawl <=${retrieval.liveManualCrawlBudgetMs}ms`
+    `manual path <=${retrieval.manualPathResolutionBudgetMs}ms; live crawl <=${retrieval.liveManualCrawlBudgetMs}ms; ` +
+    `Quick Ask source budgets repairs/TSB/manual=${quickAsk.confirmedRepairs}/${quickAsk.tsbs}/${quickAsk.manual}ms`
   );
   console.log(`[Server] Active Status Framework Endpoint: http://localhost:${port}/health`);
 });
