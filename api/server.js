@@ -140,6 +140,13 @@ app.get('/health', async (req, res) => {
   }
   health.stripe = process.env.STRIPE_SECRET_KEY ? 'configured' : 'not configured';
   health.groq = process.env.GROQ_API_KEY ? 'configured' : 'not configured';
+  if (process.env.IS_PULL_REQUEST === 'true') {
+    health.preview = {
+      commit: process.env.RENDER_GIT_COMMIT || null,
+      branch: process.env.RENDER_GIT_BRANCH || null,
+      service: process.env.RENDER_SERVICE_NAME || null
+    };
+  }
   res.json(health);
 });
 
