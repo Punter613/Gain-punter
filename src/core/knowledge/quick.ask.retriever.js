@@ -3,6 +3,7 @@
 // It does not call an LLM and it does not create verified repair truth.
 
 const { supabase: defaultSupabase } = require('../../db');
+const { scrapeLEMONManuals } = require('../../services/lemon');
 
 const STOP = new Set(['the','a','an','and','or','of','to','in','on','for','with','is','it','this','that','what','would','could','cause','causes','issue','issues','problem','problems','most','common']);
 const SHORT_TOKENS = new Set(['ac','cv','tp','o2']);
@@ -114,10 +115,30 @@ function normalizeTsbRow(row = {}) {
     source_url: clean(row.source_url)
   };
 }
+function manualItemText(item = {}) {
+  const meta = item.meta || {};
+  return [item.title, item.url, meta.headings, meta.snippet, meta.matchedKeywords, meta.facts].filter(Boolean).join(' ');
+}
+function isTsbManualItem(item = {}) {
+  return /\btsb\b|technical service bulletin|service bulletin/i.test(manualItemText(item));
+}
+function normalizeManualItem(item = {}, source = 'LEMON_MANUALS') {
+  const meta = item.meta || {};
+  return {
+    title: cleanEvidenceText(item.title || 'Repair & Diagnosis reference', 180),
+    url: clean(item.url),
+    source: clean(source || 'LEMON_MANUALS'),
+    headings: cleanEvidenceText(meta.headings, 220),
+    snippet: cleanEvidenceText(meta.snippet, 420),
+    matchedKeywords: cleanEvidenceText(meta.matchedKeywords, 180),
+    evidenceType: 'REPAIR_DIAGNOSIS'
+  };
+}
 
 class QuickAskRetriever {
-  constructor(client = defaultSupabase) {
+  constructor(client = defaultSupabase, manualProvider = scrapeLEMONManuals) {
     this.client = client;
+    this.manualProvider = manualProvider;
   }
 
   async _tsbs(vehicle, query, limit) {
@@ -154,6 +175,34 @@ class QuickAskRetriever {
       .sort((a,b) => b.relevance - a.relevance || String(b.row.bulletin_date || '').localeCompare(String(a.row.bulletin_date || '')))
       .slice(0, limit)
       .map(({ row }) => row);
+  }
+
+  async _manualEvidence(vehicle, query, limit) {
+    const qt = tokens(query);
+    if (!this.manualProvider || !qt.length) return { references: [], source: null, fromCache: false, error: null };
+    try {
+      const manual = await this.manualProvider(vehicle, { query, symptoms: query, keywords: qt });
+      if (manual?.error) return { references: [], source: manual.source || null, fromCache: !!manual.fromCache, error: manual.error };
+      const source = manual?.source || 'LEMON_MANUALS';
+      const best = new Map();
+      for (const item of manual?.items || []) {
+        if (isTsbManualItem(item)) continue;
+        const relevance = overlapScore(manualItemText(item), qt);
+        if (relevance <= 0) continue;
+        const ref = normalizeManualItem(item, source);
+        const key = norm(ref.url || ref.title);
+        const current = best.get(key);
+        if (!current || relevance > current.relevance) best.set(key, { ref, relevance });
+      }
+      return {
+        references: [...best.values()].sort((a,b) => b.relevance - a.relevance).slice(0, limit).map(x => x.ref),
+        source,
+        fromCache: !!manual?.fromCache,
+        error: null
+      };
+    } catch (error) {
+      return { references: [], source: null, fromCache: false, error: error.message };
+    }
   }
 
   async _confirmedRepairs(vehicle, query, limit) {
@@ -202,17 +251,20 @@ class QuickAskRetriever {
       throw new Error('Quick Ask requires vehicle.make and vehicle.model');
     }
     const queryText = clean(query);
-    const [repairs, tsbs] = await Promise.all([
+    const [repairs, manual, tsbs] = await Promise.all([
       this._confirmedRepairs(vehicle, queryText, capped),
+      this._manualEvidence(vehicle, queryText, capped),
       this._tsbs(vehicle, queryText, capped)
     ]);
     const warnings = [
+      'Repair & Diagnosis references are source material, not confirmation of a fault.',
       'Observed repair share is not diagnostic probability.',
       'Published TSB frequency is not repair probability.',
       'Quick Ask does not verify a fault or unlock repair authorization.'
     ];
+    if (manual.error) warnings.unshift(`Repair & Diagnosis lookup unavailable: ${manual.error}`);
     if (!tokens(queryText).length) {
-      warnings.unshift('No question or symptom text was provided; published evidence is not ranked without a query.');
+      warnings.unshift('No question or symptom text was provided; published and manual evidence are not ranked without a query.');
     }
     return {
       status: 'SUCCESS',
@@ -220,6 +272,9 @@ class QuickAskRetriever {
       queryMode: tokens(queryText).length ? 'QUERY' : 'VEHICLE_ONLY',
       vehicle: { year: vehicle.year || null, make: clean(vehicle.make), model: clean(vehicle.model), engine: clean(vehicle.engine) || null },
       query: queryText,
+      repairDiagnosisEvidence: manual.references,
+      repairDiagnosisSource: manual.source,
+      repairDiagnosisFromCache: manual.fromCache,
       commonConfirmedRepairs: repairs.ranked,
       confirmedRepairSampleSize: repairs.sampleSize,
       publishedEvidence: tsbs,
@@ -228,4 +283,18 @@ class QuickAskRetriever {
   }
 }
 
-module.exports = { QuickAskRetriever, tokens, activeTrustedExamples, vehicleMatches, causeFromExample, cleanEvidenceText, cleanBulletinDate, bulletinKey, normalizeTsbRow, normalizeSearchText };
+module.exports = {
+  QuickAskRetriever,
+  tokens,
+  activeTrustedExamples,
+  vehicleMatches,
+  causeFromExample,
+  cleanEvidenceText,
+  cleanBulletinDate,
+  bulletinKey,
+  normalizeTsbRow,
+  normalizeSearchText,
+  manualItemText,
+  normalizeManualItem,
+  isTsbManualItem
+};
