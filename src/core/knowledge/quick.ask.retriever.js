@@ -126,41 +126,71 @@ function manualItemText(item = {}) {
 function isTsbManualItem(item = {}) {
   return /\btsb\b|technical service bulletin|service bulletin/i.test(manualItemText(item));
 }
+function isManualContainerItem(item = {}) {
+  const title = cleanEvidenceText(item.title, 220);
+  let path = '';
+  try { path = decodeURIComponent(new URL(clean(item.url)).pathname); } catch (_) {}
+  return /^repair and diagnosis(?: \(single page\))?(?:\s+—.*)?$/i.test(title) ||
+    /free car service manuals/i.test(title) ||
+    /\/Repair and Diagnosis(?: \(Single Page\))?\/?$/i.test(path);
+}
 
 function manualFocusScore(item = {}, query = '') {
   const { profile: queryProfile } = buildCanonicalSearchTerms({}, { query, symptoms: query });
   const meta = item.meta || {};
+
+  // Whole-manual and root pages contain almost every keyword somewhere. They are
+  // navigation containers, not focused mechanic answers.
+  if (isManualContainerItem(item)) {
+    return { eligible: false, score: 0, matchedKeywords: [], matchedComponents: [] };
+  }
+
   const itemProfile = extractCanonicalProfile({
     title: item.title,
     headings: [meta.headings],
     url: item.url,
     bodyText: [meta.snippet, meta.matchedKeywords, meta.facts].filter(Boolean).join(' ')
   });
+  const highSignalProfile = extractCanonicalProfile({
+    title: item.title,
+    headings: [meta.headings],
+    url: item.url
+  });
 
   const queryComponents = queryProfile.components || [];
-  const itemComponents = new Set(itemProfile.components || []);
-  const highSignal = normalizeText([item.title, meta.headings, item.url].filter(Boolean).join(' '));
-  const matchedComponents = queryComponents.filter(component =>
-    itemComponents.has(component) || highSignal.includes(normalizeText(component))
-  );
+  const querySounds = queryProfile.sounds || [];
+  const queryConditions = queryProfile.conditions || [];
+  const queryDtcs = queryProfile.dtcs || [];
 
-  // When the mechanic names a component, system-only matches are navigation
-  // hints, not focused answers. Refuse to surface them as Quick Ask references.
+  const highSignal = normalizeText([item.title, meta.headings, item.url].filter(Boolean).join(' '));
+  const highSignalComponents = new Set(highSignalProfile.components || []);
+  const matchedComponents = queryComponents.filter(component =>
+    highSignalComponents.has(component) || highSignal.includes(normalizeText(component))
+  );
+  const matchedHighSignalSounds = querySounds.filter(value => (highSignalProfile.sounds || []).includes(value));
+  const matchedHighSignalConditions = queryConditions.filter(value => (highSignalProfile.conditions || []).includes(value));
+  const matchedSystems = (queryProfile.systems || []).filter(value => (itemProfile.systems || []).includes(value));
+  const matchedDtcs = queryDtcs.filter(value => (itemProfile.dtcs || []).includes(value));
+
+  // Exact component intent must be present in the page's title/heading/path.
   if (queryComponents.length && !matchedComponents.length) {
     return { eligible: false, score: 0, matchedKeywords: [], matchedComponents: [] };
   }
 
-  const matchedSounds = (queryProfile.sounds || []).filter(value => (itemProfile.sounds || []).includes(value));
-  const matchedConditions = (queryProfile.conditions || []).filter(value => (itemProfile.conditions || []).includes(value));
-  const matchedSystems = (queryProfile.systems || []).filter(value => (itemProfile.systems || []).includes(value));
-  const matchedDtcs = (queryProfile.dtcs || []).filter(value => (itemProfile.dtcs || []).includes(value));
-  const scraperScore = Math.max(0, Math.min(25, Number(meta.relevanceScore || 0) / 4));
+  // For symptom/condition-driven questions without an explicit component or DTC,
+  // system overlap is only a crawl/navigation hint. The visible reference must
+  // carry the symptom/condition in its high-signal page identity.
+  const symptomDriven = !queryComponents.length && !queryDtcs.length && (querySounds.length || queryConditions.length);
+  if (symptomDriven && !matchedHighSignalSounds.length && !matchedHighSignalConditions.length) {
+    return { eligible: false, score: 0, matchedKeywords: [], matchedComponents: [] };
+  }
 
+  const scraperScore = Math.max(0, Math.min(25, Number(meta.relevanceScore || 0) / 4));
   const score =
     matchedDtcs.length * 120 +
     matchedComponents.length * 100 +
-    matchedSounds.length * 20 +
-    matchedConditions.length * 15 +
+    matchedHighSignalSounds.length * 25 +
+    matchedHighSignalConditions.length * 20 +
     matchedSystems.length * 5 +
     scraperScore;
 
@@ -171,8 +201,8 @@ function manualFocusScore(item = {}, query = '') {
     matchedKeywords: [...new Set([
       ...matchedDtcs,
       ...matchedComponents,
-      ...matchedSounds,
-      ...matchedConditions,
+      ...matchedHighSignalSounds,
+      ...matchedHighSignalConditions,
       ...matchedSystems
     ])]
   };
@@ -359,5 +389,6 @@ module.exports = {
   manualItemText,
   manualFocusScore,
   normalizeManualItem,
-  isTsbManualItem
+  isTsbManualItem,
+  isManualContainerItem
 };
