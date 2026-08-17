@@ -23,8 +23,36 @@ test('frontend captures engine trim and sends engine plus DTC context through re
   const enginePayloadUses = html.match(/engine:\$\('engine'\)\.value\.trim\(\)/g) || [];
   assert.equal(enginePayloadUses.length, 2);
   assert.match(html, /const codeContext=list\(\$\('codes'\)\.value\)\.join\(' '\)/);
-  assert.match(html, /const retrievalQuery=\[query,codeContext\]\.filter\(Boolean\)\.join\(' '\)/);
   assert.match(html, /query:retrievalQuery/);
+});
+
+test('lifecycle restores explicit VIN decode autofill and shared customer-language normalization', () => {
+  assert.match(html, /id="decodeVin"[^>]*>🔍 Decode/);
+  assert.match(html, /post\('\/api\/vehicle\/decode',\{vin\}\)/);
+  assert.match(html, /\$\('year'\)\.value=v\.year\|\|''/);
+  assert.match(html, /\$\('make'\)\.value=v\.make\|\|''/);
+  assert.match(html, /\$\('model'\)\.value=v\.model\|\|''/);
+  assert.match(html, /\$\('engine'\)\.value=engineLabel/);
+  assert.match(html, /id="translateSymptoms"[^>]*>🔄 Translate to Tech/);
+  assert.match(html, /post\('\/api\/translate',\{text:raw\}\)/);
+  assert.match(html, /el\.dataset\.aiTranslation=d\.translated\|\|''/);
+  assert.match(html, /el\.dataset\.aiKeywords=JSON\.stringify/);
+  assert.doesNotMatch(html, /\$\('symptoms'\)\.value=d\.translated/);
+  assert.match(serverSource, /app\.use\('\/api\/translate'/);
+  assert.match(serverSource, /app\.use\('\/api\/vehicle'/);
+});
+
+test('normalizer keywords narrow both diagnosis evidence and Customer States fallback Quick Ask', () => {
+  assert.match(html, /function translatedSymptomContext\(\)/);
+  assert.match(html, /keywords:translated\.keywords/);
+  assert.match(html, /const retrievalQuery=\[query,translatedContext,keywordContext,codeContext\]/);
+  assert.match(html, /symptoms:lines\(\$\('symptoms'\)\.value\)/);
+});
+
+test('Run Diagnosis and Ask SKSK are equally prominent major actions', () => {
+  assert.match(html, /\.btn\.major\{flex:1;min-width:220px/);
+  assert.match(html, /id="diag" class="btn primary major"/);
+  assert.match(html, /id="quickAsk" class="btn knowledge major"/);
 });
 
 test('frontend exposes explicit verify action before estimate unlock', () => {
