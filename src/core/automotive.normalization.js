@@ -88,6 +88,7 @@ function collectAliases(text, map) {
 
 function extractCanonicalProfile(input = {}) {
   const complaintText = [
+    input.query,
     input.symptoms,
     input.customerStates,
     ...(Array.isArray(input.mechanicNotices) ? input.mechanicNotices : [input.mechanicNotices])
@@ -108,6 +109,9 @@ function extractCanonicalProfile(input = {}) {
   const staticConditions = collectAliases(joined, CONDITION_ALIASES);
   const conditions = [...new Set([...staticConditions, ...triggers])];
   const systems = collectAliases(joined, SYSTEM_ALIASES);
+  if (/(^|[^a-z0-9])(?:a\s*[\/.\-]?\s*c|ac|hvac)(?=$|[^a-z0-9])|air[ -]?condition(?:ing)?/i.test(joined) && !systems.includes('hvac')) {
+    systems.push('hvac');
+  }
 
   const canonicalTerms = [...new Set([
     ...dtcs.map(code => code.toLowerCase()),
@@ -162,6 +166,17 @@ function buildCanonicalSearchTerms(vehicle = {}, context = {}) {
   // generic tokens such as "release" can create false matches like
   // "accelerator release" -> "Fuel Pressure Release".
   const terms = [...profile.canonicalTerms];
+  const complaintText = normalizeText([
+    context.query,
+    context.symptoms,
+    ...(Array.isArray(context.mechanicNotices) ? context.mechanicNotices : [context.mechanicNotices])
+  ].filter(Boolean).join(' '));
+
+  // Canonical HVAC is an internal system name; service manuals commonly spell
+  // the tree out as "Air Conditioning" and may title the component directly.
+  if (profile.systems.includes('hvac')) terms.push('air conditioning');
+  if (profile.systems.includes('hvac') && /\bcompressor\b/.test(complaintText)) terms.push('compressor');
+  if (profile.systems.includes('hvac') && /\bclutch\b/.test(complaintText)) terms.push('compressor clutch');
 
   const vehicleTerms = [vehicle.make, vehicle.model, vehicle.trim, vehicle.engine]
     .map(normalizeText)
