@@ -7,6 +7,7 @@
  */
 
 const Groq = require('groq-sdk');
+const { buildDiagnoseJsonSchema } = require('../src/services/ai/diagnose.schema');
 
 const systemPrompt = `You are the expert diagnostic logic unit of SKSK ProTech — a master automotive diagnostician with 25 years of real shop experience.
 Output a single valid JSON object ONLY. No backticks, markdown, or text before/after.
@@ -28,58 +29,13 @@ MULTI-CONDITION REASONING: When the same symptom occurs under two or more distin
 
 const userPrompt = `Vehicle: KIA Sorento | VIN: KNDJC736385765089 | Mileage: N/A | Codes: P0300, P0171 | Symptoms: Loud audible clunking noise upon deceleration and full steering wheel rotation, possibly indicating a loose or worn-out component in the steering or suspension system, such as a ball joint or tie rod end | Tech Notes: Already replaced both cv axles replaced the lower ball joints on both front and the upper control arm ball joint assembly on both front | Technical Keywords: deceleration clunk, full-lock steering noise, ball joint, tie rod end`;
 
-// Strict Structured Outputs requires every object to set
-// additionalProperties:false. Because this benchmark uses a fixed test case,
-// pin the two supplied OBD codes here. A production schema for arbitrary code
-// sets should be generated dynamically from the request instead.
-const diagnosisJsonSchema = {
-  name: 'diagnostic_output',
-  strict: true,
-  schema: {
-    type: 'object',
-    properties: {
-      urgency: { type: 'string', enum: ['immediate', 'soon', 'monitor'] },
-      safetyRisk: { type: 'boolean' },
-      primaryCause: { type: 'string' },
-      secondaryCauses: { type: 'array', items: { type: 'string' } },
-      codeExplanations: {
-        type: 'object',
-        properties: {
-          P0300: { type: 'string' },
-          P0171: { type: 'string' }
-        },
-        required: ['P0300', 'P0171'],
-        additionalProperties: false
-      },
-      probability: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            cause: { type: 'string' },
-            likelihood: { type: 'number' }
-          },
-          required: ['cause', 'likelihood'],
-          additionalProperties: false
-        }
-      },
-      knownIssues: { type: 'array', items: { type: 'string' } },
-      repairSteps: { type: 'array', items: { type: 'string' } },
-      proTips: { type: 'array', items: { type: 'string' } },
-      recommendedTests: { type: 'array', items: { type: 'string' } },
-      additionalChecks: { type: 'array', items: { type: 'string' } },
-      estimatedRepairTime: { type: 'string' },
-      notes: { type: 'string' }
-    },
-    required: [
-      'urgency', 'safetyRisk', 'primaryCause', 'secondaryCauses',
-      'codeExplanations', 'probability', 'knownIssues', 'repairSteps',
-      'proTips', 'recommendedTests', 'additionalChecks',
-      'estimatedRepairTime', 'notes'
-    ],
-    additionalProperties: false
-  }
-};
+// The benchmark and production provider path share one canonical semantic
+// contract. The fixed benchmark case supplies its real DTCs here; production
+// derives the same per-code keys from DIAGNOSTIC_EVIDENCE_PACKET_V1.
+const diagnosisJsonSchema = buildDiagnoseJsonSchema(
+  ['P0300', 'P0171'],
+  'diagnostic_output'
+);
 
 async function runModel(groq, model, mode) {
   const started = Date.now();

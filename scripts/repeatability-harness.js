@@ -19,6 +19,7 @@
  */
 
 const Groq = require('groq-sdk');
+const { buildDiagnoseJsonSchema } = require('../src/services/ai/diagnose.schema');
 
 const apiKey = process.env.GROQ_API_KEY;
 if (!apiKey) {
@@ -57,50 +58,9 @@ const codes = ['P0300', 'P0171'];
 // Dynamic per-code strict schema, as discussed — no hardcoded master
 // OBD code list, generated from whatever codes are actually in the case.
 function buildStrictSchema(codeList) {
-  const codeProperties = Object.fromEntries(codeList.map(c => [c, { type: 'string' }]));
   return {
     type: 'json_schema',
-    json_schema: {
-      name: 'diagnostic_output',
-      strict: true,
-      schema: {
-        type: 'object',
-        properties: {
-          urgency: { type: 'string', enum: ['immediate', 'soon', 'monitor'] },
-          safetyRisk: { type: 'boolean' },
-          primaryCause: { type: 'string' },
-          secondaryCauses: { type: 'array', items: { type: 'string' } },
-          codeExplanations: {
-            type: 'object',
-            properties: codeProperties,
-            required: codeList,
-            additionalProperties: false
-          },
-          probability: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: { cause: { type: 'string' }, likelihood: { type: 'number' } },
-              required: ['cause', 'likelihood'],
-              additionalProperties: false
-            }
-          },
-          knownIssues: { type: 'array', items: { type: 'string' } },
-          repairSteps: { type: 'array', items: { type: 'string' } },
-          proTips: { type: 'array', items: { type: 'string' } },
-          recommendedTests: { type: 'array', items: { type: 'string' } },
-          additionalChecks: { type: 'array', items: { type: 'string' } },
-          estimatedRepairTime: { type: 'string' },
-          notes: { type: 'string' }
-        },
-        required: [
-          'urgency', 'safetyRisk', 'primaryCause', 'secondaryCauses', 'codeExplanations',
-          'probability', 'knownIssues', 'repairSteps', 'proTips', 'recommendedTests',
-          'additionalChecks', 'estimatedRepairTime', 'notes'
-        ],
-        additionalProperties: false
-      }
-    }
+    json_schema: buildDiagnoseJsonSchema(codeList, 'diagnostic_output')
   };
 }
 
