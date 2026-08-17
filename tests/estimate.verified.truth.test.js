@@ -87,12 +87,13 @@ function makeVerifiedCase({ rustMultiplier } = {}) {
       result: { primaryCause: 'Engine mount failure', probability: [{ cause: 'Engine mount failure', likelihood: 90 }] },
       evidencePacket
     },
-    tests: [{ name: 'Power-brake mount test', result: 'excessive engine movement', notes: 'mount separates under load' }],
+    tests: [{ id: 'T1', name: 'Power-brake mount test', result: 'excessive engine movement', notes: 'mount separates under load' }],
     verification: {
       confirmed: true,
       confirmedCause: 'Engine mount failure',
       conclusion: 'Movement reproduced and isolated to failed mount',
       notes: 'Confirmed by mechanic',
+      supportingTestIds: ['T1'],
       verifiedAt: '2026-08-15T00:00:00.000Z'
     }
   });
