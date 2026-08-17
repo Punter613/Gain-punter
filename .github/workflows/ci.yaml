@@ -87,8 +87,21 @@ jobs:
         CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
         echo "$CHANGED_FILES"
 
-        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|public/lifecycle\.html$|src/services/(job\.lifecycle|lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/(evidence/unverified\.diagnosis|knowledge/quick\.ask\.(retriever|bounded))\.js$|src/routes/(jobs|jobs\.protected|quick\.ask|vehicle)\.js$)'; then
-          echo "No runtime evidence/lifecycle hot-path changes; Render preview smoke skipped."
+        EVIDENCE_CHANGED=0
+        UNVERIFIED_CHANGED=0
+
+        if echo "$CHANGED_FILES" | grep -Eq '^(api/server\.js$|src/services/(lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/(quick\.ask\.(retriever|bounded)|dtc\.retrieval\.intent)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
+          EVIDENCE_CHANGED=1
+        fi
+
+        if echo "$CHANGED_FILES" | grep -Eq '^(api/server\.js$|public/lifecycle\.html$|src/services/job\.lifecycle\.js$|src/core/evidence/unverified\.diagnosis\.js$|src/routes/(jobs|jobs\.protected)\.js$)'; then
+          UNVERIFIED_CHANGED=1
+        fi
+
+        echo "Runtime canaries: evidence=$EVIDENCE_CHANGED unverified=$UNVERIFIED_CHANGED"
+
+        if [ "$EVIDENCE_CHANGED" != "1" ] && [ "$UNVERIFIED_CHANGED" != "1" ]; then
+          echo "No affected runtime canary lane; Render preview smoke skipped."
           exit 0
         fi
 
@@ -118,17 +131,18 @@ jobs:
           exit 1
         fi
 
-        SMOKE_URL="$PREVIEW_URL/health/preview-evidence?vin=5XXGT4L38LG384941&query=P1326%20knock%20signal%20range%20performance%20flashing%20MIL%20reduced%20power"
-        HTTP_CODE="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/render-evidence-smoke.json -w '%{http_code}' "$SMOKE_URL" || true)"
-        cat /tmp/render-evidence-smoke.json || true
-        echo
+        if [ "$EVIDENCE_CHANGED" = "1" ]; then
+          SMOKE_URL="$PREVIEW_URL/health/preview-evidence?vin=5XXGT4L38LG384941&query=P1326%20knock%20signal%20range%20performance%20flashing%20MIL%20reduced%20power"
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/render-evidence-smoke.json -w '%{http_code}' "$SMOKE_URL" || true)"
+          cat /tmp/render-evidence-smoke.json || true
+          echo
 
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "Render preview evidence smoke failed with HTTP $HTTP_CODE."
-          exit 1
-        fi
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Render preview evidence smoke failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
 
-        HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          HEAD_SHA="$HEAD_SHA" node - <<'NODE'
         const fs = require('fs');
         const smoke = JSON.parse(fs.readFileSync('/tmp/render-evidence-smoke.json', 'utf8'));
         const failures = [];
@@ -138,24 +152,32 @@ jobs:
         if (smoke.quickAsk?.statusCode !== 200) failures.push(`Quick Ask HTTP ${smoke.quickAsk?.statusCode}`);
         if (smoke.quickAsk?.status !== 'SUCCESS') failures.push(`Quick Ask status ${smoke.quickAsk?.status}`);
         if (Number(smoke.quickAsk?.ms || Infinity) > 40000) failures.push(`Quick Ask latency ${smoke.quickAsk?.ms}ms exceeded 40000ms ceiling`);
+        const titles = Array.isArray(smoke.quickAsk?.referenceTitles) ? smoke.quickAsk.referenceTitles : [];
+        if (titles.some(title => /(?:^|\D)1\.6\s*L\b/i.test(String(title)))) failures.push('known 2.4L Optima surfaced explicit 1.6L manual reference');
+        const warnings = Array.isArray(smoke.quickAsk?.warnings) ? smoke.quickAsk.warnings : [];
+        if (!warnings.some(w => /DTC-anchored retrieval active for P1326/i.test(String(w)))) failures.push('P1326 runtime did not enter DTC-anchored retrieval');
         if (failures.length) {
           console.error(failures.join('; '));
           process.exit(1);
         }
-        console.log(`Render runtime smoke passed: decode=${smoke.decode.ms}ms quickAsk=${smoke.quickAsk.ms}ms total=${smoke.totalMs}ms refs=${smoke.quickAsk.repairDiagnosisReferenceCount}`);
+        console.log(`Render evidence smoke passed: decode=${smoke.decode.ms}ms quickAsk=${smoke.quickAsk.ms}ms total=${smoke.totalMs}ms refs=${smoke.quickAsk.repairDiagnosisReferenceCount}`);
         NODE
-
-        UNVERIFIED_URL="$PREVIEW_URL/health/preview-unverified-diagnosis"
-        HTTP_CODE="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/render-unverified-smoke.json -w '%{http_code}' "$UNVERIFIED_URL" || true)"
-        cat /tmp/render-unverified-smoke.json || true
-        echo
-
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "Render preview unverified diagnosis smoke failed with HTTP $HTTP_CODE."
-          exit 1
+        else
+          echo "Evidence/Quick Ask hot path unchanged; evidence canary skipped."
         fi
 
-        HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+        if [ "$UNVERIFIED_CHANGED" = "1" ]; then
+          UNVERIFIED_URL="$PREVIEW_URL/health/preview-unverified-diagnosis"
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/render-unverified-smoke.json -w '%{http_code}' "$UNVERIFIED_URL" || true)"
+          cat /tmp/render-unverified-smoke.json || true
+          echo
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Render preview unverified diagnosis smoke failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          HEAD_SHA="$HEAD_SHA" node - <<'NODE'
         const fs = require('fs');
         const smoke = JSON.parse(fs.readFileSync('/tmp/render-unverified-smoke.json', 'utf8'));
         const failures = [];
@@ -176,3 +198,6 @@ jobs:
         }
         console.log(`Unverified diagnosis runtime smoke passed: fallback=${smoke.fallback.ms}ms state=${smoke.fallback.diagnosisState} estimateBypass=${smoke.estimateBypassAttempt.statusCode} UI=${smoke.ui.hasFallback}`);
         NODE
+        else
+          echo "Unverified-diagnosis/lifecycle hot path unchanged; unverified canary skipped."
+        fi
