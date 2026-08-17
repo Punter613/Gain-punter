@@ -1,5 +1,6 @@
 const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy']);
 const CHARM_HOST = 'charm.li';
+const MANUAL_HOSTS = new Set([...LEMON_HOSTS, CHARM_HOST]);
 const resolutionCache = new Map();
 
 function clean(value) {
@@ -8,6 +9,11 @@ function clean(value) {
 
 function normalize(value) {
   return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function titleCase(value) {
@@ -116,13 +122,13 @@ function extractLinks(html, baseUrl, allowedHosts) {
 
 async function fetchHtml(url, timeoutMs = 9000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
   try {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
         Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.5; manual-path-resolver)'
+        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.6; manual-path-resolver)'
       }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -167,22 +173,50 @@ function buildDirectCandidates(vehicle, host, makeLabels) {
   return candidates;
 }
 
-async function probeRepairUrl(url) {
+function remainingMs(deadline) {
+  if (!deadline) return Number.POSITIVE_INFINITY;
+  return Math.max(0, deadline - Date.now());
+}
+
+function boundedTimeout(deadline, preferredMs) {
+  const preferred = Math.max(1, Number(preferredMs) || 1);
+  const remaining = remainingMs(deadline);
+  if (!Number.isFinite(remaining)) return preferred;
+  if (remaining <= 0) return 0;
+  return Math.max(1, Math.min(preferred, remaining));
+}
+
+function assertBudget(deadline) {
+  if (deadline && remainingMs(deadline) <= 0) {
+    const error = new Error('Manual path resolution time budget exceeded');
+    error.code = 'MANUAL_PATH_RESOLUTION_BUDGET_EXCEEDED';
+    throw error;
+  }
+}
+
+async function probeRepairUrl(url, options = {}) {
+  const timeoutMs = boundedTimeout(options.deadline, positiveNumber(options.timeoutMs, 2500));
+  if (timeoutMs <= 0) return false;
   try {
-    await fetchHtml(url, 7000);
+    await fetchHtml(url, timeoutMs);
     return true;
   } catch (_) {
     return false;
   }
 }
 
-async function findReachableCandidate(entries, batchSize = Number(process.env.LEMON_RESOLVER_PROBE_CONCURRENCY || 4)) {
-  const size = Math.max(1, Math.min(8, Number(batchSize) || 4));
+async function findReachableCandidate(
+  entries,
+  batchSize = Number(process.env.LEMON_RESOLVER_PROBE_CONCURRENCY || 6),
+  options = {}
+) {
+  const size = Math.max(1, Math.min(8, Number(batchSize) || 6));
   for (let offset = 0; offset < entries.length; offset += size) {
+    if (options.deadline && remainingMs(options.deadline) <= 0) return null;
     const batch = entries.slice(offset, offset + size);
     const checked = await Promise.all(batch.map(async entry => ({
       ...entry,
-      reachable: await probeRepairUrl(entry.repairUrl)
+      reachable: await probeRepairUrl(entry.repairUrl, options)
     })));
     const hit = checked.find(entry => entry.reachable);
     if (hit) return hit;
@@ -190,12 +224,52 @@ async function findReachableCandidate(entries, batchSize = Number(process.env.LE
   return null;
 }
 
-async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, source }) {
+function sourceForUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (LEMON_HOSTS.has(host)) return 'LEMON_MANUALS';
+    if (host === CHARM_HOST) return 'CHARM';
+  } catch (_) {}
+  return '';
+}
+
+function validHintUrl(value) {
+  const raw = clean(value);
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (!/^https?:$/.test(parsed.protocol) || !MANUAL_HOSTS.has(parsed.hostname.toLowerCase())) return '';
+    return ensureRepairDiagnosisUrl(parsed.toString());
+  } catch (_) {
+    return '';
+  }
+}
+
+async function resolveFromHint(vehicle, hint, options = {}) {
+  const url = validHintUrl(hint);
+  if (!url) return null;
+
+  const requestedDrive = getVehicleSignals(vehicle).drivetrain;
+  const hintedDrive = classifyDrivetrain(decodeURIComponentSafe(url));
+  if (drivetrainsConflict(requestedDrive, hintedDrive)) return null;
+
+  if (!(await probeRepairUrl(url, options))) return null;
+  return {
+    url,
+    method: 'cached-path-hint',
+    candidate: 'previously resolved manual path',
+    drivetrain: requestedDrive,
+    source: sourceForUrl(url)
+  };
+}
+
+async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, source }, options = {}) {
+  assertBudget(options.deadline);
   const signals = getVehicleSignals(vehicle);
   const directEntries = buildDirectCandidates(vehicle, host, makeLabels)
     .filter(candidate => !(signals.drivetrain && drivetrainsConflict(signals.drivetrain, classifyDrivetrain(candidate.label))))
     .map(candidate => ({ candidate, repairUrl: candidate.url }));
-  const directHit = await findReachableCandidate(directEntries);
+  const directHit = await findReachableCandidate(directEntries, options.probeConcurrency, options);
   if (directHit) {
     return {
       url: directHit.repairUrl,
@@ -207,10 +281,13 @@ async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, sour
   }
 
   for (const make of makeLabels) {
+    assertBudget(options.deadline);
     const yearUrl = `https://${host}/${encodeURIComponent(make)}/${encodeURIComponent(clean(vehicle.year))}/`;
     let html;
     try {
-      html = await fetchHtml(yearUrl);
+      const timeoutMs = boundedTimeout(options.deadline, positiveNumber(options.indexTimeoutMs, 2500));
+      if (timeoutMs <= 0) break;
+      html = await fetchHtml(yearUrl, timeoutMs);
     } catch (_) {
       continue;
     }
@@ -222,10 +299,12 @@ async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, sour
       .sort((a, b) => b.score - a.score);
 
     const rankedHit = await findReachableCandidate(
-      ranked.slice(0, 12).map(candidate => ({
+      ranked.slice(0, positiveNumber(options.maxRankedCandidates, 12)).map(candidate => ({
         candidate,
         repairUrl: ensureRepairDiagnosisUrl(candidate.url)
-      }))
+      })),
+      options.probeConcurrency,
+      options
     );
     if (rankedHit) {
       return {
@@ -243,10 +322,26 @@ async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, sour
   throw new Error(`No matching ${source} vehicle folder found`);
 }
 
-async function resolveRepairDiagnosisUrlUncached(vehicle = {}) {
+async function resolveRepairDiagnosisUrlUncached(vehicle = {}, options = {}) {
   if (!vehicle.make || !vehicle.year || !vehicle.model) {
     throw new Error('Vehicle make, year, and model are required for Repair & Diagnosis path resolution');
   }
+
+  const maxElapsedMs = positiveNumber(
+    options.maxElapsedMs ?? process.env.LEMON_RESOLVER_MAX_ELAPSED_MS,
+    10000
+  );
+  const deadline = Date.now() + maxElapsedMs;
+  const sharedOptions = {
+    ...options,
+    deadline,
+    timeoutMs: positiveNumber(options.probeTimeoutMs ?? process.env.LEMON_RESOLVER_PROBE_TIMEOUT_MS, 2500),
+    indexTimeoutMs: positiveNumber(options.indexTimeoutMs ?? process.env.LEMON_RESOLVER_INDEX_TIMEOUT_MS, 2500),
+    probeConcurrency: positiveNumber(options.probeConcurrency ?? process.env.LEMON_RESOLVER_PROBE_CONCURRENCY, 6)
+  };
+
+  const hinted = await resolveFromHint(vehicle, options.hint, sharedOptions);
+  if (hinted) return hinted;
 
   const make = titleCase(vehicle.make);
   let lemonError;
@@ -256,30 +351,31 @@ async function resolveRepairDiagnosisUrlUncached(vehicle = {}) {
       makeLabels: [make],
       allowedHosts: LEMON_HOSTS,
       source: 'LEMON_MANUALS'
-    });
+    }, sharedOptions);
   } catch (error) {
     lemonError = error;
   }
 
+  assertBudget(deadline);
   try {
     return await resolveFromSource(vehicle, {
       host: CHARM_HOST,
       makeLabels: [make, `${make} Truck`],
       allowedHosts: new Set([CHARM_HOST]),
       source: 'CHARM'
-    });
+    }, sharedOptions);
   } catch (charmError) {
     throw new Error(`LEMON failed (${lemonError.message}); CHARM failed (${charmError.message})`);
   }
 }
 
-async function resolveRepairDiagnosisUrl(vehicle = {}) {
+async function resolveRepairDiagnosisUrl(vehicle = {}, options = {}) {
   const key = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim, vehicle.engine, vehicle.engineCylinders, vehicle.drivetrain, vehicle.driveType]
     .map(normalize)
     .join('|');
 
   if (!resolutionCache.has(key)) {
-    resolutionCache.set(key, resolveRepairDiagnosisUrlUncached(vehicle).catch(error => {
+    resolutionCache.set(key, resolveRepairDiagnosisUrlUncached(vehicle, options).catch(error => {
       resolutionCache.delete(key);
       throw error;
     }));
@@ -290,11 +386,16 @@ async function resolveRepairDiagnosisUrl(vehicle = {}) {
 
 module.exports = {
   resolveRepairDiagnosisUrl,
+  resolveRepairDiagnosisUrlUncached,
+  resolveFromHint,
   scoreVehicleFolderCandidate,
   getVehicleSignals,
   classifyDrivetrain,
   drivetrainsConflict,
   buildVehicleLabels,
   buildDirectCandidates,
-  findReachableCandidate
+  findReachableCandidate,
+  validHintUrl,
+  remainingMs,
+  boundedTimeout
 };
