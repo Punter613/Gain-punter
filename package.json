@@ -13,7 +13,7 @@
     "test:lifecycle": "node --test tests/lifecycle.http.test.js",
     "test:measurements": "node --test tests/measurement.normalizer.test.js tests/measurement.tag.integration.test.js",
     "test:evidence": "node --test tests/nhtsa.tsb.corpus.test.js",
-    "test:quick-ask": "node scripts/test-lemon-path-resolver.js && node --test tests/quick.ask.retriever.test.js tests/quick.ask.bounded.test.js tests/quick.ask.tuned.scraper.test.js tests/lemon-targeted-evidence.scrape.test.js tests/lemon.live-latency.test.js tests/vin.decode.latency.test.js",
+    "test:quick-ask": "node scripts/test-lemon-path-resolver.js && node --test tests/quick.ask.retriever.test.js tests/quick.ask.bounded.test.js tests/quick.ask.tuned.scraper.test.js tests/quick.ask.dtc.anchor.test.js tests/lemon-targeted-evidence.scrape.test.js tests/lemon.live-latency.test.js tests/vin.decode.latency.test.js",
     "test:diagnose-pipeline": "node --test tests/diagnose.pipeline.contract.test.js",
     "test:evidence-packet": "node --test tests/diagnostic.evidence.packet.test.js tests/diagnostic.evidence.packet.route.test.js",
     "test:verified-case": "node --test tests/verified.case.handoff.test.js tests/lifecycle.http.test.js",
