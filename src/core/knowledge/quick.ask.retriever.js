@@ -86,26 +86,21 @@ class QuickAskRetriever {
     const qt = tokens(query);
     const matched = activeTrustedExamples(data || [])
       .filter(row => vehicleMatches(vehicleFromExample(row), vehicle))
-      .filter(row => {
-        const result = norm(row.labels?.mechanicAssessment?.diagnosisCorrect);
-        return result === 'correct';
-      })
+      .filter(row => norm(row.labels?.mechanicAssessment?.diagnosisCorrect) === 'correct')
       .map(row => ({ row, cause: causeFromExample(row), relevance: overlapScore(repairText(row), qt) }))
-      .filter(x => x.cause)
-      .filter(x => !qt.length || x.relevance > 0);
+      .filter(x => x.cause);
 
     const groups = new Map();
     for (const item of matched) {
       const key = norm(item.cause);
-      const g = groups.get(key) || { cause: item.cause, count: 0, jobIds: [], relevance: 0 };
+      const g = groups.get(key) || { cause: item.cause, count: 0, relevance: 0 };
       g.count += 1;
       g.relevance = Math.max(g.relevance, item.relevance);
-      g.jobIds.push(item.row.request_id);
       groups.set(key, g);
     }
     const total = matched.length;
     const ranked = [...groups.values()]
-      .sort((a,b) => b.count - a.count || b.relevance - a.relevance)
+      .sort((a,b) => b.relevance - a.relevance || b.count - a.count)
       .slice(0, limit)
       .map(g => ({
         cause: g.cause,
