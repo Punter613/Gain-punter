@@ -18,6 +18,8 @@ function fakeClient(tables) {
   };
 }
 
+const noManual = async () => ({ source: 'LEMON_MANUALS', items: [] });
+
 function trusted({ id, job, cause, result = 'correct', correctionCount = 0, createdAt = '2026-08-17T00:00:00Z' }) {
   return {
     id,
@@ -45,7 +47,7 @@ test('Quick Ask keeps TSB evidence separate from confirmed-repair share', async 
       trusted({ id: 'c', job: 'J3', cause: 'Idler pulley bearing' })
     ]
   });
-  const out = await new QuickAskRetriever(client).ask({
+  const out = await new QuickAskRetriever(client, noManual).ask({
     vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
     query: 'whining when ac is on'
   });
@@ -72,7 +74,7 @@ test('Quick Ask filters unrelated vehicle evidence for an A/C clutch query', asy
     ]
   });
 
-  const out = await new QuickAskRetriever(client).ask({
+  const out = await new QuickAskRetriever(client, noManual).ask({
     vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
     query: 'ac clutch'
   });
@@ -80,6 +82,42 @@ test('Quick Ask filters unrelated vehicle evidence for an A/C clutch query', asy
   assert.deepEqual(out.publishedEvidence.map(x => x.bulletin_number), ['AC-1']);
   assert.equal(out.confirmedRepairSampleSize, 1);
   assert.deepEqual(out.commonConfirmedRepairs.map(x => x.cause), ['A/C compressor clutch bearing']);
+});
+
+test('Quick Ask returns relevant Repair and Diagnosis references separately', async () => {
+  const client = fakeClient({ vehicle_tsb_corpus: [], feedback_examples: [] });
+  const manualProvider = async () => ({
+    source: 'CHARM',
+    fromCache: false,
+    items: [
+      {
+        title: 'Compressor Clutch Relay — 2008 Kia Sorento Service Manual',
+        url: 'https://charm.li/Kia/2008/Sorento%204WD%20V6-3.8L/Repair%20and%20Diagnosis/Relays%20and%20Modules/HVAC/Compressor%20Clutch%20Relay/',
+        meta: { headings: 'Repair and Diagnosis | HVAC | Compressor Clutch Relay', snippet: 'Heating and air conditioning compressor clutch relay testing and inspection.', matchedKeywords: 'air conditioning, hvac, compressor clutch', facts: '{}' }
+      },
+      {
+        title: 'Steering Rack Inspection',
+        url: 'https://charm.li/example/steering',
+        meta: { headings: 'Steering', snippet: 'Inspect steering rack bushings for play.', matchedKeywords: 'steering', facts: '{}' }
+      },
+      {
+        title: 'Technical Service Bulletin - Engine Controls',
+        url: 'https://charm.li/example/tsb',
+        meta: { headings: 'Technical Service Bulletins', snippet: 'Service bulletin for throttle control.', matchedKeywords: 'tsb', facts: '{}' }
+      }
+    ]
+  });
+
+  const out = await new QuickAskRetriever(client, manualProvider).ask({
+    vehicle: { year: 2008, make: 'Kia', model: 'Sorento', engine: 'V6-3.8L' },
+    query: 'ac clutch'
+  });
+
+  assert.equal(out.repairDiagnosisEvidence.length, 1);
+  assert.equal(out.repairDiagnosisEvidence[0].source, 'CHARM');
+  assert.match(out.repairDiagnosisEvidence[0].title, /compressor clutch relay/i);
+  assert.doesNotMatch(out.repairDiagnosisEvidence[0].title, /steering|bulletin/i);
+  assert.equal(out.repairDiagnosisSource, 'CHARM');
 });
 
 test('Quick Ask dedupes corrected trusted outcomes and ignores wrong outcomes', async () => {
@@ -91,7 +129,7 @@ test('Quick Ask dedupes corrected trusted outcomes and ignores wrong outcomes', 
       trusted({ id: 'wrong', job: 'J2', cause: 'Wheel bearing', result: 'wrong' })
     ]
   });
-  const out = await new QuickAskRetriever(client).ask({
+  const out = await new QuickAskRetriever(client, noManual).ask({
     vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
     query: ''
   });
@@ -100,8 +138,9 @@ test('Quick Ask dedupes corrected trusted outcomes and ignores wrong outcomes', 
   assert.equal(out.commonConfirmedRepairs.length, 1);
   assert.equal(out.commonConfirmedRepairs[0].cause, 'Brake caliper sticking');
   assert.equal(out.commonConfirmedRepairs[0].observedRepairShare, 1);
+  assert.deepEqual(out.repairDiagnosisEvidence, []);
   assert.deepEqual(out.publishedEvidence, []);
-  assert.match(out.warnings.join(' '), /published evidence is not ranked without a query/i);
+  assert.match(out.warnings.join(' '), /manual evidence are not ranked without a query/i);
 });
 
 test('Quick Ask collapses duplicate drivetrain bulletin copies and cleans LEMON text', async () => {
@@ -115,7 +154,7 @@ test('Quick Ask collapses duplicate drivetrain bulletin copies and cleans LEMON 
     feedback_examples: []
   });
 
-  const out = await new QuickAskRetriever(client).ask({
+  const out = await new QuickAskRetriever(client, noManual).ask({
     vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
     query: 'P2135 throttle position sensor'
   });
@@ -129,5 +168,5 @@ test('Quick Ask collapses duplicate drivetrain bulletin copies and cleans LEMON 
 
 test('Quick Ask requires make and model', async () => {
   const client = fakeClient({ vehicle_tsb_corpus: [], feedback_examples: [] });
-  await assert.rejects(() => new QuickAskRetriever(client).ask({ vehicle: { make: 'Kia' } }), /requires vehicle\.make and vehicle\.model/);
+  await assert.rejects(() => new QuickAskRetriever(client, noManual).ask({ vehicle: { make: 'Kia' } }), /requires vehicle\.make and vehicle\.model/);
 });
