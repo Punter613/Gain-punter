@@ -129,6 +129,14 @@ app.get('/fleet', (req, res) => res.sendFile(path.join(__dirname, '../public/fle
 app.get('/lifecycle', (req, res) => res.sendFile(path.join(__dirname, '../public/lifecycle.html')));
 app.use(express.static(path.join(__dirname, '../public')));
 
+function evidenceRetrievalProfile() {
+  return {
+    vinWarmup: 'stored-only',
+    manualPathResolutionBudgetMs: Number(process.env.LEMON_RESOLVER_MAX_ELAPSED_MS || 10000),
+    liveManualCrawlBudgetMs: Number(process.env.LEMON_LIVE_MAX_ELAPSED_MS || 20000)
+  };
+}
+
 // 6. HEALTH & SYSTEM MONITORING TELEMETRY
 app.get('/health', async (req, res) => {
   const health = { ok: true, timestamp: new Date().toISOString() };
@@ -140,6 +148,7 @@ app.get('/health', async (req, res) => {
   }
   health.stripe = process.env.STRIPE_SECRET_KEY ? 'configured' : 'not configured';
   health.groq = process.env.GROQ_API_KEY ? 'configured' : 'not configured';
+  health.evidenceRetrieval = evidenceRetrievalProfile();
   if (process.env.IS_PULL_REQUEST === 'true') {
     health.preview = {
       commit: process.env.RENDER_GIT_COMMIT || null,
@@ -199,7 +208,8 @@ if (process.env.IS_PULL_REQUEST === 'true') {
           commit: process.env.RENDER_GIT_COMMIT || null,
           branch: process.env.RENDER_GIT_BRANCH || null,
           service: process.env.RENDER_SERVICE_NAME || null,
-          isPullRequest: process.env.IS_PULL_REQUEST
+          isPullRequest: process.env.IS_PULL_REQUEST,
+          evidenceRetrieval: evidenceRetrievalProfile()
         },
         decode: {
           statusCode: decodeResponse.status,
@@ -271,9 +281,13 @@ try {
 // 9. NETWORK PORT BIND LISTEN ENGINE
 const port = process.env.PORT || 3000;
 const server = app.listen(port, () => {
+  const retrieval = evidenceRetrievalProfile();
   console.log(`[Server] SKSK ProTech running inside API framework layer on port ${port}`);
   console.log(`[Server] Testing Target Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log('[Server] Evidence retrieval profile: stored-only VIN warmup; live manual crawl deferred to diagnostic context');
+  console.log(
+    `[Server] Evidence retrieval profile: stored-only VIN warmup; ` +
+    `manual path <=${retrieval.manualPathResolutionBudgetMs}ms; live crawl <=${retrieval.liveManualCrawlBudgetMs}ms`
+  );
   console.log(`[Server] Active Status Framework Endpoint: http://localhost:${port}/health`);
 });
 
