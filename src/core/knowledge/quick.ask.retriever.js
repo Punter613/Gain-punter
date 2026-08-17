@@ -5,9 +5,40 @@
 const { supabase: defaultSupabase } = require('../../db');
 
 const STOP = new Set(['the','a','an','and','or','of','to','in','on','for','with','is','it','this','that','what','would','could','cause','causes','issue','issues','problem','problems','most','common']);
+const LEMON_SHELL = /(?:\bservice manual\s*[~\-]?\s*lemon manuals\b|\blemon manuals\s*:\s*even more car manuals\b|\bhome\s*>>|\bjuly\s+1\s*:\s*so it begins\b)/i;
 
 function clean(v) { return String(v ?? '').trim(); }
 function norm(v) { return clean(v).toLowerCase().replace(/\s+/g, ' '); }
+function decodeHtmlEntities(v) {
+  return clean(v)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+}
+function cleanEvidenceText(v, max = 320) {
+  let text = decodeHtmlEntities(v)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/[\t\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const shell = text.search(LEMON_SHELL);
+  if (shell > 0) text = text.slice(0, shell).trim();
+  text = text.replace(/\s+-\s+Description\s+/i, ' — ').replace(/^Description\s+/i, '');
+  if (text.length > max) text = `${text.slice(0, max - 1).trimEnd()}…`;
+  return text;
+}
+function cleanBulletinDate(v) {
+  const text = cleanEvidenceText(v, 120);
+  const iso = text.match(/\b\d{4}-\d{2}-\d{2}\b/);
+  if (iso) return iso[0];
+  const named = text.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/i);
+  return named ? named[0] : text;
+}
 function tokens(v) {
   return [...new Set(norm(v).replace(/[^a-z0-9]+/g, ' ').split(' ').filter(t => t.length > 2 && !STOP.has(t)))];
 }
@@ -52,6 +83,25 @@ function activeTrustedExamples(rows = []) {
   }
   return [...latestByJob.values()];
 }
+function bulletinKey(row = {}) {
+  const number = norm(row.bulletin_number);
+  if (number) return `number:${number}`;
+  return `fallback:${norm(row.subject || row.title)}|${cleanBulletinDate(row.bulletin_date)}`;
+}
+function normalizeTsbRow(row = {}) {
+  const body = cleanEvidenceText(row.body_text, 320);
+  return {
+    ...row,
+    title: cleanEvidenceText(row.title, 180),
+    bulletin_number: cleanEvidenceText(row.bulletin_number, 80),
+    bulletin_date: cleanBulletinDate(row.bulletin_date),
+    group_name: cleanEvidenceText(row.group_name, 120),
+    subject: cleanEvidenceText(row.subject, 220),
+    body_text: body,
+    source: cleanEvidenceText(row.source, 80),
+    source_url: clean(row.source_url)
+  };
+}
 
 class QuickAskRetriever {
   constructor(client = defaultSupabase) {
@@ -60,18 +110,38 @@ class QuickAskRetriever {
 
   async _tsbs(vehicle, query, limit) {
     if (!this.client) return [];
+    const qt = tokens(query);
+    if (!qt.length) return [];
     let q = this.client.from('vehicle_tsb_corpus').select('year,make,model,title,bulletin_number,bulletin_date,group_name,subject,body_text,source,source_url');
     if (vehicle.year) q = q.eq('year', Number(vehicle.year));
     if (vehicle.make) q = q.ilike('make', clean(vehicle.make));
     if (vehicle.model) q = q.ilike('model', clean(vehicle.model));
     const { data, error } = await q.limit(250);
     if (error) throw new Error(`vehicle_tsb_corpus lookup failed: ${error.message}`);
-    const qt = tokens(query);
-    return (data || [])
-      .map(row => ({ ...row, relevance: overlapScore([row.title,row.group_name,row.subject,row.body_text].join(' '), qt) }))
-      .sort((a,b) => b.relevance - a.relevance || String(b.bulletin_date || '').localeCompare(String(a.bulletin_date || '')))
+
+    const scored = (data || []).map(raw => {
+      const row = normalizeTsbRow(raw);
+      const relevance = overlapScore([row.title,row.group_name,row.subject,row.body_text].join(' '), qt);
+      return { row, relevance };
+    });
+
+    const bestByBulletin = new Map();
+    for (const item of scored) {
+      const key = bulletinKey(item.row);
+      const current = bestByBulletin.get(key);
+      const itemDate = String(item.row.bulletin_date || '');
+      const currentDate = String(current?.row?.bulletin_date || '');
+      const better = !current ||
+        item.relevance > current.relevance ||
+        (item.relevance === current.relevance && itemDate > currentDate) ||
+        (item.relevance === current.relevance && itemDate === currentDate && item.row.body_text.length > current.row.body_text.length);
+      if (better) bestByBulletin.set(key, item);
+    }
+
+    return [...bestByBulletin.values()]
+      .sort((a,b) => b.relevance - a.relevance || String(b.row.bulletin_date || '').localeCompare(String(a.row.bulletin_date || '')))
       .slice(0, limit)
-      .map(({ relevance, ...row }) => row);
+      .map(({ row }) => row);
   }
 
   async _confirmedRepairs(vehicle, query, limit) {
@@ -117,25 +187,31 @@ class QuickAskRetriever {
     if (!clean(vehicle.make) || !clean(vehicle.model)) {
       throw new Error('Quick Ask requires vehicle.make and vehicle.model');
     }
+    const queryText = clean(query);
     const [repairs, tsbs] = await Promise.all([
-      this._confirmedRepairs(vehicle, query, capped),
-      this._tsbs(vehicle, query, capped)
+      this._confirmedRepairs(vehicle, queryText, capped),
+      this._tsbs(vehicle, queryText, capped)
     ]);
+    const warnings = [
+      'Observed repair share is not diagnostic probability.',
+      'Published TSB frequency is not repair probability.',
+      'Quick Ask does not verify a fault or unlock repair authorization.'
+    ];
+    if (!tokens(queryText).length) {
+      warnings.unshift('No question or symptom text was provided; published evidence is not ranked without a query.');
+    }
     return {
       status: 'SUCCESS',
       mode: 'RETRIEVAL_ONLY',
+      queryMode: tokens(queryText).length ? 'QUERY' : 'VEHICLE_ONLY',
       vehicle: { year: vehicle.year || null, make: clean(vehicle.make), model: clean(vehicle.model), engine: clean(vehicle.engine) || null },
-      query: clean(query),
+      query: queryText,
       commonConfirmedRepairs: repairs.ranked,
       confirmedRepairSampleSize: repairs.sampleSize,
       publishedEvidence: tsbs,
-      warnings: [
-        'Observed repair share is not diagnostic probability.',
-        'Published TSB frequency is not repair probability.',
-        'Quick Ask does not verify a fault or unlock repair authorization.'
-      ]
+      warnings
     };
   }
 }
 
-module.exports = { QuickAskRetriever, tokens, activeTrustedExamples, vehicleMatches, causeFromExample };
+module.exports = { QuickAskRetriever, tokens, activeTrustedExamples, vehicleMatches, causeFromExample, cleanEvidenceText, cleanBulletinDate, bulletinKey, normalizeTsbRow };
