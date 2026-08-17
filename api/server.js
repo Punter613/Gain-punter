@@ -105,10 +105,6 @@ app.use('/api/fleet', fleetRouter);
 app.use('/api/vehicle', vehicleRouter);
 app.use(oemRouter);
 
-// TEMPORARY: Render executes the head-to-head once at boot using its existing
-// GROQ_API_KEY. This GET route exposes only the finished comparison result.
-app.use('/api/internal/model-compare-result', require('../src/routes/model-compare-result'));
-
 // ─── SKSK MODULE REBUILD ADDITIONS (As Clean Side-by-Side Lanes) ───
 app.use('/api/intelligence', require('../src/routes/intelligence.routes'));
 app.use('/api/buyer', require('../src/routes/buyer'));
