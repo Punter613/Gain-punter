@@ -4,6 +4,7 @@ const {
   buildVerifiedEstimateSnapshot,
   assertVerifiedEstimateSnapshot
 } = require('../core/evidence/verified.estimate.snapshot');
+const { buildUnverifiedDiagnosis } = require('../core/evidence/unverified.diagnosis');
 
 const VALID_STATES = new Set([
   'DIAGNOSING', 'TESTING', 'VERIFIED', 'ESTIMATED', 'INVOICED', 'DIAG_FAILED',
@@ -110,12 +111,6 @@ async function getJob(jobId) {
   }
 }
 
-// Drops the in-memory cached copy of a job so the next getJob() call is
-// forced to re-read from Supabase. Needed after any write that bypasses
-// persist() (like record_job_outcome_event's direct SQL update to
-// service_jobs) - without this, getJob() would keep returning the stale
-// pre-write copy it cached on an earlier call, even though the DB itself
-// is already correct.
 function invalidateJobCache(jobId) {
   delete memoryStore()[jobId];
 }
@@ -137,6 +132,7 @@ async function createJob(input = {}) {
       obdCodes: input.obdCodes || input.codes || []
     },
     diagnosis: null,
+    unverifiedDiagnosis: null,
     tests: [],
     verification: null,
     estimate: null,
@@ -166,6 +162,21 @@ async function recordDiagnosisFailure(jobId, error) {
     status: 'DIAG_FAILED',
     diagnosis: { error: String(error || 'Diagnosis failed'), recordedAt: nowIso() }
   });
+}
+
+async function recordUnverifiedDiagnosis(jobId) {
+  const job = await getJob(jobId);
+  if (!job) return null;
+  if (!job.diagnosis?.result) throw new Error('Diagnosis must exist before requesting an unverified diagnosis');
+  if (!['TESTING', 'DIAGNOSING'].includes(job.status)) {
+    throw new Error(`Unverified diagnosis is unavailable while job is ${job.status}`);
+  }
+
+  const unverifiedDiagnosis = buildUnverifiedDiagnosis(job, nowIso());
+  job.unverifiedDiagnosis = unverifiedDiagnosis;
+  job.updatedAt = nowIso();
+  await persist(job);
+  return job;
 }
 
 async function addTest(jobId, test = {}) {
@@ -250,6 +261,13 @@ async function verifyJob(jobId, verification = {}) {
     notes: clean(verification.notes),
     verifiedAt: nowIso()
   };
+  if (job.unverifiedDiagnosis?.state === 'UNVERIFIED_DIAGNOSIS') {
+    job.unverifiedDiagnosis = {
+      ...job.unverifiedDiagnosis,
+      supersededBy: 'VERIFIED_CASE',
+      supersededAt: nowIso()
+    };
+  }
   job.status = 'VERIFIED';
   job.updatedAt = nowIso();
   await persist(job);
@@ -319,6 +337,7 @@ module.exports = {
   patchJob,
   recordDiagnosis,
   recordDiagnosisFailure,
+  recordUnverifiedDiagnosis,
   addTest,
   verifyJob,
   attachEstimate,
