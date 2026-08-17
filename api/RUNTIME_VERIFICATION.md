@@ -9,7 +9,9 @@ The PR preview exposes `IS_PULL_REQUEST=true` canaries through `api/server.js`:
 - `/health/preview-evidence` — exercises VIN decode plus the real Quick Ask evidence route with the 2020 Kia Optima 2.4L / P1326 canary.
 - `/health/preview-unverified-diagnosis` — seeds a disposable TESTING job, calls the real `POST /api/jobs/:id/unverified-diagnosis`, attempts an Estimate bypass, and verifies the rendered lifecycle UI.
 
-For DTC-anchored Quick Ask changes, `/health/preview-evidence` must run on the exact PR head so the real `POST /api/quick-ask` route executes the branch code. Unit regressions separately assert that P1326 enters DTC-anchored retrieval, generic `engine` references do not satisfy the DTC gate, and a known 2.4L Optima cannot surface an explicitly 1.6L manual page.
+CI selects canaries by the subsystem changed in the PR rather than making every runtime-sensitive PR depend on every unrelated canary. Evidence/Quick Ask/VIN/scraper changes run the evidence canary. Unverified-diagnosis/job-lifecycle/frontend fallback changes run the unverified canary. A change to `api/server.js` runs both because it owns both preview routes. All selected lanes still wait for `/health` to report the **exact PR head** before execution.
+
+For DTC-anchored Quick Ask changes, `/health/preview-evidence` must run on the exact PR head so the real `POST /api/quick-ask` route executes the branch code. The runtime assertion requires P1326 to report DTC-anchored retrieval and rejects any returned reference title that explicitly names 1.6L for the decoded 2.4L Optima. Unit regressions additionally assert that generic `engine` references do not satisfy the DTC gate, multiple codes remain independent, and unknown codes fall back without invented meanings.
 
 The unverified-diagnosis canary passes only when:
 
@@ -20,4 +22,4 @@ The unverified-diagnosis canary passes only when:
 - the Estimate bypass attempt returns HTTP 409; and
 - the lifecycle page contains the explicit unverified-diagnosis warning/action.
 
-`.github/workflows/ci.yaml` waits for `/health` to report the exact PR head before running these canaries. A green unit-test run against a stale preview is not sufficient for merge.
+`.github/workflows/ci.yaml` waits for `/health` to report the exact PR head before running each selected canary. A green unit-test run against a stale preview is not sufficient for merge.
