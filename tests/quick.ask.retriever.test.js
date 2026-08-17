@@ -99,6 +99,33 @@ test('Quick Ask filters unrelated vehicle evidence for an A/C clutch query', asy
   assert.deepEqual(out.commonConfirmedRepairs.map(x => x.cause), ['A/C compressor clutch bearing']);
 });
 
+test('Quick Ask long warm-up complaint rejects one-token junk and prioritizes exact DTC evidence', async () => {
+  const tucson = { year: 2005, make: 'Hyundai', model: 'Tucson' };
+  const client = fakeClient({
+    vehicle_tsb_corpus: [
+      { id: '1', ...tucson, title: 'A/T harsh delayed engagement', bulletin_number: 'AT-OLD', bulletin_date: '2007-09-01', group_name: 'Transmission', subject: 'Harsh engagement into drive or reverse', body_text: 'Automatic transaxle may engage harshly into drive.', source: 'LEMON_MANUALS', source_url: 'lemon://at' },
+      { id: '2', ...tucson, title: 'ECM PCM VIN writing', bulletin_number: 'ECM-VIN', bulletin_date: '2004-10-01', group_name: 'Engine Controls', subject: 'ECM and PCM VIN writing', body_text: 'Procedure for engine control module replacement.', source: 'LEMON_MANUALS', source_url: 'lemon://ecm' },
+      { id: '3', ...tucson, title: 'Tucson P0171 P0174 system too lean', bulletin_number: '08-FL-006', bulletin_date: '2008-05-01', group_name: 'Engine', subject: 'Tucson P0171 P0174 system too lean', body_text: 'Inspect air filter housings for 2.0L and 2.7L engines when P0171 or P0174 is present.', source: 'NHTSA_BULK', source_url: 'nhtsa://08-FL-006' }
+    ],
+    feedback_examples: [
+      trusted({
+        id: 'weak-engine-only', job: 'HY-1',
+        cause: 'Severe engine cooling system fluid loss resulting in critical thermal overload and engine overheating',
+        vehicle: tucson
+      })
+    ]
+  });
+
+  const out = await new QuickAskRetriever(client, noManual).ask({
+    vehicle: { ...tucson, engine: '2.7L V6' },
+    query: 'smoke from under the hood when i drive some distance and engine warms up P0300 P0171'
+  });
+
+  assert.deepEqual(out.publishedEvidence.map(x => x.bulletin_number), ['08-FL-006']);
+  assert.deepEqual(out.commonConfirmedRepairs, []);
+  assert.equal(out.confirmedRepairSampleSize, 0);
+});
+
 test('Quick Ask ranks relevant TSBs beyond the first 250 vehicle rows', async () => {
   const filler = Array.from({ length: 275 }, (_, i) => ({
     id: String(i).padStart(4, '0'),
