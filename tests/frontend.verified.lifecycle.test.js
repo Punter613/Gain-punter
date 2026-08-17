@@ -42,8 +42,10 @@ test('lifecycle restores explicit VIN decode autofill and customer-to-tech trans
   assert.match(serverSource, /app\.use\('\/api\/vehicle'/);
 });
 
-test('translator keywords feed diagnosis evidence and Customer States fallback Quick Ask retrieval', () => {
+test('normalizer preserves raw customer words while sending normalized symptom context and keywords', () => {
   assert.match(html, /function translatedSymptomContext\(\)/);
+  assert.match(html, /customerStates:lines\(rawCustomerStates\)/);
+  assert.match(html, /symptoms:translated\.translation\?lines\(translated\.translation\):\[\]/);
   assert.match(html, /keywords:translated\.keywords/);
   assert.match(html, /const retrievalQuery=\[query,translatedContext,keywordContext,codeContext\]/);
 });
