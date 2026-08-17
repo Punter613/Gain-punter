@@ -19,7 +19,8 @@ const SOUND_ALIASES = {
 // shared observation trigger detector so there is one deterministic definition.
 const CONDITION_ALIASES = {
   cold_start: ['cold start', 'cold startup', 'first start', 'startup cold'],
-  hot: ['hot', 'warm', 'at operating temperature'],
+  hot: ['hot'],
+  operating_temperature: ['warm', 'warmed up', 'warms up', 'after warmup', 'after warm up', 'once warm', 'once warmed up', 'at operating temperature', 'operating temperature'],
   idle: ['idle', 'idling', 'at a stop'],
   steady_cruise: ['steady cruise', 'cruising', 'light throttle', 'highway cruise'],
   full_lock: ['full lock', 'full steering lock', 'steering lock', 'wheel turned all the way', 'turned all the way'],
@@ -124,11 +125,20 @@ function extractDtcs(value) {
   return [...new Set(matches)];
 }
 
+function aliasMatches(normalizedText, alias) {
+  const needle = normalizeText(alias);
+  if (!needle) return false;
+  const escaped = needle
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\s+/g, '\\s+');
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i').test(normalizedText);
+}
+
 function collectAliases(text, map) {
   const normalized = normalizeText(text);
   const found = [];
   for (const [canonical, aliases] of Object.entries(map)) {
-    if (aliases.some(alias => normalized.includes(normalizeText(alias)))) found.push(canonical);
+    if (aliases.some(alias => aliasMatches(normalized, alias))) found.push(canonical);
   }
   return found;
 }
@@ -241,5 +251,6 @@ module.exports = {
   classifyManualSection,
   buildCanonicalSearchTerms,
   sectionPathText,
-  COMPONENT_ALIASES
+  COMPONENT_ALIASES,
+  aliasMatches
 };
