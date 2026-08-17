@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getJob, patchJob, addTest, verifyJob } = require('../services/job.lifecycle');
+const { getJob, patchJob, addTest, verifyJob, recordUnverifiedDiagnosis } = require('../services/job.lifecycle');
 const { buildVerifiedCase } = require('../core/evidence/verified.case');
 const {
   buildRepairCompletedEvent,
@@ -22,9 +22,35 @@ router.get('/:id', async (req, res) => {
     status: job.status,
     job,
     result: job.diagnosis?.result || job.result || null,
+    unverifiedDiagnosis: job.unverifiedDiagnosis || null,
     estimate: job.estimate || null,
     invoice: job.invoice || null
   });
+});
+
+router.post('/:id/unverified-diagnosis', async (req, res) => {
+  try {
+    const job = await recordUnverifiedDiagnosis(req.params.id);
+    if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
+
+    return res.json({
+      success: true,
+      jobId: job.jobId,
+      status: job.status,
+      diagnosisState: job.unverifiedDiagnosis?.state || 'UNVERIFIED_DIAGNOSIS',
+      unverifiedDiagnosis: job.unverifiedDiagnosis,
+      verifiedCase: job.verifiedCase || null,
+      estimateReady: false
+    });
+  } catch (err) {
+    return res.status(409).json({
+      success: false,
+      error: err.message,
+      jobId: req.params.id,
+      status: 'TESTING',
+      estimateReady: false
+    });
+  }
 });
 
 router.post('/:id/tests', async (req, res) => {
@@ -112,11 +138,6 @@ router.post('/:id/outcome', async (req, res) => {
     await recordOutcomeEvent(event);
     const updated = await getJob(req.params.id);
 
-    // This is the actual outcome -> learning-corpus binding #91 exists to
-    // add - the event above is durable truth regardless of what happens
-    // here, so a failure in this step doesn't fail the request or lose
-    // the recorded outcome. It's surfaced in the response instead of
-    // swallowed, so a broken ingestion path doesn't go unnoticed.
     let learningIngested = false;
     let learningError = null;
     try {

@@ -87,8 +87,8 @@ jobs:
         CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
         echo "$CHANGED_FILES"
 
-        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|src/services/(lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/quick\.ask\.(retriever|bounded)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
-          echo "No runtime evidence hot-path changes; Render preview smoke skipped."
+        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|public/lifecycle\.html$|src/services/(job\.lifecycle|lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/(evidence/unverified\.diagnosis|knowledge/quick\.ask\.(retriever|bounded))\.js$|src/routes/(jobs|jobs\.protected|quick\.ask|vehicle)\.js$)'; then
+          echo "No runtime evidence/lifecycle hot-path changes; Render preview smoke skipped."
           exit 0
         fi
 
@@ -143,4 +143,36 @@ jobs:
           process.exit(1);
         }
         console.log(`Render runtime smoke passed: decode=${smoke.decode.ms}ms quickAsk=${smoke.quickAsk.ms}ms total=${smoke.totalMs}ms refs=${smoke.quickAsk.repairDiagnosisReferenceCount}`);
+        NODE
+
+        UNVERIFIED_URL="$PREVIEW_URL/health/preview-unverified-diagnosis"
+        HTTP_CODE="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/render-unverified-smoke.json -w '%{http_code}' "$UNVERIFIED_URL" || true)"
+        cat /tmp/render-unverified-smoke.json || true
+        echo
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "Render preview unverified diagnosis smoke failed with HTTP $HTTP_CODE."
+          exit 1
+        fi
+
+        HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+        const fs = require('fs');
+        const smoke = JSON.parse(fs.readFileSync('/tmp/render-unverified-smoke.json', 'utf8'));
+        const failures = [];
+        if (smoke.ok !== true) failures.push('unverified smoke.ok !== true');
+        if (smoke.runtime?.commit !== process.env.HEAD_SHA) failures.push('unverified runtime commit mismatch');
+        if (smoke.fallback?.statusCode !== 200) failures.push(`fallback HTTP ${smoke.fallback?.statusCode}`);
+        if (smoke.fallback?.diagnosisState !== 'UNVERIFIED_DIAGNOSIS') failures.push(`fallback state ${smoke.fallback?.diagnosisState}`);
+        if (smoke.fallback?.physicallyVerified !== false) failures.push('fallback physicallyVerified must be false');
+        if (smoke.fallback?.repairAuthorized !== false) failures.push('fallback repairAuthorized must be false');
+        if (smoke.fallback?.estimateReady !== false) failures.push('fallback estimateReady must be false');
+        if (smoke.persisted?.status !== 'TESTING') failures.push(`persisted status ${smoke.persisted?.status}`);
+        if (smoke.persisted?.hasVerifiedCase !== false) failures.push('fallback unexpectedly created VERIFIED_CASE');
+        if (smoke.estimateBypassAttempt?.statusCode !== 409) failures.push(`estimate bypass HTTP ${smoke.estimateBypassAttempt?.statusCode}`);
+        if (smoke.ui?.hasFallback !== true) failures.push('rendered lifecycle page missing fallback UI');
+        if (failures.length) {
+          console.error(failures.join('; '));
+          process.exit(1);
+        }
+        console.log(`Unverified diagnosis runtime smoke passed: fallback=${smoke.fallback.ms}ms state=${smoke.fallback.diagnosisState} estimateBypass=${smoke.estimateBypassAttempt.statusCode} UI=${smoke.ui.hasFallback}`);
         NODE
