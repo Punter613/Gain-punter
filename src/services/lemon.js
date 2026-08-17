@@ -1,7 +1,7 @@
 const { getCachedManual, getCachedManualPathHint, saveScrapedManual, buildManualCacheKey } = require('../db');
 const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
+const { runTargetedEvidenceWorker } = require('./lemon.worker');
 const {
-  scrapeTargetedEvidence,
   scorePage: scoreTargetedPage
 } = require('../../scripts/scrape-lemon-targeted-evidence');
 
@@ -94,9 +94,12 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
       console.log(`[Scraper] Reusing cached manual path hint for ${cacheKey}`);
     }
 
-    console.log(`[Scraper] Context cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} - tuned targeted Repair & Diagnosis scrape`);
+    console.log(`[Scraper] Context cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} - isolated targeted Repair & Diagnosis scrape`);
     try {
-      const targeted = await scrapeTargetedEvidence(
+      const targetedRunner = typeof options.targetedRunner === 'function'
+        ? options.targetedRunner
+        : runTargetedEvidenceWorker;
+      const targeted = await targetedRunner(
         manualPathHint ? { ...vehicle, manualPathHint } : vehicle,
         {
           ...context,
@@ -109,8 +112,8 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
           maxDepth: positiveNumber(options.maxDepth ?? process.env.LEMON_LIVE_MAX_DEPTH, 4),
           fetchTimeoutMs: positiveNumber(options.fetchTimeoutMs ?? process.env.LEMON_LIVE_FETCH_TIMEOUT_MS, 6000),
           maxElapsedMs: positiveNumber(options.maxElapsedMs ?? process.env.LEMON_LIVE_MAX_ELAPSED_MS, 20000),
-          allowUnknownDrivetrain: true,
-          onFetchError: (url, error) => console.warn(`[Scraper] Manual fetch failed for ${url}: ${error.message}`)
+          hardTimeoutMs: positiveNumber(options.hardTimeoutMs ?? process.env.LEMON_WORKER_HARD_TIMEOUT_MS, 30000),
+          allowUnknownDrivetrain: true
         }
       );
       const freshResult = targetedToManual(targeted);
@@ -121,6 +124,7 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
       if (freshResult.items.length > 0) await saveScrapedManual(vehicle, freshResult, context);
       return { ...freshResult, fromCache: false };
     } catch (error) {
+      console.warn(`[Scraper] Targeted retrieval ${cacheKey} failed fast: ${error.message}`);
       return { items: [], source: null, error: error.message, fromCache: false };
     }
   })();
