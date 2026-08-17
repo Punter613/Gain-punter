@@ -32,11 +32,12 @@ function makeJob() {
       result: { primaryCause: 'Ignition coil failure', probability: [] },
       evidencePacket
     },
-    tests: [{ name: 'coil swap', result: 'misfire moved' }],
+    tests: [{ id: 'T1', name: 'coil swap', result: 'misfire moved' }],
     verification: {
       confirmed: true,
       confirmedCause: 'Ignition coil failure',
       conclusion: 'Fault followed coil',
+      evidenceTestIds: ['T1'],
       verifiedAt: '2026-08-15T00:00:00.000Z'
     },
     estimate: null,
