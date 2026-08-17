@@ -1,9 +1,11 @@
-const { getCachedManual, saveScrapedManual } = require('../db');
+const { getCachedManual, saveScrapedManual, buildManualCacheKey } = require('../db');
 const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
 const {
   scrapeTargetedEvidence,
   scorePage: scoreTargetedPage
 } = require('../../scripts/scrape-lemon-targeted-evidence');
+
+const inFlightScrapes = new Map();
 
 function clean(value) {
   return String(value || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
@@ -51,44 +53,72 @@ function targetedToManual(output = {}) {
     resolved_url: output.resolvedUrl || '',
     path_resolution: output.pathResolution || '',
     applicability: output.applicability || null,
+    retrieval: {
+      elapsedMs: Number(output.elapsedMs || 0),
+      timeBudgetExceeded: !!output.timeBudgetExceeded,
+      crawlTruncated: !!output.crawlTruncated
+    },
     scraped: true,
     scraped_at: output.scrapedAt || new Date().toISOString()
   };
 }
 
-async function scrapeLEMONManuals(vehicle, context = {}) {
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
   if (!vehicle || !vehicle.make || !vehicle.year || !vehicle.model) {
     return { items: [], error: 'Insufficient vehicle data for scraping' };
   }
 
-  const cached = await getCachedManual(vehicle, context);
-  if (cached && cached.data) {
-    console.log(`[Scraper] Context cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
-    return { ...cached.data, fromCache: true, cachedAt: cached.scraped_at };
+  const cacheKey = buildManualCacheKey(vehicle, context);
+  const existing = inFlightScrapes.get(cacheKey);
+  if (existing) {
+    console.log(`[Scraper] Context scrape JOIN for ${cacheKey}`);
+    return existing;
   }
 
-  console.log(`[Scraper] Context cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} - tuned targeted Repair & Diagnosis scrape`);
+  const task = (async () => {
+    const cached = await getCachedManual(vehicle, context);
+    if (cached && cached.data) {
+      console.log(`[Scraper] Context cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
+      return { ...cached.data, fromCache: true, cachedAt: cached.scraped_at };
+    }
+
+    console.log(`[Scraper] Context cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} - tuned targeted Repair & Diagnosis scrape`);
+    try {
+      const targeted = await scrapeTargetedEvidence(
+        vehicle,
+        {
+          ...context,
+          query: context.query || '',
+          symptoms: context.symptoms || context.query || ''
+        },
+        context.scope || 'diagnosis',
+        {
+          maxPages: positiveNumber(options.maxPages ?? process.env.LEMON_LIVE_MAX_PAGES, 80),
+          maxDepth: positiveNumber(options.maxDepth ?? process.env.LEMON_LIVE_MAX_DEPTH, 4),
+          fetchTimeoutMs: positiveNumber(options.fetchTimeoutMs ?? process.env.LEMON_LIVE_FETCH_TIMEOUT_MS, 6000),
+          maxElapsedMs: positiveNumber(options.maxElapsedMs ?? process.env.LEMON_LIVE_MAX_ELAPSED_MS, 20000),
+          allowUnknownDrivetrain: true,
+          onFetchError: (url, error) => console.warn(`[Scraper] Manual fetch failed for ${url}: ${error.message}`)
+        }
+      );
+      const freshResult = targetedToManual(targeted);
+      if (freshResult.items.length > 0) await saveScrapedManual(vehicle, freshResult, context);
+      return { ...freshResult, fromCache: false };
+    } catch (error) {
+      return { items: [], source: null, error: error.message, fromCache: false };
+    }
+  })();
+
+  inFlightScrapes.set(cacheKey, task);
   try {
-    const targeted = await scrapeTargetedEvidence(
-      vehicle,
-      {
-        ...context,
-        query: context.query || '',
-        symptoms: context.symptoms || context.query || ''
-      },
-      context.scope || 'diagnosis',
-      {
-        maxPages: Number(process.env.LEMON_LIVE_MAX_PAGES || 80),
-        maxDepth: Number(process.env.LEMON_LIVE_MAX_DEPTH || 4),
-        allowUnknownDrivetrain: true,
-        onFetchError: (url, error) => console.warn(`[Scraper] Manual fetch failed for ${url}: ${error.message}`)
-      }
-    );
-    const freshResult = targetedToManual(targeted);
-    if (freshResult.items.length > 0) await saveScrapedManual(vehicle, freshResult, context);
-    return { ...freshResult, fromCache: false };
-  } catch (error) {
-    return { items: [], source: null, error: error.message, fromCache: false };
+    return await task;
+  } finally {
+    if (inFlightScrapes.get(cacheKey) === task) inFlightScrapes.delete(cacheKey);
   }
 }
 
