@@ -7,15 +7,16 @@ const { scrapeLEMONManuals } = require('../../services/lemon');
 
 const STOP = new Set(['the','a','an','and','or','of','to','in','on','for','with','is','it','this','that','what','would','could','cause','causes','issue','issues','problem','problems','most','common']);
 const SHORT_TOKENS = new Set(['ac','cv','tp','o2']);
+const AC_DOMAIN_TOKENS = new Set(['ac','hvac','airconditioning']);
 const LEMON_SHELL = /(?:\bservice manual\s*[~\-]?\s*lemon manuals\b|\blemon manuals\s*:\s*even more car manuals\b|\bhome\s*>>|\bjuly\s+1\s*:\s*so it begins\b)/i;
 
 function clean(v) { return String(v ?? '').trim(); }
 function norm(v) { return clean(v).toLowerCase().replace(/\s+/g, ' '); }
 function normalizeSearchText(v) {
   return norm(v)
-    .replace(/\ba\s*[\/.\-]?\s*c\b/g, ' ac air conditioning hvac ')
-    .replace(/\bair[\s\-]+condition(?:ing)?\b/g, ' ac air conditioning hvac ')
-    .replace(/\bhvac\b/g, ' ac air conditioning hvac ')
+    .replace(/\bair[\s\-]+condition(?:ing)?\b/g, ' ac hvac airconditioning ')
+    .replace(/\ba\s*[\/.\-]?\s*c\b/g, ' ac hvac airconditioning ')
+    .replace(/\bhvac\b/g, ' ac hvac airconditioning ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -61,9 +62,11 @@ function vehicleMatches(candidate = {}, requested = {}) {
   const sameYear = !requested.year || !candidate.year || Number(candidate.year) === Number(requested.year);
   return sameMake && sameModel && sameYear;
 }
-function overlapScore(text, queryTokens) {
+function relevanceScore(text, queryTokens) {
   if (!queryTokens.length) return 0;
   const hay = new Set(tokens(text));
+  const acIntent = queryTokens.some(t => AC_DOMAIN_TOKENS.has(t));
+  if (acIntent && ![...AC_DOMAIN_TOKENS].some(t => hay.has(t))) return 0;
   return queryTokens.reduce((n, t) => n + (hay.has(t) ? 1 : 0), 0) / queryTokens.length;
 }
 function causeFromExample(example = {}) {
@@ -154,7 +157,7 @@ class QuickAskRetriever {
 
     const scored = (data || []).map(raw => {
       const row = normalizeTsbRow(raw);
-      const relevance = overlapScore([row.title,row.group_name,row.subject,row.body_text].join(' '), qt);
+      const relevance = relevanceScore([row.title,row.group_name,row.subject,row.body_text].join(' '), qt);
       return { row, relevance };
     }).filter(item => item.relevance > 0);
 
@@ -187,7 +190,7 @@ class QuickAskRetriever {
       const best = new Map();
       for (const item of manual?.items || []) {
         if (isTsbManualItem(item)) continue;
-        const relevance = overlapScore(manualItemText(item), qt);
+        const relevance = relevanceScore(manualItemText(item), qt);
         if (relevance <= 0) continue;
         const ref = normalizeManualItem(item, source);
         const key = norm(ref.url || ref.title);
@@ -218,7 +221,7 @@ class QuickAskRetriever {
     let matched = activeTrustedExamples(data || [])
       .filter(row => vehicleMatches(vehicleFromExample(row), vehicle))
       .filter(row => norm(row.labels?.mechanicAssessment?.diagnosisCorrect) === 'correct')
-      .map(row => ({ row, cause: causeFromExample(row), relevance: overlapScore(repairText(row), qt) }))
+      .map(row => ({ row, cause: causeFromExample(row), relevance: relevanceScore(repairText(row), qt) }))
       .filter(x => x.cause);
 
     if (qt.length) matched = matched.filter(x => x.relevance > 0);
@@ -294,6 +297,7 @@ module.exports = {
   bulletinKey,
   normalizeTsbRow,
   normalizeSearchText,
+  relevanceScore,
   manualItemText,
   normalizeManualItem,
   isTsbManualItem
