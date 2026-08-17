@@ -4,10 +4,12 @@ The backend Render service uses `api/` as its Root Directory. A pull-request com
 
 SKSK's merge gate requires the **exact PR head SHA** to boot before diagnostic/lifecycle changes can land. Therefore runtime-sensitive PRs must have an `api/`-visible change so Render builds the exact head rather than leaving the preview on an earlier commit.
 
-For the unverified-diagnosis fallback, the PR preview exposes two `IS_PULL_REQUEST=true` canaries:
+The PR preview exposes `IS_PULL_REQUEST=true` canaries through `api/server.js`:
 
-- `/health/preview-evidence` — exercises the existing VIN/Quick Ask evidence hot path.
+- `/health/preview-evidence` — exercises VIN decode plus the real Quick Ask evidence route with the 2020 Kia Optima 2.4L / P1326 canary.
 - `/health/preview-unverified-diagnosis` — seeds a disposable TESTING job, calls the real `POST /api/jobs/:id/unverified-diagnosis`, attempts an Estimate bypass, and verifies the rendered lifecycle UI.
+
+For DTC-anchored Quick Ask changes, `/health/preview-evidence` must run on the exact PR head so the real `POST /api/quick-ask` route executes the branch code. Unit regressions separately assert that P1326 enters DTC-anchored retrieval, generic `engine` references do not satisfy the DTC gate, and a known 2.4L Optima cannot surface an explicitly 1.6L manual page.
 
 The unverified-diagnosis canary passes only when:
 
