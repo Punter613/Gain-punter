@@ -97,7 +97,7 @@ test('4WD request rejects an FWD resolved path', () => {
         '4WD',
         'https://lemon-manuals.la/Kia/2008/Sorento%20FWD%20V6-3.8L/Repair%20and%20Diagnosis/'
       ),
-    /LEMON drivetrain mismatch/
+    /Manual drivetrain mismatch/
   );
 });
 
