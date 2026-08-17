@@ -4,7 +4,7 @@
 
 const { supabase: defaultSupabase } = require('../../db');
 const { scrapeLEMONManuals } = require('../../services/lemon');
-const { buildCanonicalSearchTerms, extractCanonicalProfile, normalizeText } = require('../automotive.normalization');
+const { buildCanonicalSearchTerms, extractCanonicalProfile, extractDtcs, normalizeText } = require('../automotive.normalization');
 
 const STOP = new Set(['the','a','an','and','or','of','to','in','on','for','with','is','it','this','that','what','would','could','cause','causes','issue','issues','problem','problems','most','common']);
 const SHORT_TOKENS = new Set(['ac','cv','tp','o2']);
@@ -72,12 +72,24 @@ function vehicleMatches(candidate = {}, requested = {}) {
   const sameYear = !requested.year || !candidate.year || Number(candidate.year) === Number(requested.year);
   return sameMake && sameModel && sameYear;
 }
-function relevanceScore(text, queryTokens) {
+function tokenMatchCount(text, queryTokens) {
   if (!queryTokens.length) return 0;
   const hay = new Set(tokens(text));
   const acIntent = queryTokens.some(t => AC_DOMAIN_TOKENS.has(t));
   if (acIntent && ![...AC_DOMAIN_TOKENS].some(t => hay.has(t))) return 0;
-  return queryTokens.reduce((n, t) => n + (hay.has(t) ? 1 : 0), 0) / queryTokens.length;
+  return queryTokens.reduce((n, t) => n + (hay.has(t) ? 1 : 0), 0);
+}
+function relevanceScore(text, queryTokens) {
+  if (!queryTokens.length) return 0;
+  return tokenMatchCount(text, queryTokens) / queryTokens.length;
+}
+function focusedRelevanceScore(text, queryTokens, queryDtcs = []) {
+  const base = relevanceScore(text, queryTokens);
+  if (base <= 0) return 0;
+  const rowDtcs = new Set(extractDtcs(text));
+  if (queryDtcs.some(code => rowDtcs.has(code))) return 1 + base;
+  if (queryTokens.length >= 5 && tokenMatchCount(text, queryTokens) < 2) return 0;
+  return base;
 }
 function causeFromExample(example = {}) {
   const raw = example.labels?.rawAiOutput;
@@ -254,6 +266,7 @@ class QuickAskRetriever {
     const bounds = QUICK_ASK_SCAN_BOUNDS.tsbs;
     if (!this.client) return { ranked: [], telemetry: scanTelemetry('vehicle_tsb_corpus', bounds, 0, false, 'database') };
     const qt = tokens(query);
+    const queryDtcs = extractDtcs(query);
     if (!qt.length) return { ranked: [], telemetry: scanTelemetry('vehicle_tsb_corpus', bounds, 0, false, 'database') };
 
     // Scope to the requested vehicle before any page is read, then score locally.
@@ -279,7 +292,8 @@ class QuickAskRetriever {
 
     const scored = rows.map(raw => {
       const row = normalizeTsbRow(raw);
-      const relevance = relevanceScore([row.title,row.group_name,row.subject,row.body_text].join(' '), qt);
+      const text = [row.title,row.group_name,row.subject,row.body_text].join(' ');
+      const relevance = focusedRelevanceScore(text, qt, queryDtcs);
       return { row, relevance };
     }).filter(item => item.relevance > 0);
 
@@ -368,10 +382,11 @@ class QuickAskRetriever {
     const scanLimitReached = !exhausted && rows.length >= bounds.maxScan;
 
     const qt = tokens(query);
+    const queryDtcs = extractDtcs(query);
     let matched = activeTrustedExamples(rows)
       .filter(row => vehicleMatches(vehicleFromExample(row), vehicle))
       .filter(row => norm(row.labels?.mechanicAssessment?.diagnosisCorrect) === 'correct')
-      .map(row => ({ row, cause: causeFromExample(row), relevance: relevanceScore(repairText(row), qt) }))
+      .map(row => ({ row, cause: causeFromExample(row), relevance: focusedRelevanceScore(repairText(row), qt, queryDtcs) }))
       .filter(x => x.cause);
 
     if (qt.length) matched = matched.filter(x => x.relevance > 0);
@@ -463,6 +478,8 @@ module.exports = {
   normalizeTsbRow,
   normalizeSearchText,
   relevanceScore,
+  focusedRelevanceScore,
+  tokenMatchCount,
   manualItemText,
   manualFocusScore,
   normalizeManualItem,
