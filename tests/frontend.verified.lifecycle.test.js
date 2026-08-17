@@ -49,10 +49,24 @@ test('normalizer keywords narrow both diagnosis evidence and Customer States fal
   assert.match(html, /symptoms:lines\(\$\('symptoms'\)\.value\)/);
 });
 
-test('Run Diagnosis and Ask SKSK are equally prominent major actions', () => {
-  assert.match(html, /\.btn\.major\{flex:1;min-width:220px/);
+test('Run Diagnosis stays primary while read-only knowledge search is secondary', () => {
   assert.match(html, /id="diag" class="btn primary major"/);
-  assert.match(html, /id="quickAsk" class="btn knowledge major"/);
+  assert.doesNotMatch(html, /id="quickAsk" class="btn knowledge major"/);
+  assert.match(html, /id="quickAsk" class="btn knowledge compact"[^>]*>📚 Search Knowledge/);
+});
+
+test('unverified diagnosis fallback is downstream of confirmation tests and remains explicitly locked', () => {
+  const testCardIndex = html.indexOf('id="testCard"');
+  const fallbackIndex = html.indexOf('id="unverifiedDiagnosis"');
+  const verifyCardIndex = html.indexOf('id="verifyCard"');
+  assert.ok(testCardIndex >= 0 && fallbackIndex > testCardIndex, 'fallback must appear inside/after Confirmation Tests');
+  assert.ok(verifyCardIndex > fallbackIndex, 'fallback must appear before the explicit VERIFY card');
+  assert.match(html, /⚠️ Unable to Complete Verification Testing\?/);
+  assert.match(html, /Get an Unverified Diagnosis/);
+  assert.match(html, /This diagnosis has not been physically verified\. It does not authorize a repair and does not unlock Estimate\./);
+  assert.match(html, /\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/unverified-diagnosis/);
+  assert.match(html, /d\.diagnosisState!==['"]UNVERIFIED_DIAGNOSIS['"]/);
+  assert.match(html, /\$\('estimateCard'\)\.hidden=true/);
 });
 
 test('frontend exposes explicit verify action before estimate unlock', () => {
