@@ -29,8 +29,11 @@ function isAllowedOrigin(origin) {
   if (allowedOrigins.has(origin)) return true;
   try {
     const url = new URL(origin);
-    return url.protocol === 'https:' &&
+    const isCloudflareClient = url.protocol === 'https:' &&
       (url.hostname === 'skskprotech.pages.dev' || url.hostname.endsWith('.skskprotech.pages.dev'));
+    const isSkskRenderPreview = url.protocol === 'https:' &&
+      /^p613-backend-pr-\d+\.onrender\.com$/i.test(url.hostname);
+    return isCloudflareClient || isSkskRenderPreview;
   } catch {
     return false;
   }
