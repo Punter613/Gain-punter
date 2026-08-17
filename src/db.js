@@ -9,7 +9,7 @@ if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
 }
 
-const CURRENT_MANUAL_SCHEMA = 4;
+const CURRENT_MANUAL_SCHEMA = 5;
 
 function normalizeDriveType(vehicle = {}) {
   const raw = String(vehicle.drivetrain || vehicle.driveType || vehicle.drive || '').toLowerCase();
