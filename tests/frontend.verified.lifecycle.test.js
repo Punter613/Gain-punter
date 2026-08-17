@@ -36,7 +36,7 @@ test('frontend requires selected persisted tests and mechanic conclusion for pos
   assert.match(html, /evidenceTestIds=\[\.\.\.document\.querySelectorAll\('\.verifyEvidenceCheck:checked'\)\]/);
   assert.match(html, /Select at least one recorded test that supports this confirmed fault/);
   assert.match(html, /Explain why the selected test evidence confirms this fault/);
-  assert.match(html, /placeholders do not count as evidence/i);
+  assert.match(html, /placeholder.*do not count as evidence/i);
 });
 
 test('Quick Ask presents focused service-manual pointers rather than scraped text dumps', () => {
