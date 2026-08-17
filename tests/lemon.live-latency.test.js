@@ -59,7 +59,6 @@ function targetedFixture() {
 test('same manual cache key joins one in-flight live scrape', async () => {
   const lemonPath = require.resolve('../src/services/lemon');
   const dbPath = require.resolve('../src/db');
-  const scraperPath = require.resolve('../scripts/scrape-lemon-targeted-evidence');
   const restoreDb = replaceModule(dbPath, {
     getCachedManual: async () => null,
     getCachedManualPathHint: async () => '',
@@ -70,14 +69,11 @@ test('same manual cache key joins one in-flight live scrape', async () => {
   let scrapeCalls = 0;
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const restoreScraper = replaceModule(scraperPath, {
-    scorePage: () => ({ score: 0 }),
-    scrapeTargetedEvidence: async () => {
-      scrapeCalls += 1;
-      await gate;
-      return targetedFixture();
-    }
-  });
+  const targetedRunner = async () => {
+    scrapeCalls += 1;
+    await gate;
+    return targetedFixture();
+  };
 
   delete require.cache[lemonPath];
   try {
@@ -85,8 +81,8 @@ test('same manual cache key joins one in-flight live scrape', async () => {
     const vehicle = { year: 2020, make: 'KIA', model: 'Optima', engine: '2.4L', drivetrain: 'FWD' };
     const context = { query: 'P1326 knock signal', obdCodes: ['P1326'] };
 
-    const first = scrapeLEMONManuals(vehicle, context);
-    const second = scrapeLEMONManuals(vehicle, context);
+    const first = scrapeLEMONManuals(vehicle, context, { targetedRunner });
+    const second = scrapeLEMONManuals(vehicle, context, { targetedRunner });
     await new Promise(resolve => setImmediate(resolve));
 
     assert.equal(scrapeCalls, 1, 'duplicate callers must join the same live scrape');
@@ -96,7 +92,6 @@ test('same manual cache key joins one in-flight live scrape', async () => {
     assert.equal(b.items.length, 1);
   } finally {
     delete require.cache[lemonPath];
-    restoreScraper();
     restoreDb();
   }
 });
@@ -104,7 +99,6 @@ test('same manual cache key joins one in-flight live scrape', async () => {
 test('different manual context keys remain independent', async () => {
   const lemonPath = require.resolve('../src/services/lemon');
   const dbPath = require.resolve('../src/db');
-  const scraperPath = require.resolve('../scripts/scrape-lemon-targeted-evidence');
   const restoreDb = replaceModule(dbPath, {
     getCachedManual: async () => null,
     getCachedManualPathHint: async () => '',
@@ -113,26 +107,22 @@ test('different manual context keys remain independent', async () => {
   });
 
   let scrapeCalls = 0;
-  const restoreScraper = replaceModule(scraperPath, {
-    scorePage: () => ({ score: 0 }),
-    scrapeTargetedEvidence: async () => {
-      scrapeCalls += 1;
-      return targetedFixture();
-    }
-  });
+  const targetedRunner = async () => {
+    scrapeCalls += 1;
+    return targetedFixture();
+  };
 
   delete require.cache[lemonPath];
   try {
     const { scrapeLEMONManuals } = require(lemonPath);
     const vehicle = { year: 2020, make: 'KIA', model: 'Optima', engine: '2.4L', drivetrain: 'FWD' };
     await Promise.all([
-      scrapeLEMONManuals(vehicle, { query: 'P1326' }),
-      scrapeLEMONManuals(vehicle, { query: 'P0300' })
+      scrapeLEMONManuals(vehicle, { query: 'P1326' }, { targetedRunner }),
+      scrapeLEMONManuals(vehicle, { query: 'P0300' }, { targetedRunner })
     ]);
     assert.equal(scrapeCalls, 2);
   } finally {
     delete require.cache[lemonPath];
-    restoreScraper();
     restoreDb();
   }
 });
@@ -140,7 +130,6 @@ test('different manual context keys remain independent', async () => {
 test('legacy cache path hint is forwarded into targeted retrieval during schema refresh', async () => {
   const lemonPath = require.resolve('../src/services/lemon');
   const dbPath = require.resolve('../src/db');
-  const scraperPath = require.resolve('../scripts/scrape-lemon-targeted-evidence');
   const hint = 'https://lemon-manuals.la/Kia/2020/Optima%20EX/Repair%20and%20Diagnosis/';
   const restoreDb = replaceModule(dbPath, {
     getCachedManual: async () => null,
@@ -150,25 +139,22 @@ test('legacy cache path hint is forwarded into targeted retrieval during schema 
   });
 
   let receivedVehicle;
-  const restoreScraper = replaceModule(scraperPath, {
-    scorePage: () => ({ score: 0 }),
-    scrapeTargetedEvidence: async vehicle => {
-      receivedVehicle = vehicle;
-      return targetedFixture();
-    }
-  });
+  const targetedRunner = async vehicle => {
+    receivedVehicle = vehicle;
+    return targetedFixture();
+  };
 
   delete require.cache[lemonPath];
   try {
     const { scrapeLEMONManuals } = require(lemonPath);
     await scrapeLEMONManuals(
       { year: 2020, make: 'KIA', model: 'Optima', engine: '2.4L', drivetrain: 'FWD' },
-      { query: 'P1326' }
+      { query: 'P1326' },
+      { targetedRunner }
     );
     assert.equal(receivedVehicle.manualPathHint, hint);
   } finally {
     delete require.cache[lemonPath];
-    restoreScraper();
     restoreDb();
   }
 });
