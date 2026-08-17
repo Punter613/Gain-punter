@@ -234,14 +234,25 @@ class QuickAskRetriever {
     if (!this.client) return [];
     const qt = tokens(query);
     if (!qt.length) return [];
-    let q = this.client.from('vehicle_tsb_corpus').select('year,make,model,title,bulletin_number,bulletin_date,group_name,subject,body_text,source,source_url');
-    if (vehicle.year) q = q.eq('year', Number(vehicle.year));
-    if (vehicle.make) q = q.ilike('make', clean(vehicle.make));
-    if (vehicle.model) q = q.ilike('model', clean(vehicle.model));
-    const { data, error } = await q.limit(250);
-    if (error) throw new Error(`vehicle_tsb_corpus lookup failed: ${error.message}`);
 
-    const scored = (data || []).map(raw => {
+    // Rank the complete vehicle corpus. Limiting before relevance scoring can hide
+    // the best bulletin on vehicles with large TSB histories.
+    const pageSize = 250;
+    const rows = [];
+    for (let offset = 0; ; offset += pageSize) {
+      let q = this.client.from('vehicle_tsb_corpus').select('year,make,model,title,bulletin_number,bulletin_date,group_name,subject,body_text,source,source_url');
+      if (vehicle.year) q = q.eq('year', Number(vehicle.year));
+      if (vehicle.make) q = q.ilike('make', clean(vehicle.make));
+      if (vehicle.model) q = q.ilike('model', clean(vehicle.model));
+      q = q.order('id', { ascending: true });
+      const { data, error } = await q.range(offset, offset + pageSize - 1);
+      if (error) throw new Error(`vehicle_tsb_corpus lookup failed: ${error.message}`);
+      const page = data || [];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+
+    const scored = rows.map(raw => {
       const row = normalizeTsbRow(raw);
       const relevance = relevanceScore([row.title,row.group_name,row.subject,row.body_text].join(' '), qt);
       return { row, relevance };
@@ -298,15 +309,26 @@ class QuickAskRetriever {
 
   async _confirmedRepairs(vehicle, query, limit) {
     if (!this.client) return { sampleSize: 0, ranked: [] };
-    const { data, error } = await this.client
-      .from('feedback_examples')
-      .select('id,request_id,labels,metadata,stored_at')
-      .order('stored_at', { ascending: false })
-      .limit(500);
-    if (error) throw new Error(`feedback_examples lookup failed: ${error.message}`);
+
+    // Do not cap the newest examples globally before vehicle filtering. A quieter
+    // vehicle's confirmed outcomes must remain visible even after the corpus grows.
+    const pageSize = 500;
+    const rows = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const q = this.client
+        .from('feedback_examples')
+        .select('id,request_id,labels,metadata,stored_at')
+        .order('stored_at', { ascending: false })
+        .order('id', { ascending: true });
+      const { data, error } = await q.range(offset, offset + pageSize - 1);
+      if (error) throw new Error(`feedback_examples lookup failed: ${error.message}`);
+      const page = data || [];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
 
     const qt = tokens(query);
-    let matched = activeTrustedExamples(data || [])
+    let matched = activeTrustedExamples(rows)
       .filter(row => vehicleMatches(vehicleFromExample(row), vehicle))
       .filter(row => norm(row.labels?.mechanicAssessment?.diagnosisCorrect) === 'correct')
       .map(row => ({ row, cause: causeFromExample(row), relevance: relevanceScore(repairText(row), qt) }))
