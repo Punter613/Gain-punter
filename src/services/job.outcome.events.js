@@ -33,6 +33,38 @@ function assertLegalTransition(currentStatus, eventType) {
   }
 }
 
+function assertSupersession(events, event, currentStatus) {
+  if (event.eventType !== 'OUTCOME_RECORDED') return;
+
+  const targetFingerprint = event.supersedesEventFingerprint || null;
+  if (currentStatus === 'REPAIR_COMPLETED' && targetFingerprint) {
+    throw new Error('First outcome cannot supersede another outcome');
+  }
+  if (currentStatus === 'OUTCOME_CONFIRMED' && !targetFingerprint) {
+    throw new Error('Corrected outcome must supersede the active outcome');
+  }
+  if (!targetFingerprint) return;
+
+  const target = events.find(candidate =>
+    candidate.eventType === 'OUTCOME_RECORDED'
+    && candidate.fingerprint === targetFingerprint
+    && candidate.completionEventFingerprint === event.completionEventFingerprint
+  );
+  if (!target) throw new Error('Superseded outcome is not in this repair chain');
+
+  const alreadySuperseded = events.some(candidate =>
+    candidate.supersedesEventFingerprint === targetFingerprint
+  );
+  if (alreadySuperseded) throw new Error('Superseded outcome is no longer active');
+}
+
+function updateMemoryProjection(jobId, eventType, updatedAt) {
+  const job = memoryJobs()[jobId];
+  if (!job) return;
+  job.status = nextStatusFor(eventType);
+  job.updatedAt = updatedAt || new Date().toISOString();
+}
+
 // The one write path for outcome events. event is an already-built,
 // already-fingerprinted object from confirmed.repair.case.js - this
 // function does not re-derive or re-validate the diagnostic/lineage
@@ -57,13 +89,16 @@ async function recordOutcomeEvent(event) {
       p_performed_repair: event.performedRepair,
       p_completion_event_fingerprint: event.completionEventFingerprint,
       p_outcome: event.outcome,
-      p_supersedes_event_id: event.supersedesEventId || null,
+      p_supersedes_event_fingerprint: event.supersedesEventFingerprint || null,
       p_recorded_by: event.recordedBy || event.performedRepair?.completedBy || event.outcome?.recordedBy || null,
       p_schema_version: event.schemaVersion,
       p_fingerprint: event.fingerprint
     });
     if (error) throw new Error(`record_job_outcome_event failed: ${error.message}`);
-    return { row: data, event };
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('record_job_outcome_event returned no event row');
+    updateMemoryProjection(event.jobId, event.eventType, row.recorded_at);
+    return { row, event };
   }
 
   const jobs = memoryJobs();
@@ -73,9 +108,9 @@ async function recordOutcomeEvent(event) {
 
   const events = memoryStore();
   events[event.jobId] = events[event.jobId] || [];
+  assertSupersession(events[event.jobId], event, job.status);
   events[event.jobId].push(event);
-  job.status = nextStatusFor(event.eventType);
-  job.updatedAt = new Date().toISOString();
+  updateMemoryProjection(event.jobId, event.eventType);
 
   return { row: event, event };
 }
@@ -105,7 +140,7 @@ function fromRow(row) {
     performedRepair: row.performed_repair,
     completionEventFingerprint: row.completion_event_fingerprint,
     outcome: row.outcome,
-    supersedesEventFingerprint: row.supersedes_event_id ? row.supersedes_event_id : null,
+    supersedesEventFingerprint: row.supersedes_event_fingerprint || null,
     fingerprint: row.fingerprint
   };
 }

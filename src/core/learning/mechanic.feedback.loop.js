@@ -20,16 +20,35 @@ const DEFAULT_WEIGHTS = {
   ESTIMATE_WRONG: 3.0
 };
 
-const { eligibleForTrustedLearning } = require('../evidence/confirmed.repair.case');
+const {
+  deriveActiveOutcomeEvent,
+  eligibleForTrustedLearning
+} = require('../evidence/confirmed.repair.case');
 
 function nowISO() {
   return new Date().toISOString();
 }
 
 class MechanicFeedbackLoop {
-  constructor(adapter) {
+  constructor(adapter, { outcomeEventReader = null } = {}) {
     if (!adapter) throw new Error('MechanicFeedbackLoop requires a storage adapter');
     this.adapter = adapter;
+    this.outcomeEventReader = outcomeEventReader;
+  }
+
+  async _isCurrentConfirmedCase(confirmedRepairCase) {
+    if (!eligibleForTrustedLearning(confirmedRepairCase)) return false;
+    if (typeof this.outcomeEventReader !== 'function') return false;
+
+    try {
+      const events = await this.outcomeEventReader(confirmedRepairCase.jobId);
+      const active = deriveActiveOutcomeEvent(events);
+      return Boolean(active && active.fingerprint === confirmedRepairCase.sourceEventFingerprint);
+    } catch {
+      // Trusted learning fails closed when outcome history is unavailable or
+      // internally inconsistent. A stale/corrupt example must never be used.
+      return false;
+    }
   }
 
   // Calculate teaching signal based on provided mechanicAssessment and economicActual
@@ -142,8 +161,8 @@ class MechanicFeedbackLoop {
   // that itself via eligibleForTrustedLearning rather than trusting the
   // caller, since nothing else is allowed around this gate.
   async recordConfirmedOutcome({ confirmedRepairCase, aiRecommendation = null, vehicle = null, mechanicId = null, shopId = null, metadata = {} } = {}) {
-    if (!eligibleForTrustedLearning(confirmedRepairCase)) {
-      throw new Error('recordConfirmedOutcome requires a valid, non-superseded CONFIRMED_REPAIR_CASE');
+    if (!await this._isCurrentConfirmedCase(confirmedRepairCase)) {
+      throw new Error('recordConfirmedOutcome requires the active, valid CONFIRMED_REPAIR_CASE');
     }
 
     const result = confirmedRepairCase.outcome.result;
@@ -154,7 +173,7 @@ class MechanicFeedbackLoop {
     const teachingSignal = this._calculateTeachingSignal(mechanicAssessment, null);
 
     const example = {
-      id: null,
+      id: `confirmed_${confirmedRepairCase.fingerprint}`,
       requestId: confirmedRepairCase.jobId,
       vehicle,
       rawAiOutput: aiRecommendation,
@@ -164,11 +183,10 @@ class MechanicFeedbackLoop {
       mechanicId,
       shopId,
       teachingSignal,
-      confirmedRepairCase: {
-        fingerprint: confirmedRepairCase.fingerprint,
-        verifiedCaseFingerprint: confirmedRepairCase.verifiedCaseFingerprint,
-        sourceEventFingerprint: confirmedRepairCase.sourceEventFingerprint
-      },
+      // Persist the whole case so the trust gate can re-verify its fingerprint
+      // after a storage round-trip, then compare its source event with current
+      // append-only outcome history.
+      confirmedRepairCase,
       metadata: {
         feedbackVersion: metadata.feedbackVersion || 1,
         createdAt: metadata.createdAt || nowISO(),
@@ -196,10 +214,14 @@ class MechanicFeedbackLoop {
     // self-reported feedback masquerade as ground truth. Now it requires
     // the example to actually be tagged trustedForTraining, which only
     // recordConfirmedOutcome() (a real CONFIRMED_REPAIR_CASE) can set.
-    const all = await this.adapter.getExamples(limit * 2);
-    const valid = all.filter(e =>
+    const all = await this.adapter.getExamples(limit * 5);
+    const candidates = all.filter(e =>
       e.rawAiOutput && e.mechanicAssessment && e.actualRepair && e.metadata?.trustedForTraining === true
     );
+    const valid = [];
+    for (const example of candidates) {
+      if (await this._isCurrentConfirmedCase(example.confirmedRepairCase)) valid.push(example);
+    }
     valid.sort((a, b) => (b.teachingSignal?.totalWeight || 0) - (a.teachingSignal?.totalWeight || 0));
     return valid.slice(0, limit);
   }

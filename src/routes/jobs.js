@@ -2,7 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { getJob, patchJob, addTest, verifyJob } = require('../services/job.lifecycle');
 const { buildVerifiedCase } = require('../core/evidence/verified.case');
-const { buildRepairCompletedEvent, buildOutcomeEvent } = require('../core/evidence/confirmed.repair.case');
+const {
+  buildRepairCompletedEvent,
+  buildOutcomeEvent,
+  buildConfirmedRepairCase
+} = require('../core/evidence/confirmed.repair.case');
 const { recordOutcomeEvent, getJobOutcomeEvents } = require('../services/job.outcome.events');
 
 router.get('/:id', async (req, res) => {
@@ -105,13 +109,39 @@ router.post('/:id/outcome', async (req, res) => {
       supersedesEventFingerprint
     });
     await recordOutcomeEvent(event);
-    const updated = await getJob(req.params.id);
+    const updated = await getJob(req.params.id) || { ...job, status: 'OUTCOME_CONFIRMED' };
+
+    // Outcome truth is already durable at this point. Learning persistence is
+    // deliberately downstream: a feedback-store outage must not make callers
+    // retry and create a second outcome event. The response reports whether the
+    // derived trusted example landed so it can be backfilled operationally.
+    let confirmedRepairCase = null;
+    let trustedLearningRecorded = false;
+    let trustedLearningExampleId = null;
+    try {
+      const updatedEvents = await getJobOutcomeEvents(req.params.id);
+      confirmedRepairCase = buildConfirmedRepairCase(updated, updatedEvents);
+      const { feedbackLoop } = require('../core/learning');
+      const learningExample = await feedbackLoop.recordConfirmedOutcome({
+        confirmedRepairCase,
+        aiRecommendation: updated.diagnosis?.result || null,
+        vehicle: updated.vehicle || null,
+        mechanicId: recordedBy || null
+      });
+      trustedLearningRecorded = true;
+      trustedLearningExampleId = learningExample?.id || null;
+    } catch (learningError) {
+      console.warn('[JobOutcome] confirmed outcome persisted, trusted learning derivation/write failed:', learningError.message);
+    }
 
     return res.status(201).json({
       success: true,
       jobId: req.params.id,
       status: updated?.status || 'OUTCOME_CONFIRMED',
-      event
+      event,
+      confirmedRepairCase,
+      trustedLearningRecorded,
+      trustedLearningExampleId
     });
   } catch (err) {
     return res.status(409).json({ success: false, error: err.message, jobId: req.params.id });

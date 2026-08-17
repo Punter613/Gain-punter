@@ -20,6 +20,23 @@ function cleanList(values, limit, max) {
   return (Array.isArray(values) ? values : []).map(v => clean(v, max)).filter(Boolean).slice(0, limit);
 }
 
+function assertOutcomeEventIntegrity(event, expectedType = null) {
+  if (!event || !event.fingerprint || !event.eventType) {
+    throw new Error('Outcome history contains an invalid event');
+  }
+  if (expectedType && event.eventType !== expectedType) {
+    throw new Error(`Outcome history expected ${expectedType} event`);
+  }
+
+  const copy = clone(event);
+  const provided = copy.fingerprint;
+  delete copy.fingerprint;
+  if (fingerprint(copy) !== provided) {
+    throw new Error(`Outcome event fingerprint mismatch: ${provided}`);
+  }
+  return event;
+}
+
 // verifiedCaseFingerprint is the only mandatory lineage anchor - a job can
 // reach REPAIR_COMPLETED without ever being priced through SKSK Estimate
 // (side job, warranty work, cash job). repairResolution/estimate/invoice
@@ -107,6 +124,7 @@ function buildOutcomeEvent({ job, completionEvent, outcome = {}, recordedBy, sup
   if (!completionEvent || completionEvent.eventType !== 'REPAIR_COMPLETED' || !completionEvent.fingerprint) {
     throw new Error('Outcome requires a canonical REPAIR_COMPLETED event');
   }
+  assertOutcomeEventIntegrity(completionEvent, 'REPAIR_COMPLETED');
   if (completionEvent.jobId !== job?.jobId) throw new Error('Completion event does not belong to this job');
 
   const lineage = resolveLineage(job);
@@ -147,7 +165,9 @@ function buildOutcomeEvent({ job, completionEvent, outcome = {}, recordedBy, sup
 // Two active outcome events for the same job with no chain between them is
 // a data integrity problem, not a state to silently resolve by picking one.
 function deriveActiveOutcomeEvent(events = []) {
-  const outcomes = events.filter(e => e.eventType === 'OUTCOME_RECORDED');
+  const outcomes = events
+    .filter(e => e.eventType === 'OUTCOME_RECORDED')
+    .map(event => assertOutcomeEventIntegrity(event, 'OUTCOME_RECORDED'));
   const superseded = new Set(outcomes.map(e => e.supersedesEventFingerprint).filter(Boolean));
   const active = outcomes.filter(e => !superseded.has(e.fingerprint));
   if (active.length > 1) {
@@ -164,6 +184,7 @@ function buildConfirmedRepairCase(job, events = []) {
     e => e.eventType === 'REPAIR_COMPLETED' && e.fingerprint === activeOutcome.completionEventFingerprint
   );
   if (!completionEvent) throw new Error('Active outcome event references a missing REPAIR_COMPLETED event');
+  assertOutcomeEventIntegrity(completionEvent, 'REPAIR_COMPLETED');
 
   const lineage = resolveLineage(job);
   if (activeOutcome.verifiedCaseFingerprint !== lineage.verifiedCaseFingerprint) {
@@ -206,6 +227,7 @@ module.exports = {
   SCHEMA_VERSION,
   VALID_RESULTS,
   COMPLETABLE_STATUSES,
+  assertOutcomeEventIntegrity,
   resolveLineage,
   buildRepairCompletedEvent,
   buildOutcomeEvent,

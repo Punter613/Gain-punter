@@ -6,6 +6,7 @@
 // should always have SUPABASE_URL/SUPABASE_KEY set for this to persist.
 
 const MechanicFeedbackLoop = require('./mechanic.feedback.loop');
+const { getJobOutcomeEvents } = require('../../services/job.outcome.events');
 
 let adapter;
 let usingSupabase = false;
@@ -22,6 +23,6 @@ try {
   console.warn('[Learning] WARNING: feedback data will NOT survive a server restart until SUPABASE_URL/SUPABASE_KEY are set.');
 }
 
-const feedbackLoop = new MechanicFeedbackLoop(adapter);
+const feedbackLoop = new MechanicFeedbackLoop(adapter, { outcomeEventReader: getJobOutcomeEvents });
 
 module.exports = { feedbackLoop, usingSupabase };

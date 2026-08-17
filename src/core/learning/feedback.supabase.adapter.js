@@ -29,15 +29,16 @@ class FeedbackSupabaseAdapter {
         id: example.id,
         request_id: example.requestId || null,
         mechanic_id: example.mechanicId || null,
-        weight: example.weight || 0,
+        weight: example.teachingSignal?.totalWeight ?? example.weight ?? 0,
         labels: example.labels || {},
         metadata: example.metadata || {},
-        signals: example.signals || [],
+        signals: example.teachingSignal?.signals || example.signals || [],
+        payload: example,
         stored_at: example.storedAt
       }, { onConflict: 'id' });
 
     if (error) {
-      console.warn('[FeedbackSupabaseAdapter] save failed (non-fatal):', error.message);
+      throw new Error(`FeedbackSupabaseAdapter save failed: ${error.message}`);
     }
     return example;
   }
@@ -82,16 +83,22 @@ class FeedbackSupabaseAdapter {
       return [];
     }
 
-    return (data || []).map(row => ({
-      id: row.id,
-      requestId: row.request_id,
-      mechanicId: row.mechanic_id,
-      weight: row.weight,
-      labels: row.labels,
-      metadata: row.metadata,
-      signals: row.signals,
-      storedAt: row.stored_at
-    }));
+    return (data || []).map(row => {
+      const payload = row.payload && Object.keys(row.payload).length ? row.payload : null;
+      if (payload) {
+        return { ...payload, id: row.id, storedAt: row.stored_at };
+      }
+      return {
+        id: row.id,
+        requestId: row.request_id,
+        mechanicId: row.mechanic_id,
+        weight: row.weight,
+        labels: row.labels,
+        metadata: row.metadata,
+        signals: row.signals,
+        storedAt: row.stored_at
+      };
+    });
   }
 
   async getMechanicStats(mechanicId) {

@@ -141,6 +141,22 @@ test('eligibleForTrustedLearning accepts a genuine confirmed case and rejects a 
   assert.equal(eligibleForTrustedLearning({ stage: 'VERIFIED_CASE' }), false);
 });
 
+test('confirmed case construction rejects tampered stored outcome events', () => {
+  const job = jobFixture();
+  const completed = buildRepairCompletedEvent({ job, completedBy: 'brian' });
+  const outcome = buildOutcomeEvent({
+    job,
+    completionEvent: completed,
+    outcome: { result: 'correct', symptomResolved: true },
+    recordedBy: 'brian'
+  });
+  const tampered = { ...outcome, outcome: { ...outcome.outcome, result: 'WRONG' } };
+  assert.throws(
+    () => buildConfirmedRepairCase(job, [completed, tampered]),
+    /fingerprint mismatch/
+  );
+});
+
 // --- HTTP-level: routes + atomic status projection via job.outcome.events.js ---
 
 function createOutcomeTestApp() {
@@ -201,6 +217,8 @@ test('HTTP: repair-completed then outcome moves job status atomically through bo
     assert.equal(outcome.status, 201);
     assert.equal(outcome.body.status, 'OUTCOME_CONFIRMED');
     assert.equal(global.__jobs[job.jobId].status, 'OUTCOME_CONFIRMED');
+    assert.equal(outcome.body.trustedLearningRecorded, true);
+    assert.equal(outcome.body.confirmedRepairCase.sourceEventFingerprint, outcome.body.event.fingerprint);
 
     const events = await get(base, `/api/jobs/${job.jobId}/outcome-events`);
     assert.equal(events.body.events.length, 2);
@@ -231,15 +249,53 @@ test('HTTP: repair-completed rejects a job stuck in TESTING, status stays unchan
   });
 });
 
+test('HTTP: a correction must supersede the active outcome by fingerprint', async () => {
+  await withServer(async (base) => {
+    global.__jobs = global.__jobs || {};
+    const job = jobFixture({ jobId: 'SKSK-HTTP-OUTCOME-4' });
+    global.__jobs[job.jobId] = job;
+
+    await post(base, `/api/jobs/${job.jobId}/repair-completed`, { completedBy: 'brian' });
+    const first = await post(base, `/api/jobs/${job.jobId}/outcome`, {
+      result: 'partial',
+      symptomResolved: false,
+      recordedBy: 'brian'
+    });
+    assert.equal(first.status, 201);
+
+    const unboundCorrection = await post(base, `/api/jobs/${job.jobId}/outcome`, {
+      result: 'correct',
+      symptomResolved: true,
+      recordedBy: 'brian'
+    });
+    assert.equal(unboundCorrection.status, 409);
+    assert.match(unboundCorrection.body.error, /must supersede the active outcome/i);
+
+    const correction = await post(base, `/api/jobs/${job.jobId}/outcome`, {
+      result: 'correct',
+      symptomResolved: true,
+      recordedBy: 'brian',
+      supersedesEventFingerprint: first.body.event.fingerprint
+    });
+    assert.equal(correction.status, 201);
+    assert.equal(correction.body.event.supersedesEventFingerprint, first.body.event.fingerprint);
+
+    const history = await get(base, `/api/jobs/${job.jobId}/outcome-events`);
+    assert.equal(history.body.events.length, 3);
+    assert.equal(deriveActiveOutcomeEvent(history.body.events).fingerprint, correction.body.event.fingerprint);
+  });
+});
+
 // --- Learning corpus gate ---
 
 test('getTrainingDataset only admits examples explicitly tagged trustedForTraining', async () => {
   const examples = [];
+  const events = [];
   const adapter = {
     save: async (e) => { examples.push({ ...e, id: `ex_${examples.length}` }); return examples[examples.length - 1]; },
     getExamples: async () => examples
   };
-  const loop = new MechanicFeedbackLoop(adapter);
+  const loop = new MechanicFeedbackLoop(adapter, { outcomeEventReader: async () => events });
 
   await loop.recordRepairOutcome({
     requestId: 'legacy-1',
@@ -252,6 +308,7 @@ test('getTrainingDataset only admits examples explicitly tagged trustedForTraini
   const job = jobFixture();
   const completed = buildRepairCompletedEvent({ job, completedBy: 'brian' });
   const outcome = buildOutcomeEvent({ job, completionEvent: completed, outcome: { result: 'correct', symptomResolved: true }, recordedBy: 'brian' });
+  events.push(completed, outcome);
   const confirmedCase = buildConfirmedRepairCase(job, [completed, outcome]);
 
   await loop.recordConfirmedOutcome({ confirmedRepairCase: confirmedCase, aiRecommendation: { cause: 'x' }, vehicle: job.vehicle });
@@ -259,6 +316,24 @@ test('getTrainingDataset only admits examples explicitly tagged trustedForTraini
   const dataset = await loop.getTrainingDataset();
   assert.equal(dataset.length, 1);
   assert.equal(dataset[0].metadata.source, 'confirmed_repair_case');
+
+  const corrected = buildOutcomeEvent({
+    job,
+    completionEvent: completed,
+    outcome: { result: 'wrong', symptomResolved: false },
+    recordedBy: 'brian',
+    supersedesEventFingerprint: outcome.fingerprint
+  });
+  events.push(corrected);
+
+  const staleDataset = await loop.getTrainingDataset();
+  assert.equal(staleDataset.length, 0, 'superseded confirmed case must fail closed');
+
+  const correctedCase = buildConfirmedRepairCase(job, events);
+  await loop.recordConfirmedOutcome({ confirmedRepairCase: correctedCase, aiRecommendation: { cause: 'x' }, vehicle: job.vehicle });
+  const correctedDataset = await loop.getTrainingDataset();
+  assert.equal(correctedDataset.length, 1);
+  assert.equal(correctedDataset[0].confirmedRepairCase.sourceEventFingerprint, corrected.fingerprint);
 });
 
 test('recordConfirmedOutcome refuses anything that is not a valid CONFIRMED_REPAIR_CASE', async () => {
@@ -267,6 +342,6 @@ test('recordConfirmedOutcome refuses anything that is not a valid CONFIRMED_REPA
 
   await assert.rejects(
     () => loop.recordConfirmedOutcome({ confirmedRepairCase: { stage: 'CONFIRMED_REPAIR_CASE', outcome: { result: 'CORRECT' } } }),
-    /valid, non-superseded CONFIRMED_REPAIR_CASE/
+    /active, valid CONFIRMED_REPAIR_CASE/
   );
 });
