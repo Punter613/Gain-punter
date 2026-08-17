@@ -18,6 +18,12 @@ test('public root enters the verified lifecycle UI', () => {
   assert.match(html, /INVOICE/);
 });
 
+test('frontend captures engine trim and sends it through Quick Ask and Diagnose', () => {
+  assert.match(html, /<label>Engine \/ Trim<\/label><input id="engine"/);
+  const enginePayloadUses = html.match(/engine:\$\('engine'\)\.value\.trim\(\)/g) || [];
+  assert.equal(enginePayloadUses.length, 2);
+});
+
 test('frontend exposes explicit verify action before estimate unlock', () => {
   assert.match(html, /id="verify"[^>]*>✅ VERIFY FAULT — Unlock Estimate/);
   assert.match(html, /\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/tests/);
