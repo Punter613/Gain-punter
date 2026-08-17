@@ -18,10 +18,13 @@ test('public root enters the verified lifecycle UI', () => {
   assert.match(html, /INVOICE/);
 });
 
-test('frontend captures engine trim and sends it through Quick Ask and Diagnose', () => {
+test('frontend captures engine trim and sends engine plus DTC context through retrieval', () => {
   assert.match(html, /<label>Engine \/ Trim<\/label><input id="engine"/);
   const enginePayloadUses = html.match(/engine:\$\('engine'\)\.value\.trim\(\)/g) || [];
   assert.equal(enginePayloadUses.length, 2);
+  assert.match(html, /const codeContext=list\(\$\('codes'\)\.value\)\.join\(' '\)/);
+  assert.match(html, /const retrievalQuery=\[query,codeContext\]\.filter\(Boolean\)\.join\(' '\)/);
+  assert.match(html, /query:retrievalQuery/);
 });
 
 test('frontend exposes explicit verify action before estimate unlock', () => {
