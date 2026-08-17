@@ -136,6 +136,7 @@ function evidenceRetrievalProfile() {
     vinDecodeCacheTtlMs: Number(process.env.VIN_DECODE_CACHE_TTL_MS || 60 * 60 * 1000),
     manualPathResolutionBudgetMs: Number(process.env.LEMON_RESOLVER_MAX_ELAPSED_MS || 10000),
     liveManualCrawlBudgetMs: Number(process.env.LEMON_LIVE_MAX_ELAPSED_MS || 20000),
+    manualWorkerHardTimeoutMs: Number(process.env.LEMON_WORKER_HARD_TIMEOUT_MS || 30000),
     quickAskSourceBudgetsMs: {
       confirmedRepairs: Number(process.env.QUICK_ASK_CONFIRMED_REPAIRS_TIMEOUT_MS || 5000),
       tsbs: Number(process.env.QUICK_ASK_TSB_TIMEOUT_MS || 5000),
@@ -296,6 +297,7 @@ const server = app.listen(port, () => {
   console.log(
     `[Server] Evidence retrieval profile: VIN decode <=${retrieval.vinDecodeTimeoutMs}ms with cache; stored-only VIN warmup; ` +
     `manual path <=${retrieval.manualPathResolutionBudgetMs}ms; live crawl <=${retrieval.liveManualCrawlBudgetMs}ms; ` +
+    `manual worker <=${retrieval.manualWorkerHardTimeoutMs}ms; ` +
     `Quick Ask source budgets repairs/TSB/manual=${quickAsk.confirmedRepairs}/${quickAsk.tsbs}/${quickAsk.manual}ms`
   );
   console.log(`[Server] Active Status Framework Endpoint: http://localhost:${port}/health`);
