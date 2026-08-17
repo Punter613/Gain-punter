@@ -1,6 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { BoundedQuickAskRetriever } = require('../core/knowledge/quick.ask.bounded');
+const {
+  buildDtcRetrievalIntent,
+  applyQuickAskRetrievalGuards,
+  publicIntent
+} = require('../core/knowledge/dtc.retrieval.intent');
 const { decodeVinNhtsa } = require('../services/vin');
 
 function clean(value) { return String(value || '').trim(); }
@@ -26,8 +31,36 @@ router.post('/', async (req, res) => {
   try {
     const { vehicle = {}, query = '', limit = 5 } = req.body || {};
     const resolved = await resolveVehicle(vehicle);
-    const result = await new BoundedQuickAskRetriever().ask({ vehicle: resolved.vehicle, query, limit });
-    if (resolved.warning) result.warnings = [resolved.warning, ...(result.warnings || [])];
+    const intent = buildDtcRetrievalIntent(resolved.vehicle, query);
+    const result = await new BoundedQuickAskRetriever().ask({
+      vehicle: resolved.vehicle,
+      query: intent.searchQuery,
+      limit
+    });
+
+    applyQuickAskRetrievalGuards(result, resolved.vehicle, intent);
+    result.query = clean(query);
+    result.retrievalIntent = publicIntent(intent);
+
+    const guard = result.retrievalTelemetry?.applicabilityGuard || {};
+    const rejected = Object.values(guard).reduce((sum, value) => sum + Number(value || 0), 0);
+    const warnings = [...(result.warnings || [])];
+
+    if (intent.mode === 'DTC_ANCHORED') {
+      warnings.unshift(
+        `DTC-anchored retrieval active for ${intent.anchors.map(anchor => anchor.code).join(', ')}; symptoms refine the code context and unrelated generic matches are excluded.`
+      );
+    } else if (intent.unresolvedDtcs.length) {
+      warnings.unshift(
+        `DTC ${intent.unresolvedDtcs.join(', ')} is not resolved by deterministic SKSK code context; symptom-driven retrieval was used without inventing a code meaning.`
+      );
+    }
+    if (rejected > 0) {
+      warnings.unshift(`Applicability guard rejected ${rejected} unrelated or explicitly conflicting evidence item${rejected === 1 ? '' : 's'}.`);
+    }
+    if (resolved.warning) warnings.unshift(resolved.warning);
+    result.warnings = warnings;
+
     return res.json(result);
   } catch (error) {
     const status = /requires vehicle\.make and vehicle\.model/.test(error.message) ? 400 : 500;
