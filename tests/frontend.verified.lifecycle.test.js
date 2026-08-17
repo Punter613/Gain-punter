@@ -24,6 +24,21 @@ test('frontend exposes explicit verify action before estimate unlock', () => {
   assert.match(html, /d\.status!==['"]VERIFIED['"]\|\|!d\.verifiedCase/);
 });
 
+test('frontend does not prefill the diagnostic hypothesis as the confirmed fault', () => {
+  assert.match(html, /\$\('candidate'\)\.textContent=cause;\$\('cause'\)\.value=''/);
+  assert.doesNotMatch(html, /\$\('cause'\)\.value=cause/);
+  assert.match(html, /Diagnostic candidate — hypothesis only/);
+});
+
+test('frontend requires selected persisted tests and mechanic conclusion for positive VERIFY', () => {
+  assert.match(html, /id="verifyEvidence"/);
+  assert.match(html, /class="verifyEvidenceCheck"/);
+  assert.match(html, /evidenceTestIds=\[\.\.\.document\.querySelectorAll\('\.verifyEvidenceCheck:checked'\)\]/);
+  assert.match(html, /Select at least one recorded test that supports this confirmed fault/);
+  assert.match(html, /Explain why the selected test evidence confirms this fault/);
+  assert.match(html, /placeholders do not count as evidence/i);
+});
+
 test('estimate and invoice follow the same persisted job', () => {
   assert.match(html, /post\(['"]\/api\/estimateHeuristic['"],\{jobId/);
   assert.match(html, /post\(['"]\/api\/invoice\/build['"],\{jobId\}\)/);
