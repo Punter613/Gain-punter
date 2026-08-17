@@ -1,0 +1,119 @@
+name: TEMP Validate Knowledge Scraper
+
+on:
+  push:
+    branches:
+      - feature/standalone-knowledge-scraper
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install scraper dependencies
+        working-directory: tools/knowledge-scraper
+        run: npm install
+
+      - name: Targeted 2008 Kia Sorento dry run
+        working-directory: tools/knowledge-scraper
+        run: npm run scrape -- --chunks 2005-2009 --year 2008 --make Kia --model Sorento --dry-run
+
+      - name: Local JSONL write
+        working-directory: tools/knowledge-scraper
+        run: npm run scrape -- --chunks 2005-2009 --year 2008 --make Kia --model Sorento --sink local
+
+      - name: Inspect fingerprints and duplicates
+        working-directory: tools/knowledge-scraper
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const p = 'out/nhtsa-tsb-2005-2009.jsonl';
+          const rows = fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+          const fps = rows.map(r => r.fingerprint);
+          const unique = new Set(fps);
+          console.log(JSON.stringify({ rows: rows.length, uniqueFingerprints: unique.size, duplicateFingerprints: rows.length - unique.size, sample: rows.slice(0, 2).map(r => ({bulletin:r.bulletin_number, date:r.bulletin_date, fingerprint:r.fingerprint, source:r.source})) }, null, 2));
+          if (!rows.length) throw new Error('No Sorento rows collected');
+          if (unique.size !== rows.length) throw new Error('Duplicate fingerprints found in JSONL');
+          NODE
+
+      - name: Validate Supabase secrets
+        shell: bash
+        run: |
+          test -n "$SUPABASE_URL" || { echo 'Missing SUPABASE_URL'; exit 1; }
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || { echo 'Missing SUPABASE_SERVICE_ROLE_KEY'; exit 1; }
+
+      - name: Count target rows before upsert
+        id: before
+        working-directory: tools/knowledge-scraper
+        shell: bash
+        run: |
+          COUNT=$(node <<'NODE'
+          const { createClient } = require('@supabase/supabase-js');
+          (async () => {
+            const c = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {auth:{persistSession:false,autoRefreshToken:false}});
+            const { count, error } = await c.from('vehicle_tsb_corpus').select('*', { count:'exact', head:true }).eq('year', 2008).ilike('make','Kia').ilike('model','Sorento').eq('source','NHTSA_BULK');
+            if (error) throw error;
+            process.stdout.write(String(count ?? 0));
+          })().catch(e => { console.error(e); process.exit(1); });
+          NODE
+          )
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "before=$COUNT"
+
+      - name: First Supabase upsert
+        working-directory: tools/knowledge-scraper
+        run: npm run scrape -- --chunks 2005-2009 --year 2008 --make Kia --model Sorento --sink supabase
+
+      - name: Count target rows after first upsert
+        id: after1
+        working-directory: tools/knowledge-scraper
+        shell: bash
+        run: |
+          COUNT=$(node <<'NODE'
+          const { createClient } = require('@supabase/supabase-js');
+          (async () => {
+            const c = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {auth:{persistSession:false,autoRefreshToken:false}});
+            const { count, error } = await c.from('vehicle_tsb_corpus').select('*', { count:'exact', head:true }).eq('year', 2008).ilike('make','Kia').ilike('model','Sorento').eq('source','NHTSA_BULK');
+            if (error) throw error;
+            process.stdout.write(String(count ?? 0));
+          })().catch(e => { console.error(e); process.exit(1); });
+          NODE
+          )
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "after1=$COUNT"
+
+      - name: Second identical Supabase upsert
+        working-directory: tools/knowledge-scraper
+        run: npm run scrape -- --chunks 2005-2009 --year 2008 --make Kia --model Sorento --sink supabase
+
+      - name: Assert idempotent row count
+        working-directory: tools/knowledge-scraper
+        shell: bash
+        env:
+          AFTER1: ${{ steps.after1.outputs.count }}
+        run: |
+          AFTER2=$(node <<'NODE'
+          const { createClient } = require('@supabase/supabase-js');
+          (async () => {
+            const c = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {auth:{persistSession:false,autoRefreshToken:false}});
+            const { count, error } = await c.from('vehicle_tsb_corpus').select('*', { count:'exact', head:true }).eq('year', 2008).ilike('make','Kia').ilike('model','Sorento').eq('source','NHTSA_BULK');
+            if (error) throw error;
+            process.stdout.write(String(count ?? 0));
+          })().catch(e => { console.error(e); process.exit(1); });
+          NODE
+          )
+          echo "after2=$AFTER2"
+          test "$AFTER1" = "$AFTER2" || { echo "Idempotency failed: after1=$AFTER1 after2=$AFTER2"; exit 1; }
