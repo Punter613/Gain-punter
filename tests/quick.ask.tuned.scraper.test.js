@@ -22,6 +22,22 @@ test('A/C clutch query expands into factory-manual HVAC and component terms', ()
   assert.ok(terms.includes('compressor'));
 });
 
+test('automotive aliases require word boundaries and preserve warm-up context', () => {
+  const photo = buildCanonicalSearchTerms({}, { query: 'Photo 1', symptoms: 'Photo 1' }).profile;
+  const humidity = buildCanonicalSearchTerms({}, { query: 'Humidity sensor', symptoms: 'Humidity sensor' }).profile;
+  const idler = buildCanonicalSearchTerms({}, { query: 'Idler pulley bearing', symptoms: 'Idler pulley bearing' }).profile;
+  const warmup = buildCanonicalSearchTerms({}, {
+    query: 'smoke from under the hood when I drive some distance and engine warms up',
+    symptoms: 'smoke from under the hood when I drive some distance and engine warms up'
+  }).profile;
+
+  assert.equal(photo.conditions.includes('hot'), false, 'Photo must never substring-match hot');
+  assert.equal(humidity.sounds.includes('hum'), false, 'Humidity must never substring-match hum');
+  assert.equal(idler.conditions.includes('idle'), false, 'Idler must never substring-match idle');
+  assert.ok(warmup.conditions.includes('operating_temperature'));
+  assert.equal(warmup.conditions.includes('hot'), false, 'warm-up context must not collapse into generic hot');
+});
+
 test('tuned parser keeps corrected regex behavior and follows manual hosts', () => {
   const html = `
     <html><head><title>Compressor Clutch Relay</title>
