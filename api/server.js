@@ -132,6 +132,8 @@ app.use(express.static(path.join(__dirname, '../public')));
 function evidenceRetrievalProfile() {
   return {
     vinWarmup: 'stored-only',
+    vinDecodeTimeoutMs: Number(process.env.VIN_DECODE_TIMEOUT_MS || 5000),
+    vinDecodeCacheTtlMs: Number(process.env.VIN_DECODE_CACHE_TTL_MS || 60 * 60 * 1000),
     manualPathResolutionBudgetMs: Number(process.env.LEMON_RESOLVER_MAX_ELAPSED_MS || 10000),
     liveManualCrawlBudgetMs: Number(process.env.LEMON_LIVE_MAX_ELAPSED_MS || 20000),
     quickAskSourceBudgetsMs: {
@@ -292,7 +294,7 @@ const server = app.listen(port, () => {
   console.log(`[Server] SKSK ProTech running inside API framework layer on port ${port}`);
   console.log(`[Server] Testing Target Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(
-    `[Server] Evidence retrieval profile: stored-only VIN warmup; ` +
+    `[Server] Evidence retrieval profile: VIN decode <=${retrieval.vinDecodeTimeoutMs}ms with cache; stored-only VIN warmup; ` +
     `manual path <=${retrieval.manualPathResolutionBudgetMs}ms; live crawl <=${retrieval.liveManualCrawlBudgetMs}ms; ` +
     `Quick Ask source budgets repairs/TSB/manual=${quickAsk.confirmedRepairs}/${quickAsk.tsbs}/${quickAsk.manual}ms`
   );
