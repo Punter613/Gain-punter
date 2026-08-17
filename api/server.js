@@ -167,8 +167,8 @@ app.get('/health', async (req, res) => {
   res.json(health);
 });
 
-// Render PR previews get a deeper, read-only runtime smoke lane. Production never
-// registers this endpoint because Render sets IS_PULL_REQUEST to the string "true"
+// Render PR previews get deeper read-only/runtime smoke lanes. Production never
+// registers these endpoints because Render sets IS_PULL_REQUEST to the string "true"
 // only for pull request preview services.
 if (process.env.IS_PULL_REQUEST === 'true') {
   app.get('/health/preview-evidence', async (req, res) => {
@@ -246,6 +246,131 @@ if (process.env.IS_PULL_REQUEST === 'true') {
       return res.status(502).json({
         ok: false,
         stage: 'preview-evidence-smoke',
+        error: error.message,
+        totalMs: Date.now() - startedAt
+      });
+    }
+  });
+
+  app.get('/health/preview-unverified-diagnosis', async (req, res) => {
+    const startedAt = Date.now();
+    const localBase = `http://127.0.0.1:${process.env.PORT || 3000}`;
+    const jobId = `SKSK-PREVIEW-UNVERIFIED-${String(process.env.RENDER_PULL_REQUEST_ID || 'PR')}`;
+
+    try {
+      const { createJob, recordDiagnosis, patchJob, getJob } = require('../src/services/job.lifecycle');
+      await createJob({
+        jobId,
+        customer: { name: 'RUNTIME CANARY' },
+        vehicle: { year: 2020, make: 'KIA', model: 'Optima', engine: '2.4L' },
+        customerStates: ['Flashing check-engine light after driving through standing water'],
+        mechanicNotices: ['Engine currently runs smoothly'],
+        obdCodes: ['P1326']
+      });
+      await recordDiagnosis(jobId, {
+        primaryCause: 'Knock sensor circuit signal fault requires confirmation',
+        secondaryCauses: ['Engine bearing knock signal requires confirmation'],
+        probability: [
+          { cause: 'Knock sensor circuit signal fault', likelihood: 60 },
+          { cause: 'Engine bearing knock signal', likelihood: 40 }
+        ],
+        recommendedTests: [
+          'Inspect knock sensor circuit integrity and connector condition',
+          'Perform the applicable manufacturer confirmation test for P1326'
+        ],
+        notes: 'Runtime canary diagnosis is intentionally unverified.',
+        diagnosticConfidence: { percentage: 60, rating: 'MODERATE' },
+        evidence: { oem: [], tsbs: [], available: false, sources: [] }
+      });
+      const seeded = await getJob(jobId);
+      await patchJob(jobId, {
+        diagnosis: {
+          ...(seeded?.diagnosis || {}),
+          evidencePacket: {
+            schemaVersion: 1,
+            vehicle: seeded?.vehicle || {},
+            dtcs: ['P1326'],
+            customerObservations: seeded?.intake?.customerStates || [],
+            mechanicObservations: seeded?.intake?.mechanicNotices || [],
+            oemReferences: [],
+            tsbReferences: []
+          }
+        }
+      });
+
+      const fallbackStartedAt = Date.now();
+      const fallbackResponse = await fetch(`${localBase}/api/jobs/${encodeURIComponent(jobId)}/unverified-diagnosis`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      const fallbackBody = await fallbackResponse.json();
+      const fallbackMs = Date.now() - fallbackStartedAt;
+
+      const estimateResponse = await fetch(`${localBase}/api/estimateHeuristic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId,
+          diagnosisVerified: true,
+          verificationStatus: 'UNVERIFIED_DIAGNOSIS',
+          verifiedFaults: [fallbackBody?.unverifiedDiagnosis?.mostLikelyCause].filter(Boolean)
+        })
+      });
+      const estimateBody = await estimateResponse.json();
+
+      const lifecycleResponse = await fetch(`${localBase}/lifecycle.html`);
+      const lifecycleHtml = await lifecycleResponse.text();
+      const persisted = await getJob(jobId);
+      const uiHasFallback = lifecycleHtml.includes('Get an Unverified Diagnosis') &&
+        lifecycleHtml.includes('This diagnosis has not been physically verified. It does not authorize a repair and does not unlock Estimate.');
+      const boundaryHeld = fallbackResponse.status === 200 &&
+        fallbackBody?.diagnosisState === 'UNVERIFIED_DIAGNOSIS' &&
+        fallbackBody?.unverifiedDiagnosis?.physicallyVerified === false &&
+        fallbackBody?.unverifiedDiagnosis?.repairAuthorized === false &&
+        persisted?.status === 'TESTING' &&
+        !persisted?.verifiedCase &&
+        estimateResponse.status === 409 &&
+        uiHasFallback;
+
+      return res.status(boundaryHeld ? 200 : 502).json({
+        ok: boundaryHeld,
+        runtime: {
+          commit: process.env.RENDER_GIT_COMMIT || null,
+          branch: process.env.RENDER_GIT_BRANCH || null,
+          service: process.env.RENDER_SERVICE_NAME || null,
+          isPullRequest: process.env.IS_PULL_REQUEST
+        },
+        jobId,
+        fallback: {
+          statusCode: fallbackResponse.status,
+          ms: fallbackMs,
+          diagnosisState: fallbackBody?.diagnosisState || null,
+          mostLikelyCause: fallbackBody?.unverifiedDiagnosis?.mostLikelyCause || null,
+          physicallyVerified: fallbackBody?.unverifiedDiagnosis?.physicallyVerified ?? null,
+          repairAuthorized: fallbackBody?.unverifiedDiagnosis?.repairAuthorized ?? null,
+          estimateReady: fallbackBody?.estimateReady ?? null
+        },
+        persisted: {
+          status: persisted?.status || null,
+          hasVerifiedCase: !!persisted?.verifiedCase,
+          unverifiedState: persisted?.unverifiedDiagnosis?.state || null
+        },
+        estimateBypassAttempt: {
+          statusCode: estimateResponse.status,
+          error: estimateBody?.error || null
+        },
+        ui: {
+          statusCode: lifecycleResponse.status,
+          hasFallback: uiHasFallback
+        },
+        totalMs: Date.now() - startedAt
+      });
+    } catch (error) {
+      console.error('[Preview Unverified Diagnosis Smoke]', error.stack || error.message || error);
+      return res.status(502).json({
+        ok: false,
+        stage: 'preview-unverified-diagnosis-smoke',
         error: error.message,
         totalMs: Date.now() - startedAt
       });
