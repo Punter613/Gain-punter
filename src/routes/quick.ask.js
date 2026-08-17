@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { QuickAskRetriever } = require('../core/knowledge/quick.ask.retriever');
+const { BoundedQuickAskRetriever } = require('../core/knowledge/quick.ask.bounded');
 const { decodeVinNhtsa } = require('../services/vin');
 
 function clean(value) { return String(value || '').trim(); }
@@ -26,7 +26,7 @@ router.post('/', async (req, res) => {
   try {
     const { vehicle = {}, query = '', limit = 5 } = req.body || {};
     const resolved = await resolveVehicle(vehicle);
-    const result = await new QuickAskRetriever().ask({ vehicle: resolved.vehicle, query, limit });
+    const result = await new BoundedQuickAskRetriever().ask({ vehicle: resolved.vehicle, query, limit });
     if (resolved.warning) result.warnings = [resolved.warning, ...(result.warnings || [])];
     return res.json(result);
   } catch (error) {
