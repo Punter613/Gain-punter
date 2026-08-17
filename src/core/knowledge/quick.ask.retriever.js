@@ -193,7 +193,10 @@ class QuickAskRetriever {
         const relevance = relevanceScore(manualItemText(item), qt);
         if (relevance <= 0) continue;
         const ref = normalizeManualItem(item, source);
-        const key = norm(ref.url || ref.title);
+        // The same factory page is often reachable through both a direct component
+        // path and a category/subtree path. Prefer the best-ranked copy by title so
+        // the mechanic does not see duplicate Ambient/Coolant/etc. cards.
+        const key = norm(ref.title) || norm(ref.url);
         const current = best.get(key);
         if (!current || relevance > current.relevance) best.set(key, { ref, relevance });
       }
