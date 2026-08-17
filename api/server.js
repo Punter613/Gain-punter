@@ -123,6 +123,7 @@ if (process.env.STRIPE_SECRET_KEY) {
 
 // 5. STATIC CORPORATE WEB PLATFORM ASSETS
 app.get('/fleet', (req, res) => res.sendFile(path.join(__dirname, '../public/fleet.html')));
+app.get('/lifecycle', (req, res) => res.sendFile(path.join(__dirname, '../public/lifecycle.html')));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // 6. HEALTH & SYSTEM MONITORING TELEMETRY
