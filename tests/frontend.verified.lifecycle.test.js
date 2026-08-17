@@ -50,6 +50,12 @@ test('Quick Ask presents focused service-manual pointers rather than scraped tex
   assert.doesNotMatch(html, /\$\{esc\(m\.source\|\|d\.repairDiagnosisSource/);
 });
 
+test('Quick Ask visibly warns when a bounded retrieval source may be partial', () => {
+  assert.match(html, /scanWarnings=.*scan bound/);
+  assert.match(html, /Retrieval bound reached\./);
+  assert.match(html, /status warn/);
+});
+
 test('Render PR preview can call its own API without opening CORS to arbitrary Render apps', () => {
   assert.match(serverSource, /\^p613-backend-pr-\\d\+\\\.onrender\\\.com\$/);
   assert.doesNotMatch(serverSource, /hostname\.endsWith\(['"]\.onrender\.com['"]\)/);
