@@ -51,12 +51,35 @@ test('Quick Ask keeps TSB evidence separate from confirmed-repair share', async 
   });
   assert.equal(out.mode, 'RETRIEVAL_ONLY');
   assert.equal(out.queryMode, 'QUERY');
-  assert.equal(out.confirmedRepairSampleSize, 3);
+  assert.equal(out.confirmedRepairSampleSize, 2);
   assert.equal(out.commonConfirmedRepairs[0].confirmedCases, 2);
-  assert.equal(out.commonConfirmedRepairs[0].observedRepairShare, 0.667);
+  assert.equal(out.commonConfirmedRepairs[0].observedRepairShare, 1);
   assert.equal(out.commonConfirmedRepairs[0].evidenceStrength, 'LOW');
   assert.equal(out.publishedEvidence[0].bulletin_number, 'AC-1');
   assert.match(out.warnings.join(' '), /not diagnostic probability/i);
+});
+
+test('Quick Ask filters unrelated vehicle evidence for an A/C clutch query', async () => {
+  const client = fakeClient({
+    vehicle_tsb_corpus: [
+      { year: 2008, make: 'Kia', model: 'Sorento', title: 'Load carrying capacity labels', bulletin_number: 'TSB-022', bulletin_date: '2009-05-01', group_name: 'Labels', subject: 'FMVSS load carrying capacity', body_text: 'Label requirements for accessories added before retail sale.', source: 'NHTSA_BULK', source_url: 'nhtsa://labels' },
+      { year: 2008, make: 'Kia', model: 'Sorento', title: 'Engine controls', bulletin_number: 'KT2008090302', bulletin_date: '2008-09-03', group_name: 'Engine', subject: 'P2135 and P2138', body_text: 'Throttle position sensor and accelerator pedal sensor guidance.', source: 'LEMON_MANUALS', source_url: 'lemon://etc' },
+      { year: 2008, make: 'Kia', model: 'Sorento', title: 'A/C compressor noise', bulletin_number: 'AC-1', bulletin_date: '2009-02-01', group_name: 'HVAC', subject: 'Air conditioning compressor noise', body_text: 'Inspect compressor operation when the A/C is engaged.', source: 'LEMON_MANUALS', source_url: 'lemon://ac' }
+    ],
+    feedback_examples: [
+      trusted({ id: 'ac', job: 'J1', cause: 'A/C compressor clutch bearing' }),
+      trusted({ id: 'brake', job: 'J2', cause: 'Brake caliper sticking' })
+    ]
+  });
+
+  const out = await new QuickAskRetriever(client).ask({
+    vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
+    query: 'ac clutch'
+  });
+
+  assert.deepEqual(out.publishedEvidence.map(x => x.bulletin_number), ['AC-1']);
+  assert.equal(out.confirmedRepairSampleSize, 1);
+  assert.deepEqual(out.commonConfirmedRepairs.map(x => x.cause), ['A/C compressor clutch bearing']);
 });
 
 test('Quick Ask dedupes corrected trusted outcomes and ignores wrong outcomes', async () => {
