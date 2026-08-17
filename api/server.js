@@ -13,8 +13,9 @@ const app = express();
 const defaultAllowedOrigins = [
   'https://skskprotech.pages.dev',
   'https://p613-backend.onrender.com',
-  'http://localhost:3000'
-];
+  'http://localhost:3000',
+  process.env.RENDER_EXTERNAL_URL
+].filter(Boolean);
 
 const configuredOrigins = [
   ...(process.env.CORS_ORIGINS || '').split(','),
