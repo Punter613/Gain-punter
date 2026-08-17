@@ -87,7 +87,7 @@ jobs:
         CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
         echo "$CHANGED_FILES"
 
-        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|src/services/(lemon|lemon\.path\.resolver|vehicle\.warmup)\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/quick\.ask\.retriever\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
+        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|src/services/(lemon|lemon\.path\.resolver|vehicle\.warmup)\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/quick\.ask\.(retriever|bounded)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
           echo "No runtime evidence hot-path changes; Render preview smoke skipped."
           exit 0
         fi
@@ -119,7 +119,7 @@ jobs:
         fi
 
         SMOKE_URL="$PREVIEW_URL/health/preview-evidence?vin=5XXGT4L38LG384941&query=P1326%20knock%20signal%20range%20performance%20flashing%20MIL%20reduced%20power"
-        HTTP_CODE="$(curl --connect-timeout 5 --max-time 120 -sS -o /tmp/render-evidence-smoke.json -w '%{http_code}' "$SMOKE_URL" || true)"
+        HTTP_CODE="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/render-evidence-smoke.json -w '%{http_code}' "$SMOKE_URL" || true)"
         cat /tmp/render-evidence-smoke.json || true
         echo
 
@@ -137,6 +137,7 @@ jobs:
         if (smoke.decode?.statusCode !== 200) failures.push(`decode HTTP ${smoke.decode?.statusCode}`);
         if (smoke.quickAsk?.statusCode !== 200) failures.push(`Quick Ask HTTP ${smoke.quickAsk?.statusCode}`);
         if (smoke.quickAsk?.status !== 'SUCCESS') failures.push(`Quick Ask status ${smoke.quickAsk?.status}`);
+        if (Number(smoke.quickAsk?.ms || Infinity) > 40000) failures.push(`Quick Ask latency ${smoke.quickAsk?.ms}ms exceeded 40000ms ceiling`);
         if (failures.length) {
           console.error(failures.join('; '));
           process.exit(1);
