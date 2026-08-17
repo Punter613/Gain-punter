@@ -41,7 +41,7 @@ function pageToManualItem(page = {}) {
 
 function targetedToManual(output = {}) {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     source: output.source || 'LEMON_MANUALS',
     vehicle: output.vehicle || {},
     query: output.query || {},
