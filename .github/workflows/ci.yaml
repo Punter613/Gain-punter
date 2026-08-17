@@ -87,7 +87,7 @@ jobs:
         CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
         echo "$CHANGED_FILES"
 
-        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|src/services/(lemon|lemon\.path\.resolver|vehicle\.warmup)\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/quick\.ask\.(retriever|bounded)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
+        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|src/services/(lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/quick\.ask\.(retriever|bounded)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
           echo "No runtime evidence hot-path changes; Render preview smoke skipped."
           exit 0
         fi
