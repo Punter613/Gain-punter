@@ -5,10 +5,19 @@
 const { supabase: defaultSupabase } = require('../../db');
 
 const STOP = new Set(['the','a','an','and','or','of','to','in','on','for','with','is','it','this','that','what','would','could','cause','causes','issue','issues','problem','problems','most','common']);
+const SHORT_TOKENS = new Set(['ac','cv','tp','o2']);
 const LEMON_SHELL = /(?:\bservice manual\s*[~\-]?\s*lemon manuals\b|\blemon manuals\s*:\s*even more car manuals\b|\bhome\s*>>|\bjuly\s+1\s*:\s*so it begins\b)/i;
 
 function clean(v) { return String(v ?? '').trim(); }
 function norm(v) { return clean(v).toLowerCase().replace(/\s+/g, ' '); }
+function normalizeSearchText(v) {
+  return norm(v)
+    .replace(/\ba\s*[\/.\-]?\s*c\b/g, ' ac air conditioning hvac ')
+    .replace(/\bair[\s\-]+condition(?:ing)?\b/g, ' ac air conditioning hvac ')
+    .replace(/\bhvac\b/g, ' ac air conditioning hvac ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 function decodeHtmlEntities(v) {
   return clean(v)
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
@@ -40,7 +49,10 @@ function cleanBulletinDate(v) {
   return named ? named[0] : text;
 }
 function tokens(v) {
-  return [...new Set(norm(v).replace(/[^a-z0-9]+/g, ' ').split(' ').filter(t => t.length > 2 && !STOP.has(t)))];
+  return [...new Set(normalizeSearchText(v)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter(t => (t.length > 2 || SHORT_TOKENS.has(t)) && !STOP.has(t)))];
 }
 function vehicleMatches(candidate = {}, requested = {}) {
   const sameMake = !requested.make || norm(candidate.make) === norm(requested.make);
@@ -123,7 +135,7 @@ class QuickAskRetriever {
       const row = normalizeTsbRow(raw);
       const relevance = overlapScore([row.title,row.group_name,row.subject,row.body_text].join(' '), qt);
       return { row, relevance };
-    });
+    }).filter(item => item.relevance > 0);
 
     const bestByBulletin = new Map();
     for (const item of scored) {
@@ -154,11 +166,13 @@ class QuickAskRetriever {
     if (error) throw new Error(`feedback_examples lookup failed: ${error.message}`);
 
     const qt = tokens(query);
-    const matched = activeTrustedExamples(data || [])
+    let matched = activeTrustedExamples(data || [])
       .filter(row => vehicleMatches(vehicleFromExample(row), vehicle))
       .filter(row => norm(row.labels?.mechanicAssessment?.diagnosisCorrect) === 'correct')
       .map(row => ({ row, cause: causeFromExample(row), relevance: overlapScore(repairText(row), qt) }))
       .filter(x => x.cause);
+
+    if (qt.length) matched = matched.filter(x => x.relevance > 0);
 
     const groups = new Map();
     for (const item of matched) {
@@ -214,4 +228,4 @@ class QuickAskRetriever {
   }
 }
 
-module.exports = { QuickAskRetriever, tokens, activeTrustedExamples, vehicleMatches, causeFromExample, cleanEvidenceText, cleanBulletinDate, bulletinKey, normalizeTsbRow };
+module.exports = { QuickAskRetriever, tokens, activeTrustedExamples, vehicleMatches, causeFromExample, cleanEvidenceText, cleanBulletinDate, bulletinKey, normalizeTsbRow, normalizeSearchText };
