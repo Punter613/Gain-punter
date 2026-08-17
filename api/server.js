@@ -182,6 +182,7 @@ const port = process.env.PORT || 3000;
 const server = app.listen(port, () => {
   console.log(`[Server] SKSK ProTech running inside API framework layer on port ${port}`);
   console.log(`[Server] Testing Target Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('[Server] Evidence retrieval profile: stored-only VIN warmup; live manual crawl deferred to diagnostic context');
   console.log(`[Server] Active Status Framework Endpoint: http://localhost:${port}/health`);
 });
 
