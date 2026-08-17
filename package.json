@@ -9,7 +9,7 @@
     "lint": "echo \"no linter configured\"",
     "test": "echo \"no tests configured\"",
     "test:guards": "node --test tests/completed.work.guard.edge-cases.test.js tests/diagnostic.stage.guard.edge-cases.test.js",
-    "test:providers": "node --test tests/provider.groq.contract.test.js tests/provider.router.fallback.test.js tests/specialist.router.provider.test.js tests/provider.failure-boundary.test.js",
+    "test:providers": "node --test tests/diagnose.schema.parity.test.js tests/provider.groq.contract.test.js tests/provider.router.fallback.test.js tests/specialist.router.provider.test.js tests/provider.failure-boundary.test.js",
     "test:lifecycle": "node --test tests/lifecycle.http.test.js",
     "test:measurements": "node --test tests/measurement.normalizer.test.js tests/measurement.tag.integration.test.js",
     "test:evidence": "node --test tests/nhtsa.tsb.corpus.test.js",

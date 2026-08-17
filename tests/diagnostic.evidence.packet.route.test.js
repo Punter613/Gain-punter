@@ -37,12 +37,12 @@ const diagnosticPayload = JSON.stringify({
   secondaryCauses: [],
   codeExplanations: { P0300: 'Random misfire', P0171: 'Bank 1 lean' },
   probability: [{ cause: 'Mount movement', likelihood: 100 }],
-  knownIssues: [],
-  repairSteps: [],
-  proTips: [],
+  knownIssues: ['Untrusted model-memory known issue'],
+  repairSteps: ['Measure mount movement under controlled load'],
+  proTips: ['Compare cold and warm mount movement'],
   recommendedTests: ['Inspect mounts under controlled load'],
   additionalChecks: [],
-  estimatedRepairTime: 'N/A',
+  estimatedRepairTime: '0.5 hour diagnostic inspection',
   notes: 'Confirm before repair.'
 });
 
@@ -112,6 +112,7 @@ test('Diagnose sends one canonical bounded evidence packet as model case context
       });
 
       assert.equal(response.status, 200);
+      const responseBody = await response.json();
       assert.ok(capturedPayload);
       const messages = capturedPayload.messages;
       assert.equal(messages.length, 2);
@@ -128,6 +129,18 @@ test('Diagnose sends one canonical bounded evidence packet as model case context
       assert.equal(packet.measurements.values.brakes.padThickness, 3.1);
       assert.equal(packet.evidence.tsbs[0].source, 'NHTSA_BULK');
       assert.ok(packet.evidence.tsbs[0].excerpt.includes('P0300 diagnostic evidence'));
+
+      assert.deepEqual(responseBody.result.codeExplanations, {
+        P0300: 'Random misfire',
+        P0171: 'Bank 1 lean'
+      });
+      assert.deepEqual(responseBody.result.repairSteps, ['Measure mount movement under controlled load']);
+      assert.deepEqual(responseBody.result.proTips, ['Compare cold and warm mount movement']);
+      assert.equal(responseBody.result.estimatedRepairTime, '0.5 hour diagnostic inspection');
+      assert.deepEqual(responseBody.result.knownIssues, [
+        'TSB candidate: Engine performance bulletin'
+      ]);
+      assert.doesNotMatch(JSON.stringify(responseBody.result.knownIssues), /Untrusted model-memory/);
     });
   } finally {
     delete require.cache[routePath];

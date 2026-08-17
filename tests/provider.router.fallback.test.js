@@ -16,6 +16,23 @@ function normalizedGeminiResponse(reason) {
   };
 }
 
+function diagnoseRequestPayload() {
+  return {
+    messages: [
+      { role: 'system', content: 'You are the expert diagnostic logic unit of SKSK ProTech.' },
+      {
+        role: 'user',
+        content: `DIAGNOSTIC_EVIDENCE_PACKET_V1:\n${JSON.stringify({
+          stage: 'DIAGNOSE',
+          dtcs: ['P0300', 'P0171']
+        })}`
+      }
+    ],
+    max_tokens: 2500,
+    response_format: { type: 'json_object' }
+  };
+}
+
 async function withProviderMocks(fn) {
   const originalGroqChat = groqProvider.chat;
   const originalGeminiChat = geminiProvider.chat;
@@ -107,5 +124,41 @@ test('retryable Groq runtime failure falls back to Gemini exactly once', async (
     assert.match(capturedPayload.model, /^gemini-/i);
     assert.equal(result._provider, 'gemini');
     assert.equal(result._fallbackReason, 'RATE_LIMIT_EXCEEDED_429');
+  });
+});
+
+test('direct Gemini and Groq fallback receive the same Diagnose semantic schema', async () => {
+  await withProviderMocks(async () => {
+    process.env.GROQ_API_KEY = 'test-only-key';
+
+    const capturedPayloads = [];
+    geminiProvider.isConfigured = () => true;
+    geminiProvider.chat = async payload => {
+      capturedPayloads.push(payload);
+      return normalizedGeminiResponse(payload.fallbackReason || null);
+    };
+
+    aiClient.setProvider('gemini');
+    await aiClient.aiChat(diagnoseRequestPayload());
+
+    aiClient.setProvider('groq');
+    groqProvider.chat = async () => {
+      throw Object.assign(new Error('Rate limit reached'), {
+        status: 429,
+        code: 'rate_limit_exceeded'
+      });
+    };
+    await aiClient.aiChat(diagnoseRequestPayload());
+
+    assert.equal(capturedPayloads.length, 2);
+    assert.deepEqual(capturedPayloads[0].response_format, capturedPayloads[1].response_format);
+    assert.equal(capturedPayloads[0].fallbackReason, undefined);
+    assert.equal(capturedPayloads[1].fallbackReason, 'RATE_LIMIT_EXCEEDED_429');
+
+    const schema = capturedPayloads[0].response_format.json_schema.schema;
+    for (const field of ['codeExplanations', 'repairSteps', 'proTips', 'estimatedRepairTime']) {
+      assert.ok(schema.properties[field], `${field} must be present for both Gemini paths`);
+    }
+    assert.equal(Object.hasOwn(schema.properties, 'knownIssues'), false);
   });
 });
