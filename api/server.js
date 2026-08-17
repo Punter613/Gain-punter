@@ -81,6 +81,7 @@ const jobsRouter = require('../src/routes/jobs.protected');
 const partsLookupRouter = require('../src/routes/partsLookup');
 const fleetRouter = require('../src/routes/fleet');
 const vehicleRouter = require('../src/routes/vehicle');
+const quickAskRouter = require('../src/routes/quick.ask');
 const {
   diagnosisLifecycle,
   estimateLifecycle,
@@ -91,6 +92,7 @@ app.use('/api/scrape', scrapeRouter);
 app.use('/api/parts', partsRouter);
 app.use('/api/full-estimate', fullEstimateRouter);
 app.use('/api/jobs', jobsRouter);
+app.use('/api/quick-ask', quickAskRouter);
 
 // Job lifecycle spine:
 // DIAG -> TEST -> VERIFY -> ESTIMATE -> optional INVOICE.
