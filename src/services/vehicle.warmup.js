@@ -1,6 +1,5 @@
 const { decodeVinNhtsa } = require('./vin');
-const { scrapeLEMONManuals } = require('./lemon');
-const { harvestVehicleTsbs } = require('./tsb.harvester');
+const { loadStoredTsbCorpus } = require('./tsb.harvester');
 const { buildVehicleCacheKey } = require('../db');
 
 const warmups = new Map();
@@ -45,7 +44,7 @@ function warmupKey(vehicle) {
   return buildVehicleCacheKey(vehicle);
 }
 
-function warmVehicleEvidence(vehicle, options = {}) {
+function warmVehicleEvidence(vehicle) {
   if (!vehicle?.year || !vehicle?.make || !vehicle?.model) {
     return { status: 'SKIPPED', key: '', reason: 'vehicle identity incomplete', promise: Promise.resolve(null) };
   }
@@ -54,22 +53,26 @@ function warmVehicleEvidence(vehicle, options = {}) {
   const existing = warmups.get(key);
   if (existing) return { status: existing.status, key, promise: existing.promise };
 
+  // VIN decode happens before the mechanic has supplied symptom/DTC context. A live
+  // Repair & Diagnosis crawl here is necessarily broad, competes with the later
+  // context-specific retrieval, and can walk irrelevant manual branches. Warmup is
+  // therefore intentionally storage-only; live manual retrieval starts once the
+  // actual diagnostic context exists.
   const entry = { status: 'PENDING', startedAt: Date.now(), finishedAt: null, promise: null };
   entry.promise = Promise.allSettled([
-    scrapeLEMONManuals(vehicle, {}),
-    harvestVehicleTsbs(vehicle, {}, { maxPages: options.maxPages })
+    loadStoredTsbCorpus(vehicle)
   ]).then(results => {
     entry.finishedAt = Date.now();
     entry.results = results;
 
-    const successful = results.filter(result => result.status === 'fulfilled' && !result.value?.error).length;
+    const successful = results.filter(result => result.status === 'fulfilled').length;
     const failed = results.length - successful;
     entry.status = successful === results.length ? 'READY' : successful > 0 ? 'PARTIAL' : 'FAILED';
 
     if (entry.status === 'READY') {
       console.log(`[Vehicle Warmup] READY ${key} in ${entry.finishedAt - entry.startedAt}ms`);
     } else {
-      entry.error = `${failed} of ${results.length} evidence warmup source(s) failed`;
+      entry.error = `${failed} of ${results.length} stored evidence warmup source(s) failed`;
       console.warn(`[Vehicle Warmup] ${entry.status} ${key}: ${entry.error}`);
     }
     return results;
@@ -82,7 +85,7 @@ function warmVehicleEvidence(vehicle, options = {}) {
   });
 
   warmups.set(key, entry);
-  console.log(`[Vehicle Warmup] STARTED ${key}`);
+  console.log(`[Vehicle Warmup] STARTED ${key} (stored evidence only; live manual deferred to diagnostic context)`);
   return { status: 'STARTED', key, promise: entry.promise };
 }
 
