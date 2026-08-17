@@ -4,7 +4,7 @@ const fs = require('fs');
 const { getCachedManual, saveScrapedManual } = require('../db');
 const { resolveRepairDiagnosisUrl } = require('./lemon.path.resolver');
 
-const LEMON_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy']);
+const MANUAL_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy', 'charm.li']);
 
 const DEFAULT_KEYWORDS = [
   'repair', 'diagnosis', 'diagnostic', 'inspection', 'procedure', 'removal', 'installation',
@@ -29,15 +29,15 @@ async function scrapeLEMONManuals(vehicle, context = {}) {
     return { items: [], error: 'Insufficient vehicle data for scraping' };
   }
 
-  const cached = await getCachedManual(vehicle);
+  const cached = await getCachedManual(vehicle, context);
   if (cached && cached.data) {
-    console.log(`[Scraper] Cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
+    console.log(`[Scraper] Context cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
     return { ...cached.data, fromCache: true, cachedAt: cached.scraped_at };
   }
 
-  console.log(`[Scraper] Cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} - targeted Lemon scrape`);
+  console.log(`[Scraper] Context cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} - targeted Repair & Diagnosis scrape`);
   const freshResult = await scrapeLive(vehicle, context);
-  if (freshResult && !freshResult.error && freshResult.items?.length > 0) await saveScrapedManual(vehicle, freshResult);
+  if (freshResult && !freshResult.error && freshResult.items?.length > 0) await saveScrapedManual(vehicle, freshResult, context);
   return { ...freshResult, fromCache: false };
 }
 
@@ -78,7 +78,7 @@ function extractPage(html, url) {
     try {
       const absolute = new URL(href, url).toString();
       const host = new URL(absolute).hostname.toLowerCase();
-      if (!/^https?:\/\//i.test(absolute) || !LEMON_HOSTS.has(host)) continue;
+      if (!/^https?:\/\//i.test(absolute) || !MANUAL_HOSTS.has(host)) continue;
       if (/\.(pdf|jpg|jpeg|png|gif|zip)(\?|$)/i.test(absolute)) continue;
       links.push({ url: absolute, text });
     } catch (_) {}
@@ -89,14 +89,22 @@ function extractPage(html, url) {
 
 function buildSearchTerms(vehicle, context = {}) {
   const symptomText = [
+    context.query,
     context.symptoms,
     ...(Array.isArray(context.mechanicNotices) ? context.mechanicNotices : []),
-    ...(Array.isArray(context.obdCodes) ? context.obdCodes : [])
+    ...(Array.isArray(context.obdCodes) ? context.obdCodes : []),
+    ...(Array.isArray(context.keywords) ? context.keywords : [])
   ].filter(Boolean).join(' ');
 
   const terms = new Set(DEFAULT_KEYWORDS);
   const normalized = normalizeToken(symptomText);
   for (const token of normalized.split(' ').filter(t => t.length >= 4).slice(0, 60)) terms.add(token);
+  if (/\ba\s*[\/.\-]?\s*c\b|\bair[ -]?condition(?:ing)?\b|\bhvac\b/i.test(symptomText)) {
+    terms.add('air conditioning');
+    terms.add('hvac');
+    terms.add('compressor');
+    if (/\bclutch\b/i.test(symptomText)) terms.add('compressor clutch');
+  }
   terms.add(normalizeToken(vehicle.make));
   terms.add(normalizeToken(vehicle.model));
   if (vehicle.trim) terms.add(normalizeToken(vehicle.trim));
@@ -130,7 +138,8 @@ function scorePage(page, terms) {
     [/alignment|wheel alignment/, 6, 'alignment'],
     [/\btsb\b|technical service bulletin|service bulletin/, 15, 'tsb'],
     [/bolt[- ]?in|press[- ]?in|riveted|integral/, 12, 'construction'],
-    [/ball joint|control arm|bushing|stabilizer|sway bar|cv axle|constant velocity|driveshaft|steering/, 10, 'target-component']
+    [/ball joint|control arm|bushing|stabilizer|sway bar|cv axle|constant velocity|driveshaft|steering/, 10, 'target-component'],
+    [/air conditioning|hvac|compressor clutch|compressor/, 10, 'hvac']
   ];
   for (const [pattern, boost, label] of boosts) {
     if (pattern.test(text)) { score += boost; matched.push(label); }
@@ -161,7 +170,7 @@ function extractFacts(page) {
   collect('alignment', [/alignment/, /wheel align/]);
   collect('bulletins', [/\btsb\b/, /technical service bulletin/, /service bulletin/]);
   collect('construction', [/bolt[- ]?in/, /press[- ]?in/, /integral/, /assembled with/, /riveted/]);
-  collect('componentType', [/ball joint/, /control arm/, /bushing/, /stabilizer link/, /cv axle/, /constant velocity/, /driveshaft/, /steering rack/]);
+  collect('componentType', [/ball joint/, /control arm/, /bushing/, /stabilizer link/, /cv axle/, /constant velocity/, /driveshaft/, /steering rack/, /air conditioning/, /hvac/, /compressor/, /clutch/]);
   collect('specifications', [/specification/, /specifications/, /maximum/, /minimum/, /limit/, /clearance/]);
   return facts;
 }
@@ -179,7 +188,7 @@ async function fetchHtml(url, timeoutMs = 9000) {
   } finally { clearTimeout(timer); }
 }
 
-async function scrapeNative(baseUrl, vehicle, context = {}) {
+async function scrapeNative(baseUrl, vehicle, context = {}, source = 'LEMON_MANUALS') {
   const terms = buildSearchTerms(vehicle, context);
   const queue = [{ url: baseUrl, depth: 0, priority: 100 }];
   const queued = new Set([baseUrl]);
@@ -204,7 +213,7 @@ async function scrapeNative(baseUrl, vehicle, context = {}) {
         queue.push({ url: link.url, depth: depth + 1, priority: linkScore });
       }
     } catch (error) {
-      console.warn(`[Scraper] Lemon fetch failed for ${url}: ${error.message}`);
+      console.warn(`[Scraper] Manual fetch failed for ${url}: ${error.message}`);
     }
   }
 
@@ -226,9 +235,9 @@ async function scrapeNative(baseUrl, vehicle, context = {}) {
 
   return {
     schemaVersion: 3,
-    source: 'LEMON_MANUALS',
+    source,
     vehicle: { year: vehicle.year, make: vehicle.make, model: vehicle.model, trim: vehicle.trim || '', engine: vehicle.engine || '', vin: vehicle.vin || '' },
-    query: { keywords: terms, symptomText: clean([context.symptoms, ...(context.mechanicNotices || []), ...(context.obdCodes || [])].filter(Boolean).join(' ')) },
+    query: { keywords: terms, symptomText: clean([context.query, context.symptoms, ...(context.mechanicNotices || []), ...(context.obdCodes || []), ...(context.keywords || [])].filter(Boolean).join(' ')) },
     items,
     crawled_urls: visited.size,
     relevant_pages: ranked.length,
@@ -243,14 +252,15 @@ async function scrapeLive(vehicle, context = {}) {
   try {
     resolution = await resolveRepairDiagnosisUrl(vehicle);
   } catch (error) {
-    return { items: [], error: `LEMON vehicle path resolution failed: ${error.message}` };
+    return { items: [], error: `Repair & Diagnosis path resolution failed: ${error.message}` };
   }
 
   const baseUrl = resolution.url;
-  console.log(`[Scraper] Resolved LEMON vehicle path via ${resolution.method}: ${baseUrl}`);
+  const source = resolution.source || (new URL(baseUrl).hostname === 'charm.li' ? 'CHARM' : 'LEMON_MANUALS');
+  console.log(`[Scraper] Resolved ${source} vehicle path via ${resolution.method}: ${baseUrl}`);
   const scraperPath = process.env.LEMON_PATH || path.join(process.cwd(), 'tools', 'lemon_scraper', 'target', 'release', 'lemon_scraper');
 
-  if (process.env.LEMON_USE_RUST === 'true' && fs.existsSync(scraperPath)) {
+  if (process.env.LEMON_USE_RUST === 'true' && fs.existsSync(scraperPath) && source === 'LEMON_MANUALS') {
     return new Promise(resolve => {
       exec(`"${scraperPath}" "${baseUrl}"`, { timeout: 30000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
         if (!error) {
@@ -258,7 +268,7 @@ async function scrapeLive(vehicle, context = {}) {
             const parsed = JSON.parse(stdout);
             if (parsed?.items?.length) return resolve({
               schemaVersion: 3,
-              source: 'LEMON_MANUALS',
+              source,
               items: parsed.items,
               crawled_urls: parsed.crawled_urls || parsed.items.length,
               resolved_url: baseUrl,
@@ -268,17 +278,17 @@ async function scrapeLive(vehicle, context = {}) {
             });
           } catch (_) {}
         }
-        scrapeNative(baseUrl, vehicle, context).then(result => resolve({ ...result, path_resolution: resolution.method })).catch(err => resolve({ items: [], error: err.message }));
+        scrapeNative(baseUrl, vehicle, context, source).then(result => resolve({ ...result, path_resolution: resolution.method })).catch(err => resolve({ items: [], error: err.message }));
       });
     });
   }
 
   try {
-    const result = await scrapeNative(baseUrl, vehicle, context);
+    const result = await scrapeNative(baseUrl, vehicle, context, source);
     return { ...result, path_resolution: resolution.method };
   } catch (error) {
     return { items: [], error: error.message };
   }
 }
 
-module.exports = { scrapeLEMONManuals };
+module.exports = { scrapeLEMONManuals, buildSearchTerms, scorePage, extractFacts };
