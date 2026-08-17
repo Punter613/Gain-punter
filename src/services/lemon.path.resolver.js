@@ -176,19 +176,34 @@ async function probeRepairUrl(url) {
   }
 }
 
+async function findReachableCandidate(entries, batchSize = Number(process.env.LEMON_RESOLVER_PROBE_CONCURRENCY || 4)) {
+  const size = Math.max(1, Math.min(8, Number(batchSize) || 4));
+  for (let offset = 0; offset < entries.length; offset += size) {
+    const batch = entries.slice(offset, offset + size);
+    const checked = await Promise.all(batch.map(async entry => ({
+      ...entry,
+      reachable: await probeRepairUrl(entry.repairUrl)
+    })));
+    const hit = checked.find(entry => entry.reachable);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, source }) {
   const signals = getVehicleSignals(vehicle);
-  for (const candidate of buildDirectCandidates(vehicle, host, makeLabels)) {
-    if (signals.drivetrain && drivetrainsConflict(signals.drivetrain, classifyDrivetrain(candidate.label))) continue;
-    if (await probeRepairUrl(candidate.url)) {
-      return {
-        url: candidate.url,
-        method: 'direct-candidate',
-        candidate: candidate.label,
-        drivetrain: signals.drivetrain,
-        source
-      };
-    }
+  const directEntries = buildDirectCandidates(vehicle, host, makeLabels)
+    .filter(candidate => !(signals.drivetrain && drivetrainsConflict(signals.drivetrain, classifyDrivetrain(candidate.label))))
+    .map(candidate => ({ candidate, repairUrl: candidate.url }));
+  const directHit = await findReachableCandidate(directEntries);
+  if (directHit) {
+    return {
+      url: directHit.repairUrl,
+      method: 'direct-candidate',
+      candidate: directHit.candidate.label,
+      drivetrain: signals.drivetrain,
+      source
+    };
   }
 
   for (const make of makeLabels) {
@@ -206,19 +221,22 @@ async function resolveFromSource(vehicle, { host, makeLabels, allowedHosts, sour
       .filter(link => link.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    for (const candidate of ranked.slice(0, 12)) {
-      const repairUrl = ensureRepairDiagnosisUrl(candidate.url);
-      if (await probeRepairUrl(repairUrl)) {
-        return {
-          url: repairUrl,
-          method: 'year-index-discovery',
-          candidate: clean(candidate.text) || decodeURIComponentSafe(candidate.url),
-          score: candidate.score,
-          drivetrain: signals.drivetrain,
-          yearIndexUrl: yearUrl,
-          source
-        };
-      }
+    const rankedHit = await findReachableCandidate(
+      ranked.slice(0, 12).map(candidate => ({
+        candidate,
+        repairUrl: ensureRepairDiagnosisUrl(candidate.url)
+      }))
+    );
+    if (rankedHit) {
+      return {
+        url: rankedHit.repairUrl,
+        method: 'year-index-discovery',
+        candidate: clean(rankedHit.candidate.text) || decodeURIComponentSafe(rankedHit.candidate.url),
+        score: rankedHit.candidate.score,
+        drivetrain: signals.drivetrain,
+        yearIndexUrl: yearUrl,
+        source
+      };
     }
   }
 
@@ -277,5 +295,6 @@ module.exports = {
   classifyDrivetrain,
   drivetrainsConflict,
   buildVehicleLabels,
-  buildDirectCandidates
+  buildDirectCandidates,
+  findReachableCandidate
 };
