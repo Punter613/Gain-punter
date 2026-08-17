@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { buildCanonicalSearchTerms } = require('../src/core/automotive.normalization');
 const { extractPage, scorePage } = require('../scripts/scrape-lemon-targeted-evidence');
 const { targetedToManual } = require('../src/services/lemon');
-const { QuickAskRetriever } = require('../src/core/knowledge/quick.ask.retriever');
+const { QuickAskRetriever, manualFocusScore } = require('../src/core/knowledge/quick.ask.retriever');
 
 test('A/C clutch query expands into factory-manual HVAC and component terms', () => {
   const { profile, terms } = buildCanonicalSearchTerms(
@@ -13,6 +13,7 @@ test('A/C clutch query expands into factory-manual HVAC and component terms', ()
   );
 
   assert.ok(profile.systems.includes('hvac'));
+  assert.ok(profile.components.includes('compressor clutch'));
   assert.ok(profile.sounds.includes('whine'));
   assert.ok(terms.includes('hvac'));
   assert.ok(terms.includes('air conditioning'));
@@ -62,6 +63,69 @@ test('tuned scorer ranks compressor clutch page above generic HVAC sensor pages'
   assert.ok(clutch.matchedTerms.includes('clutch'));
   assert.ok(clutch.matchedTerms.includes('compressor'));
   assert.ok(clutch.score > ambient.score, `${clutch.score} should outrank generic HVAC ${ambient.score}`);
+});
+
+test('Quick Ask component keyword gate refuses generic same-system pages', () => {
+  const exact = manualFocusScore({
+    title: 'Compressor Clutch Relay — 2008 Kia Sorento',
+    url: 'https://lemon-manuals.la/example/HVAC/Compressor%20Clutch%20Relay/',
+    meta: {
+      headings: 'Heating and Air Conditioning | Compressor Clutch Relay',
+      snippet: 'Inspect compressor clutch operation when a whine is present.',
+      relevanceScore: '60'
+    }
+  }, 'ac clutch whining when on');
+
+  const generic = manualFocusScore({
+    title: 'Ambient Temperature Sensor / Switch HVAC — 2008 Kia Sorento',
+    url: 'https://lemon-manuals.la/example/HVAC/Ambient%20Temperature%20Sensor/',
+    meta: {
+      headings: 'Heating and Air Conditioning | Ambient Temperature Sensor',
+      snippet: 'HVAC ambient temperature sensor testing.',
+      relevanceScore: '90'
+    }
+  }, 'ac clutch whining when on');
+
+  assert.equal(exact.eligible, true);
+  assert.ok(exact.matchedComponents.includes('compressor clutch'));
+  assert.equal(generic.eligible, false, 'system-only HVAC match must not surface when component was named');
+});
+
+test('Quick Ask returns focused component reference instead of first HVAC children', async () => {
+  const manualProvider = async () => ({
+    source: 'LEMON_MANUALS',
+    items: [
+      {
+        title: 'Ambient Temperature Sensor / Switch HVAC — 2008 Kia Sorento 2WD V6-3.3L',
+        url: 'https://lemon-manuals.la/HVAC/Ambient/',
+        meta: { headings: 'Heating and Air Conditioning | Ambient Temperature Sensor', snippet: 'HVAC sensor testing.', relevanceScore: '95' }
+      },
+      {
+        title: 'Coolant Temperature Sensor / Switch HVAC — 2008 Kia Sorento 2WD V6-3.3L',
+        url: 'https://lemon-manuals.la/HVAC/Coolant/',
+        meta: { headings: 'Heating and Air Conditioning | Coolant Temperature Sensor', snippet: 'HVAC sensor testing.', relevanceScore: '90' }
+      },
+      {
+        title: 'Power Transistor HVAC — 2008 Kia Sorento 2WD V6-3.3L',
+        url: 'https://lemon-manuals.la/HVAC/PowerTransistor/',
+        meta: { headings: 'Heating and Air Conditioning | Power Transistor HVAC', snippet: 'HVAC blower control testing.', relevanceScore: '85' }
+      },
+      {
+        title: 'Compressor Clutch Relay — 2008 Kia Sorento 2WD V6-3.3L',
+        url: 'https://lemon-manuals.la/HVAC/Compressor%20Clutch%20Relay/',
+        meta: { headings: 'Heating and Air Conditioning | Compressor Clutch Relay', snippet: 'Compressor clutch relay testing when clutch operation is abnormal.', relevanceScore: '50' }
+      }
+    ]
+  });
+
+  const out = await new QuickAskRetriever(null, manualProvider).ask({
+    vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
+    query: 'ac clutch'
+  });
+
+  assert.equal(out.repairDiagnosisEvidence.length, 1);
+  assert.match(out.repairDiagnosisEvidence[0].title, /compressor clutch relay/i);
+  assert.match(out.repairDiagnosisEvidence[0].matchedKeywords, /compressor clutch/i);
 });
 
 test('Quick Ask collapses duplicate manual paths with the same factory title', async () => {
