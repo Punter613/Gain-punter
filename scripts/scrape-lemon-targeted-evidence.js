@@ -317,13 +317,22 @@ function buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority) {
   };
 }
 
+function compareQueueEntries(a, b) {
+  return Number(b.exactDtc) - Number(a.exactDtc) ||
+    Number(b.priority || 0) - Number(a.priority || 0) ||
+    Number(a.depth || 0) - Number(b.depth || 0);
+}
+
 async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis', options = {}) {
   if (!vehicle?.year || !vehicle?.make || !vehicle?.model) {
     throw new Error('Vehicle year, make, and model are required for targeted manual retrieval');
   }
+  const startedAt = Date.now();
   const normalizedScope = SCOPE_SECTION_WEIGHTS[scope] ? scope : 'diagnosis';
   const maxPages = Math.max(1, Number(options.maxPages || DEFAULT_MAX_PAGES));
   const maxDepth = Math.max(0, Number(options.maxDepth ?? DEFAULT_MAX_DEPTH));
+  const fetchTimeoutMs = Math.max(250, Number(options.fetchTimeoutMs || 12000));
+  const maxElapsedMs = Math.max(0, Number(options.maxElapsedMs || 0));
   const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
   const resolution = await resolveRepairDiagnosisUrl(vehicle);
   const baseUrl = resolution.url;
@@ -333,20 +342,35 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     baseUrl,
     { allowUnknown: options.allowUnknownDrivetrain === true }
   );
+  const crawlStartedAt = Date.now();
 
   const queue = [{ url: baseUrl, depth: 0, priority: 1000, exactDtc: false }];
   const queued = new Set([baseUrl]);
   const visited = new Set();
   const candidatePages = [];
+  let timeBudgetExceeded = false;
 
   while (queue.length && visited.size < maxPages) {
-    queue.sort((a, b) => Number(b.exactDtc) - Number(a.exactDtc) || a.depth - b.depth || b.priority - a.priority);
+    if (maxElapsedMs > 0 && Date.now() - crawlStartedAt >= maxElapsedMs) {
+      timeBudgetExceeded = true;
+      break;
+    }
+
+    queue.sort(compareQueueEntries);
     const next = queue.shift();
     if (!next || visited.has(next.url) || next.depth > maxDepth) continue;
     visited.add(next.url);
 
     try {
-      const page = { ...extractPage(await fetchHtml(next.url), next.url), url: next.url };
+      const remainingMs = maxElapsedMs > 0 ? maxElapsedMs - (Date.now() - crawlStartedAt) : fetchTimeoutMs;
+      if (maxElapsedMs > 0 && remainingMs <= 0) {
+        timeBudgetExceeded = true;
+        break;
+      }
+      const requestTimeoutMs = maxElapsedMs > 0
+        ? Math.max(250, Math.min(fetchTimeoutMs, remainingMs))
+        : fetchTimeoutMs;
+      const page = { ...extractPage(await fetchHtml(next.url, requestTimeoutMs), next.url), url: next.url };
       const relevance = scorePage(page, terms, normalizedScope, queryProfile);
       candidatePages.push({ page, relevance, depth: next.depth });
 
@@ -415,6 +439,9 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     crawledPages: visited.size,
     selectedPages: selected.length,
     pages: selected,
+    elapsedMs: Date.now() - startedAt,
+    timeBudgetExceeded,
+    crawlTruncated: queue.length > 0,
     scrapedAt: new Date().toISOString()
   };
 }
@@ -447,6 +474,7 @@ module.exports = {
   extractPage,
   checkDrivetrainCompatibility,
   buildDescendantQueueEntry,
+  compareQueueEntries,
   normalizedRetrievalPath,
   normalizedRetrievalKey,
   exactDtcLinkPriority,

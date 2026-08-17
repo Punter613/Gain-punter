@@ -51,6 +51,21 @@ function buildManualCacheKey(vehicle, context = {}) {
   return `${vehicleKey}|ctx-${contextHash}`;
 }
 
+function extractManualPathHint(manualData = {}) {
+  const direct = String(manualData.resolved_url || manualData.resolvedUrl || '').trim();
+  if (direct) return direct;
+
+  for (const item of manualData.items || []) {
+    const url = String(item?.url || '').trim();
+    if (!url) continue;
+    const marker = url.search(/\/Repair(?:%20| )and(?:%20| )Diagnosis\//i);
+    if (marker >= 0) {
+      return `${url.slice(0, marker)}/Repair%20and%20Diagnosis/`;
+    }
+  }
+  return '';
+}
+
 async function getCachedManual(vehicle, context = {}) {
   if (!supabase) return null;
   const cacheKey = buildManualCacheKey(vehicle, context);
@@ -77,6 +92,23 @@ async function getCachedManual(vehicle, context = {}) {
   } catch (err) {
     console.warn('[DB] getCachedManual threw, treating as cache miss:', err.message);
     return null;
+  }
+}
+
+async function getCachedManualPathHint(vehicle, context = {}) {
+  if (!supabase) return '';
+  const cacheKey = buildManualCacheKey(vehicle, context);
+
+  try {
+    const { data, error } = await supabase
+      .from('scraped_manuals')
+      .select('data')
+      .eq('vehicle_key', cacheKey)
+      .maybeSingle();
+    if (error) return '';
+    return extractManualPathHint(data?.data || {});
+  } catch (_) {
+    return '';
   }
 }
 
@@ -108,10 +140,12 @@ async function saveScrapedManual(vehicle, manualData, context = {}) {
 module.exports = {
   supabase,
   getCachedManual,
+  getCachedManualPathHint,
   saveScrapedManual,
   buildVehicleCacheKey,
   buildManualCacheKey,
   normalizeManualContext,
+  extractManualPathHint,
   CURRENT_MANUAL_SCHEMA,
   normalizeDriveType
 };

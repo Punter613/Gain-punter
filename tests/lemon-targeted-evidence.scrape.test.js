@@ -16,6 +16,7 @@ const {
   getInput,
   checkDrivetrainCompatibility,
   buildDescendantQueueEntry,
+  compareQueueEntries,
   normalizedRetrievalPath,
   normalizedRetrievalKey,
   VALID_DRIVETRAINS
@@ -96,7 +97,7 @@ test('4WD request rejects an FWD resolved path', () => {
         '4WD',
         'https://lemon-manuals.la/Kia/2008/Sorento%20FWD%20V6-3.8L/Repair%20and%20Diagnosis/'
       ),
-    /LEMON drivetrain mismatch/
+    /Manual drivetrain mismatch/
   );
 });
 
@@ -114,6 +115,22 @@ test('exact-DTC flag is inherited by generic descendants', () => {
   assert.equal(entry.depth, 3);
   assert.equal(entry.priority, 8);
   assert.equal(entry.exactDtc, true);
+});
+
+test('crawl queue prefers relevant deeper evidence over irrelevant shallow navigation', () => {
+  const relevant = { url: '/engine/P1326', depth: 3, priority: 82, exactDtc: false };
+  const shallowNoise = { url: '/adas/surround-view', depth: 1, priority: 0, exactDtc: false };
+  const queue = [shallowNoise, relevant].sort(compareQueueEntries);
+
+  assert.equal(queue[0], relevant);
+});
+
+test('exact DTC path always outranks non-DTC navigation regardless of depth', () => {
+  const exactDtc = { url: '/engine/P1326', depth: 4, priority: 1, exactDtc: true };
+  const generic = { url: '/quick-lookups', depth: 1, priority: 999, exactDtc: false };
+  const queue = [generic, exactDtc].sort(compareQueueEntries);
+
+  assert.equal(queue[0], exactDtc);
 });
 
 test('same title and section under distinct DTC paths produce different retrieval keys', () => {

@@ -129,6 +129,22 @@ app.get('/fleet', (req, res) => res.sendFile(path.join(__dirname, '../public/fle
 app.get('/lifecycle', (req, res) => res.sendFile(path.join(__dirname, '../public/lifecycle.html')));
 app.use(express.static(path.join(__dirname, '../public')));
 
+function evidenceRetrievalProfile() {
+  return {
+    vinWarmup: 'stored-only',
+    vinDecodeTimeoutMs: Number(process.env.VIN_DECODE_TIMEOUT_MS || 5000),
+    vinDecodeCacheTtlMs: Number(process.env.VIN_DECODE_CACHE_TTL_MS || 60 * 60 * 1000),
+    manualPathResolutionBudgetMs: Number(process.env.LEMON_RESOLVER_MAX_ELAPSED_MS || 10000),
+    liveManualCrawlBudgetMs: Number(process.env.LEMON_LIVE_MAX_ELAPSED_MS || 20000),
+    manualWorkerHardTimeoutMs: Number(process.env.LEMON_WORKER_HARD_TIMEOUT_MS || 30000),
+    quickAskSourceBudgetsMs: {
+      confirmedRepairs: Number(process.env.QUICK_ASK_CONFIRMED_REPAIRS_TIMEOUT_MS || 5000),
+      tsbs: Number(process.env.QUICK_ASK_TSB_TIMEOUT_MS || 5000),
+      manual: Number(process.env.QUICK_ASK_MANUAL_TIMEOUT_MS || 32000)
+    }
+  };
+}
+
 // 6. HEALTH & SYSTEM MONITORING TELEMETRY
 app.get('/health', async (req, res) => {
   const health = { ok: true, timestamp: new Date().toISOString() };
@@ -140,8 +156,102 @@ app.get('/health', async (req, res) => {
   }
   health.stripe = process.env.STRIPE_SECRET_KEY ? 'configured' : 'not configured';
   health.groq = process.env.GROQ_API_KEY ? 'configured' : 'not configured';
+  health.evidenceRetrieval = evidenceRetrievalProfile();
+  if (process.env.IS_PULL_REQUEST === 'true') {
+    health.preview = {
+      commit: process.env.RENDER_GIT_COMMIT || null,
+      branch: process.env.RENDER_GIT_BRANCH || null,
+      service: process.env.RENDER_SERVICE_NAME || null
+    };
+  }
   res.json(health);
 });
+
+// Render PR previews get a deeper, read-only runtime smoke lane. Production never
+// registers this endpoint because Render sets IS_PULL_REQUEST to the string "true"
+// only for pull request preview services.
+if (process.env.IS_PULL_REQUEST === 'true') {
+  app.get('/health/preview-evidence', async (req, res) => {
+    const startedAt = Date.now();
+    const vin = String(req.query.vin || '5XXGT4L38LG384941').trim();
+    const query = String(req.query.query || 'P1326 knock signal range performance flashing MIL reduced power').trim();
+    const localBase = `http://127.0.0.1:${process.env.PORT || 3000}`;
+
+    try {
+      const decodeStartedAt = Date.now();
+      const decodeResponse = await fetch(`${localBase}/api/vehicle/decode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vin })
+      });
+      const decodeBody = await decodeResponse.json();
+      const decodeMs = Date.now() - decodeStartedAt;
+
+      if (!decodeResponse.ok || !decodeBody?.vehicle) {
+        return res.status(502).json({
+          ok: false,
+          stage: 'vehicle-decode',
+          statusCode: decodeResponse.status,
+          decodeMs,
+          response: decodeBody,
+          totalMs: Date.now() - startedAt
+        });
+      }
+
+      const quickAskStartedAt = Date.now();
+      const quickAskResponse = await fetch(`${localBase}/api/quick-ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicle: decodeBody.vehicle, query, limit: 5 })
+      });
+      const quickAskBody = await quickAskResponse.json();
+      const quickAskMs = Date.now() - quickAskStartedAt;
+      const references = Array.isArray(quickAskBody?.repairDiagnosisEvidence)
+        ? quickAskBody.repairDiagnosisEvidence
+        : [];
+
+      return res.status(quickAskResponse.ok ? 200 : 502).json({
+        ok: quickAskResponse.ok,
+        runtime: {
+          commit: process.env.RENDER_GIT_COMMIT || null,
+          branch: process.env.RENDER_GIT_BRANCH || null,
+          service: process.env.RENDER_SERVICE_NAME || null,
+          isPullRequest: process.env.IS_PULL_REQUEST,
+          evidenceRetrieval: evidenceRetrievalProfile()
+        },
+        decode: {
+          statusCode: decodeResponse.status,
+          ms: decodeMs,
+          vehicle: decodeBody.vehicle,
+          evidenceWarmup: decodeBody.evidenceWarmup,
+          evidenceKey: decodeBody.evidenceKey
+        },
+        quickAsk: {
+          statusCode: quickAskResponse.status,
+          ms: quickAskMs,
+          status: quickAskBody?.status || null,
+          mode: quickAskBody?.mode || null,
+          repairDiagnosisSource: quickAskBody?.repairDiagnosisSource || null,
+          repairDiagnosisFromCache: quickAskBody?.repairDiagnosisFromCache ?? null,
+          repairDiagnosisReferenceCount: references.length,
+          referenceTitles: references.slice(0, 5).map(item => item.title),
+          retrievalTelemetry: quickAskBody?.retrievalTelemetry || null,
+          warnings: quickAskBody?.warnings || [],
+          error: quickAskBody?.error || null
+        },
+        totalMs: Date.now() - startedAt
+      });
+    } catch (error) {
+      console.error('[Preview Evidence Smoke]', error.stack || error.message || error);
+      return res.status(502).json({
+        ok: false,
+        stage: 'preview-evidence-smoke',
+        error: error.message,
+        totalMs: Date.now() - startedAt
+      });
+    }
+  });
+}
 
 // 7. COMPREHENSIVE ERROR AND 404 SYSTEMS TERMINUS
 app.use((req, res, next) => {
@@ -180,8 +290,16 @@ try {
 // 9. NETWORK PORT BIND LISTEN ENGINE
 const port = process.env.PORT || 3000;
 const server = app.listen(port, () => {
+  const retrieval = evidenceRetrievalProfile();
+  const quickAsk = retrieval.quickAskSourceBudgetsMs;
   console.log(`[Server] SKSK ProTech running inside API framework layer on port ${port}`);
   console.log(`[Server] Testing Target Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(
+    `[Server] Evidence retrieval profile: VIN decode <=${retrieval.vinDecodeTimeoutMs}ms with cache; stored-only VIN warmup; ` +
+    `manual path <=${retrieval.manualPathResolutionBudgetMs}ms; live crawl <=${retrieval.liveManualCrawlBudgetMs}ms; ` +
+    `manual worker <=${retrieval.manualWorkerHardTimeoutMs}ms; ` +
+    `Quick Ask source budgets repairs/TSB/manual=${quickAsk.confirmedRepairs}/${quickAsk.tsbs}/${quickAsk.manual}ms`
+  );
   console.log(`[Server] Active Status Framework Endpoint: http://localhost:${port}/health`);
 });
 

@@ -75,3 +75,72 @@ jobs:
 
     - name: Hardened OpenAPI Contract Lint
       run: npx @stoplight/spectral-cli lint openapi.yaml --ruleset .spectral.yaml --format pretty
+
+    - name: Render PR Runtime Evidence Smoke
+      if: github.event_name == 'pull_request'
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PREVIEW_URL: https://p613-backend-pr-${{ github.event.number }}.onrender.com
+      run: |
+        git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA" || true
+        CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
+        echo "$CHANGED_FILES"
+
+        if ! echo "$CHANGED_FILES" | grep -Eq '^(api/|src/services/(lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/quick\.ask\.(retriever|bounded)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
+          echo "No runtime evidence hot-path changes; Render preview smoke skipped."
+          exit 0
+        fi
+
+        echo "Waiting for exact Render preview head $HEAD_SHA at $PREVIEW_URL"
+        MATCHED=0
+        for attempt in $(seq 1 36); do
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/render-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+          if [ "$HTTP_CODE" = "200" ]; then
+            if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+        const fs = require('fs');
+        const health = JSON.parse(fs.readFileSync('/tmp/render-health.json', 'utf8'));
+        if (health?.preview?.commit === process.env.HEAD_SHA) process.exit(0);
+        process.exit(1);
+        NODE
+            then
+              MATCHED=1
+              break
+            fi
+          fi
+          echo "Preview not on exact head yet (attempt $attempt/36, HTTP $HTTP_CODE)."
+          sleep 5
+        done
+
+        if [ "$MATCHED" != "1" ]; then
+          echo "Render preview never reached exact PR head $HEAD_SHA."
+          cat /tmp/render-health.json 2>/dev/null || true
+          exit 1
+        fi
+
+        SMOKE_URL="$PREVIEW_URL/health/preview-evidence?vin=5XXGT4L38LG384941&query=P1326%20knock%20signal%20range%20performance%20flashing%20MIL%20reduced%20power"
+        HTTP_CODE="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/render-evidence-smoke.json -w '%{http_code}' "$SMOKE_URL" || true)"
+        cat /tmp/render-evidence-smoke.json || true
+        echo
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "Render preview evidence smoke failed with HTTP $HTTP_CODE."
+          exit 1
+        fi
+
+        HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+        const fs = require('fs');
+        const smoke = JSON.parse(fs.readFileSync('/tmp/render-evidence-smoke.json', 'utf8'));
+        const failures = [];
+        if (smoke.ok !== true) failures.push('smoke.ok !== true');
+        if (smoke.runtime?.commit !== process.env.HEAD_SHA) failures.push('runtime commit mismatch');
+        if (smoke.decode?.statusCode !== 200) failures.push(`decode HTTP ${smoke.decode?.statusCode}`);
+        if (smoke.quickAsk?.statusCode !== 200) failures.push(`Quick Ask HTTP ${smoke.quickAsk?.statusCode}`);
+        if (smoke.quickAsk?.status !== 'SUCCESS') failures.push(`Quick Ask status ${smoke.quickAsk?.status}`);
+        if (Number(smoke.quickAsk?.ms || Infinity) > 40000) failures.push(`Quick Ask latency ${smoke.quickAsk?.ms}ms exceeded 40000ms ceiling`);
+        if (failures.length) {
+          console.error(failures.join('; '));
+          process.exit(1);
+        }
+        console.log(`Render runtime smoke passed: decode=${smoke.decode.ms}ms quickAsk=${smoke.quickAsk.ms}ms total=${smoke.totalMs}ms refs=${smoke.quickAsk.repairDiagnosisReferenceCount}`);
+        NODE
