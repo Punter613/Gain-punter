@@ -373,9 +373,13 @@ async function resolveRepairDiagnosisUrl(vehicle = {}, options = {}) {
   const key = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim, vehicle.engine, vehicle.engineCylinders, vehicle.drivetrain, vehicle.driveType]
     .map(normalize)
     .join('|');
+  const effectiveOptions = {
+    ...options,
+    hint: options.hint || vehicle.manualPathHint || ''
+  };
 
   if (!resolutionCache.has(key)) {
-    resolutionCache.set(key, resolveRepairDiagnosisUrlUncached(vehicle, options).catch(error => {
+    resolutionCache.set(key, resolveRepairDiagnosisUrlUncached(vehicle, effectiveOptions).catch(error => {
       resolutionCache.delete(key);
       throw error;
     }));
