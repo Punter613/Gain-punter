@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { QuickAskRetriever } = require('../src/core/knowledge/quick.ask.retriever');
+const { QuickAskRetriever, QUICK_ASK_SCAN_BOUNDS } = require('../src/core/knowledge/quick.ask.retriever');
+
+function fieldValue(row, field) {
+  return String(field).split(/->>?/).filter(Boolean).reduce((value, key) => value?.[key], row);
+}
 
 function fakeClient(tables) {
   return {
@@ -8,12 +12,12 @@ function fakeClient(tables) {
       let rows = [...(tables[name] || [])];
       const q = {
         select() { return q; },
-        eq(field, value) { rows = rows.filter(r => String(r[field]) === String(value)); return q; },
-        ilike(field, value) { rows = rows.filter(r => String(r[field] || '').toLowerCase() === String(value).toLowerCase()); return q; },
+        eq(field, value) { rows = rows.filter(r => String(fieldValue(r, field)) === String(value)); return q; },
+        ilike(field, value) { rows = rows.filter(r => String(fieldValue(r, field) || '').toLowerCase() === String(value).toLowerCase()); return q; },
         order(field, { ascending = true } = {}) {
           rows.sort((a, b) => {
-            const av = a[field] ?? '';
-            const bv = b[field] ?? '';
+            const av = fieldValue(a, field) ?? '';
+            const bv = fieldValue(b, field) ?? '';
             const cmp = String(av).localeCompare(String(bv));
             return ascending ? cmp : -cmp;
           });
@@ -67,6 +71,8 @@ test('Quick Ask keeps TSB evidence separate from confirmed-repair share', async 
   assert.equal(out.commonConfirmedRepairs[0].observedRepairShare, 1);
   assert.equal(out.commonConfirmedRepairs[0].evidenceStrength, 'LOW');
   assert.equal(out.publishedEvidence[0].bulletin_number, 'AC-1');
+  assert.equal(out.retrievalTelemetry.tsbs.pageSize, QUICK_ASK_SCAN_BOUNDS.tsbs.pageSize);
+  assert.equal(out.retrievalTelemetry.confirmedRepairs.maxScan, QUICK_ASK_SCAN_BOUNDS.confirmedRepairs.maxScan);
   assert.match(out.warnings.join(' '), /not diagnostic probability/i);
 });
 
@@ -97,8 +103,7 @@ test('Quick Ask ranks relevant TSBs beyond the first 250 vehicle rows', async ()
   const filler = Array.from({ length: 275 }, (_, i) => ({
     id: String(i).padStart(4, '0'),
     year: 2008,
-    make: 'Kia',
-    model: 'Sorento',
+    make: 'Kia', model: 'Sorento',
     title: `Unrelated bulletin ${i}`,
     bulletin_number: `FILL-${i}`,
     bulletin_date: '2008-01-01',
@@ -122,6 +127,7 @@ test('Quick Ask ranks relevant TSBs beyond the first 250 vehicle rows', async ()
   });
 
   assert.deepEqual(out.publishedEvidence.map(x => x.bulletin_number), ['AC-LATE']);
+  assert.equal(out.retrievalTelemetry.tsbs.scanLimitReached, false);
 });
 
 test('Quick Ask keeps older vehicle outcomes after 500 newer global feedback rows', async () => {
@@ -145,6 +151,55 @@ test('Quick Ask keeps older vehicle outcomes after 500 newer global feedback row
 
   assert.equal(out.confirmedRepairSampleSize, 1);
   assert.deepEqual(out.commonConfirmedRepairs.map(x => x.cause), ['A/C compressor clutch bearing']);
+  assert.equal(out.retrievalTelemetry.confirmedRepairs.rowsScanned, 1);
+  assert.equal(out.retrievalTelemetry.confirmedRepairs.vehicleFilterStage, 'database-json');
+});
+
+test('Quick Ask surfaces a partial-results warning at the TSB maximum scan bound', async () => {
+  const maxScan = QUICK_ASK_SCAN_BOUNDS.tsbs.maxScan;
+  const rows = Array.from({ length: maxScan }, (_, i) => ({
+    id: String(i).padStart(6, '0'), year: 2008, make: 'Kia', model: 'Sorento',
+    title: `Unrelated bulletin ${i}`, bulletin_number: `FILL-${i}`, bulletin_date: '2008-01-01',
+    group_name: 'Body', subject: 'trim information', body_text: 'Unrelated body trim information.',
+    source: 'NHTSA_BULK', source_url: `nhtsa://fill/${i}`
+  }));
+  rows.push({
+    id: '999999', year: 2008, make: 'Kia', model: 'Sorento',
+    title: 'A/C compressor clutch whine', bulletin_number: 'AC-OUTSIDE-BOUND', bulletin_date: '2009-01-01',
+    group_name: 'HVAC', subject: 'Air conditioning compressor clutch noise',
+    body_text: 'Whine when the A/C compressor clutch engages.', source: 'NHTSA_BULK', source_url: 'nhtsa://outside-bound'
+  });
+
+  const out = await new QuickAskRetriever(fakeClient({ vehicle_tsb_corpus: rows, feedback_examples: [] }), noManual).ask({
+    vehicle: { year: 2008, make: 'Kia', model: 'Sorento' }, query: 'ac clutch whine'
+  });
+
+  assert.deepEqual(out.publishedEvidence, []);
+  assert.equal(out.retrievalTelemetry.tsbs.rowsScanned, maxScan);
+  assert.equal(out.retrievalTelemetry.tsbs.scanLimitReached, true);
+  assert.equal(out.retrievalTelemetry.tsbs.resultsMayBePartial, true);
+  assert.match(out.warnings.join(' '), /TSB retrieval reached.*results may be partial/i);
+});
+
+test('Quick Ask surfaces a partial-results warning at the confirmed-repair maximum scan bound', async () => {
+  const maxScan = QUICK_ASK_SCAN_BOUNDS.confirmedRepairs.maxScan;
+  const rows = Array.from({ length: maxScan }, (_, i) => trusted({
+    id: `target-${String(i).padStart(6, '0')}`, job: `KIA-${i}`, cause: 'Brake caliper sticking'
+  }));
+  rows.push(trusted({
+    id: 'target-999999', job: 'KIA-OUTSIDE', cause: 'A/C compressor clutch bearing'
+  }));
+
+  const out = await new QuickAskRetriever(fakeClient({ vehicle_tsb_corpus: [], feedback_examples: rows }), noManual).ask({
+    vehicle: { year: 2008, make: 'Kia', model: 'Sorento' }, query: 'ac clutch'
+  });
+
+  assert.equal(out.confirmedRepairSampleSize, 0);
+  assert.deepEqual(out.commonConfirmedRepairs, []);
+  assert.equal(out.retrievalTelemetry.confirmedRepairs.rowsScanned, maxScan);
+  assert.equal(out.retrievalTelemetry.confirmedRepairs.scanLimitReached, true);
+  assert.equal(out.retrievalTelemetry.confirmedRepairs.resultsMayBePartial, true);
+  assert.match(out.warnings.join(' '), /Confirmed-repair retrieval reached.*shares may be partial/i);
 });
 
 test('Quick Ask returns relevant Repair and Diagnosis references separately', async () => {
