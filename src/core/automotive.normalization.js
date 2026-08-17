@@ -173,10 +173,14 @@ function buildCanonicalSearchTerms(vehicle = {}, context = {}) {
   ].filter(Boolean).join(' '));
 
   // Canonical HVAC is an internal system name; service manuals commonly spell
-  // the tree out as "Air Conditioning" and may title the component directly.
-  if (profile.systems.includes('hvac')) terms.push('air conditioning');
-  if (profile.systems.includes('hvac') && /\bcompressor\b/.test(complaintText)) terms.push('compressor');
-  if (profile.systems.includes('hvac') && /\bclutch\b/.test(complaintText)) terms.push('compressor clutch');
+  // the tree out as "Air Conditioning" and title components directly. When a
+  // mechanic names the clutch, preserve that component intent so generic HVAC
+  // sensors do not outrank compressor/clutch pages merely for being in HVAC.
+  if (profile.systems.includes('hvac')) {
+    terms.push('air conditioning');
+    if (/\bclutch\b/.test(complaintText)) terms.push('compressor clutch', 'clutch', 'compressor');
+    else if (/\bcompressor\b/.test(complaintText)) terms.push('compressor');
+  }
 
   const vehicleTerms = [vehicle.make, vehicle.model, vehicle.trim, vehicle.engine]
     .map(normalizeText)
