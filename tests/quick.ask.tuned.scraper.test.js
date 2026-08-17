@@ -128,6 +128,52 @@ test('Quick Ask returns focused component reference instead of first HVAC childr
   assert.match(out.repairDiagnosisEvidence[0].matchedKeywords, /compressor clutch/i);
 });
 
+test('Quick Ask symptom gate rejects generic HVAC and whole-manual body matches', async () => {
+  const manualProvider = async () => ({
+    source: 'LEMON_MANUALS',
+    items: [
+      {
+        title: 'Repair and Diagnosis (Single Page) — 2008 Ford Pickup F150',
+        url: 'https://lemon-manuals.la/Ford/2008/F150/Repair%20and%20Diagnosis%20(Single%20Page)/',
+        meta: {
+          headings: 'Repair and Diagnosis',
+          snippet: 'A very large manual containing grind, whine and HVAC text in unrelated sections.',
+          relevanceScore: '99'
+        }
+      },
+      {
+        title: 'HVAC Control System - General Information And Diagnostics - F-150',
+        url: 'https://lemon-manuals.la/Ford/2008/F150/Repair%20and%20Diagnosis/HVAC/HVAC%20Control%20System/',
+        meta: {
+          headings: 'Heating Ventilation and Air Conditioning | HVAC Control System',
+          snippet: 'General HVAC control information.',
+          relevanceScore: '95'
+        }
+      },
+      {
+        title: 'A/C Compressor Whine and Grinding Noise Diagnosis - F-150',
+        url: 'https://lemon-manuals.la/Ford/2008/F150/Repair%20and%20Diagnosis/HVAC/Compressor/Whine%20Grinding%20Noise%20Diagnosis/',
+        meta: {
+          headings: 'Heating Ventilation and Air Conditioning | Compressor | Whine and Grinding Noise Diagnosis',
+          snippet: 'Noise diagnosis for compressor operation with the A/C engaged.',
+          relevanceScore: '50'
+        }
+      }
+    ]
+  });
+
+  const out = await new QuickAskRetriever(null, manualProvider).ask({
+    vehicle: { year: 2008, make: 'Ford', model: 'F-150' },
+    query: 'grinding whining when ac is on'
+  });
+
+  assert.equal(out.repairDiagnosisEvidence.length, 1);
+  assert.match(out.repairDiagnosisEvidence[0].title, /compressor whine and grinding/i);
+  assert.match(out.repairDiagnosisEvidence[0].matchedKeywords, /grind/i);
+  assert.match(out.repairDiagnosisEvidence[0].matchedKeywords, /whine/i);
+  assert.doesNotMatch(out.repairDiagnosisEvidence[0].title, /single page|general information/i);
+});
+
 test('Quick Ask collapses duplicate manual paths with the same factory title', async () => {
   const manualProvider = async () => ({
     source: 'LEMON_MANUALS',
