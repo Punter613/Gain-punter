@@ -143,6 +143,90 @@ app.get('/health', async (req, res) => {
   res.json(health);
 });
 
+// Render PR previews get a deeper, read-only runtime smoke lane. Production never
+// registers this endpoint because Render sets IS_PULL_REQUEST to the string "true"
+// only for pull request preview services.
+if (process.env.IS_PULL_REQUEST === 'true') {
+  app.get('/health/preview-evidence', async (req, res) => {
+    const startedAt = Date.now();
+    const vin = String(req.query.vin || '5XXGT4L38LG384941').trim();
+    const query = String(req.query.query || 'P1326 knock signal range performance flashing MIL reduced power').trim();
+    const localBase = `http://127.0.0.1:${process.env.PORT || 3000}`;
+
+    try {
+      const decodeStartedAt = Date.now();
+      const decodeResponse = await fetch(`${localBase}/api/vehicle/decode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vin })
+      });
+      const decodeBody = await decodeResponse.json();
+      const decodeMs = Date.now() - decodeStartedAt;
+
+      if (!decodeResponse.ok || !decodeBody?.vehicle) {
+        return res.status(502).json({
+          ok: false,
+          stage: 'vehicle-decode',
+          statusCode: decodeResponse.status,
+          decodeMs,
+          response: decodeBody,
+          totalMs: Date.now() - startedAt
+        });
+      }
+
+      const quickAskStartedAt = Date.now();
+      const quickAskResponse = await fetch(`${localBase}/api/quick-ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicle: decodeBody.vehicle, query, limit: 5 })
+      });
+      const quickAskBody = await quickAskResponse.json();
+      const quickAskMs = Date.now() - quickAskStartedAt;
+      const references = Array.isArray(quickAskBody?.repairDiagnosisEvidence)
+        ? quickAskBody.repairDiagnosisEvidence
+        : [];
+
+      return res.status(quickAskResponse.ok ? 200 : 502).json({
+        ok: quickAskResponse.ok,
+        runtime: {
+          commit: process.env.RENDER_GIT_COMMIT || null,
+          branch: process.env.RENDER_GIT_BRANCH || null,
+          service: process.env.RENDER_SERVICE_NAME || null,
+          isPullRequest: process.env.IS_PULL_REQUEST
+        },
+        decode: {
+          statusCode: decodeResponse.status,
+          ms: decodeMs,
+          vehicle: decodeBody.vehicle,
+          evidenceWarmup: decodeBody.evidenceWarmup,
+          evidenceKey: decodeBody.evidenceKey
+        },
+        quickAsk: {
+          statusCode: quickAskResponse.status,
+          ms: quickAskMs,
+          status: quickAskBody?.status || null,
+          mode: quickAskBody?.mode || null,
+          repairDiagnosisSource: quickAskBody?.repairDiagnosisSource || null,
+          repairDiagnosisFromCache: quickAskBody?.repairDiagnosisFromCache ?? null,
+          repairDiagnosisReferenceCount: references.length,
+          referenceTitles: references.slice(0, 5).map(item => item.title),
+          warnings: quickAskBody?.warnings || [],
+          error: quickAskBody?.error || null
+        },
+        totalMs: Date.now() - startedAt
+      });
+    } catch (error) {
+      console.error('[Preview Evidence Smoke]', error.stack || error.message || error);
+      return res.status(502).json({
+        ok: false,
+        stage: 'preview-evidence-smoke',
+        error: error.message,
+        totalMs: Date.now() - startedAt
+      });
+    }
+  });
+}
+
 // 7. COMPREHENSIVE ERROR AND 404 SYSTEMS TERMINUS
 app.use((req, res, next) => {
   res.status(404).json({ success: false, error: 'Not found' });
