@@ -62,6 +62,7 @@ test('same manual cache key joins one in-flight live scrape', async () => {
   const scraperPath = require.resolve('../scripts/scrape-lemon-targeted-evidence');
   const restoreDb = replaceModule(dbPath, {
     getCachedManual: async () => null,
+    getCachedManualPathHint: async () => '',
     saveScrapedManual: async () => null,
     buildManualCacheKey: (_vehicle, context = {}) => `key:${context.query || ''}`
   });
@@ -106,6 +107,7 @@ test('different manual context keys remain independent', async () => {
   const scraperPath = require.resolve('../scripts/scrape-lemon-targeted-evidence');
   const restoreDb = replaceModule(dbPath, {
     getCachedManual: async () => null,
+    getCachedManualPathHint: async () => '',
     saveScrapedManual: async () => null,
     buildManualCacheKey: (_vehicle, context = {}) => `key:${context.query || ''}`
   });
@@ -128,6 +130,42 @@ test('different manual context keys remain independent', async () => {
       scrapeLEMONManuals(vehicle, { query: 'P0300' })
     ]);
     assert.equal(scrapeCalls, 2);
+  } finally {
+    delete require.cache[lemonPath];
+    restoreScraper();
+    restoreDb();
+  }
+});
+
+test('legacy cache path hint is forwarded into targeted retrieval during schema refresh', async () => {
+  const lemonPath = require.resolve('../src/services/lemon');
+  const dbPath = require.resolve('../src/db');
+  const scraperPath = require.resolve('../scripts/scrape-lemon-targeted-evidence');
+  const hint = 'https://lemon-manuals.la/Kia/2020/Optima%20EX/Repair%20and%20Diagnosis/';
+  const restoreDb = replaceModule(dbPath, {
+    getCachedManual: async () => null,
+    getCachedManualPathHint: async () => hint,
+    saveScrapedManual: async () => null,
+    buildManualCacheKey: () => 'optima-p1326'
+  });
+
+  let receivedVehicle;
+  const restoreScraper = replaceModule(scraperPath, {
+    scorePage: () => ({ score: 0 }),
+    scrapeTargetedEvidence: async vehicle => {
+      receivedVehicle = vehicle;
+      return targetedFixture();
+    }
+  });
+
+  delete require.cache[lemonPath];
+  try {
+    const { scrapeLEMONManuals } = require(lemonPath);
+    await scrapeLEMONManuals(
+      { year: 2020, make: 'KIA', model: 'Optima', engine: '2.4L', drivetrain: 'FWD' },
+      { query: 'P1326' }
+    );
+    assert.equal(receivedVehicle.manualPathHint, hint);
   } finally {
     delete require.cache[lemonPath];
     restoreScraper();
@@ -204,4 +242,55 @@ test('resolver probes candidate folders concurrently in bounded batches', async 
     global.fetch = originalFetch;
     delete require.cache[resolverPath];
   }
+});
+
+test('resolver uses a reachable cached manual path hint before guessing folders', async () => {
+  const resolverPath = require.resolve('../src/services/lemon.path.resolver');
+  delete require.cache[resolverPath];
+  const { resolveRepairDiagnosisUrlUncached } = require(resolverPath);
+  const originalFetch = global.fetch;
+  const hint = 'https://lemon-manuals.la/Kia/2020/Optima%20EX/Repair%20and%20Diagnosis/';
+  const calls = [];
+
+  global.fetch = async url => {
+    calls.push(String(url));
+    return { ok: String(url) === hint, status: String(url) === hint ? 200 : 404, text: async () => '<html></html>' };
+  };
+
+  try {
+    const resolved = await resolveRepairDiagnosisUrlUncached(
+      { year: 2020, make: 'KIA', model: 'Optima', engine: '2.4L', drivetrain: 'FWD' },
+      { hint, maxElapsedMs: 1000, probeTimeoutMs: 100 }
+    );
+    assert.equal(resolved.method, 'cached-path-hint');
+    assert.equal(resolved.url, hint);
+    assert.deepEqual(calls, [hint], 'a valid cached path should avoid all guessed folder probes');
+  } finally {
+    global.fetch = originalFetch;
+    delete require.cache[resolverPath];
+  }
+});
+
+test('resolver probe timeout is clipped to the remaining total deadline', () => {
+  const resolverPath = require.resolve('../src/services/lemon.path.resolver');
+  delete require.cache[resolverPath];
+  const { boundedTimeout } = require(resolverPath);
+  const deadline = Date.now() + 40;
+  const timeout = boundedTimeout(deadline, 2500);
+  assert.ok(timeout > 0 && timeout <= 40, `expected timeout inside remaining deadline, received ${timeout}`);
+  delete require.cache[resolverPath];
+});
+
+test('legacy manual cache data can recover a Repair and Diagnosis root path', () => {
+  const dbPath = require.resolve('../src/db');
+  delete require.cache[dbPath];
+  const { extractManualPathHint } = require(dbPath);
+  const hint = extractManualPathHint({
+    schemaVersion: 4,
+    items: [{
+      url: 'https://lemon-manuals.la/Kia/2020/Optima%20EX/Repair%20and%20Diagnosis/Engine%20Control/P1326/'
+    }]
+  });
+  assert.equal(hint, 'https://lemon-manuals.la/Kia/2020/Optima%20EX/Repair%20and%20Diagnosis/');
+  delete require.cache[dbPath];
 });
