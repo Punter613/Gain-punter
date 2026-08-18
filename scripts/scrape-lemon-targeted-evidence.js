@@ -15,6 +15,7 @@ const {
 const MANUAL_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy', 'charm.li']);
 const DEFAULT_MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 160);
 const DEFAULT_MAX_DEPTH = Number(process.env.LEMON_MAX_DEPTH || 4);
+const DEFAULT_CORPUS_BODY_CHARS = Number(process.env.LEMON_CORPUS_BODY_CHARS || 3500);
 const OUTPUT_PATH = process.env.LEMON_OUTPUT_PATH || path.join(process.cwd(), 'artifacts', 'lemon-targeted-evidence.json');
 
 const VALID_DRIVETRAINS = new Set(['2WD', '4WD', 'AWD', 'FWD', 'RWD']);
@@ -285,6 +286,14 @@ function buildOutputPage(candidate, source) {
   };
 }
 
+function buildCorpusPage(candidate, source, maxBodyChars = DEFAULT_CORPUS_BODY_CHARS) {
+  const output = buildOutputPage({ ...candidate, alternates: [] }, source);
+  const bodyLimit = Math.max(500, Math.min(10000, Number(maxBodyChars || DEFAULT_CORPUS_BODY_CHARS)));
+  output.sourceEvidence.bodyText = String(output.sourceEvidence.bodyText || '').slice(0, bodyLimit);
+  output.sourceEvidence.alternateSourceUrls = [];
+  return output;
+}
+
 function checkDrivetrainCompatibility(requestedDrivetrainRaw, resolvedUrl, options = {}) {
   const resolvedDrivetrain = classifyDrivetrain(decodeURIComponentSafe(resolvedUrl));
   const requestedDrivetrain = classifyDrivetrain(requestedDrivetrainRaw);
@@ -333,6 +342,8 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
   const maxDepth = Math.max(0, Number(options.maxDepth ?? DEFAULT_MAX_DEPTH));
   const fetchTimeoutMs = Math.max(250, Number(options.fetchTimeoutMs || 12000));
   const maxElapsedMs = Math.max(0, Number(options.maxElapsedMs || 0));
+  const corpusLimit = Math.max(1, Math.min(maxPages, Number(options.corpusLimit || maxPages)));
+  const corpusBodyChars = Math.max(500, Math.min(10000, Number(options.corpusBodyChars || DEFAULT_CORPUS_BODY_CHARS)));
   const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
   const resolution = await resolveRepairDiagnosisUrl(vehicle);
   const baseUrl = resolution.url;
@@ -387,6 +398,15 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     }
   }
 
+  const corpusByHash = new Map();
+  for (const candidate of candidatePages) {
+    const hash = contentHash(candidate.page);
+    if (!corpusByHash.has(hash)) corpusByHash.set(hash, candidate);
+  }
+  const corpusPages = [...corpusByHash.values()]
+    .slice(0, corpusLimit)
+    .map(candidate => buildCorpusPage(candidate, source, corpusBodyChars));
+
   const byHash = new Map();
   for (const candidate of candidatePages) {
     if (!candidate.relevance.matchedTerms.length) continue;
@@ -438,7 +458,9 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     pathResolution: resolution.method,
     crawledPages: visited.size,
     selectedPages: selected.length,
+    corpusPageCount: corpusPages.length,
     pages: selected,
+    corpusPages,
     elapsedMs: Date.now() - startedAt,
     timeBudgetExceeded,
     crawlTruncated: queue.length > 0,
@@ -457,7 +479,7 @@ async function main() {
   console.log('Canonical query profile:', output.query.canonicalProfile);
   fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
   fs.writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2));
-  console.log(`Selected ${output.selectedPages} relevant page(s) from ${output.crawledPages} crawled page(s)`);
+  console.log(`Selected ${output.selectedPages} relevant page(s) from ${output.crawledPages} crawled page(s); retained ${output.corpusPageCount} bounded corpus page(s)`);
   console.log(`Wrote ${OUTPUT_PATH}`);
 }
 
@@ -478,6 +500,7 @@ module.exports = {
   normalizedRetrievalPath,
   normalizedRetrievalKey,
   exactDtcLinkPriority,
+  buildCorpusPage,
   scorePage,
   VALID_DRIVETRAINS
 };
