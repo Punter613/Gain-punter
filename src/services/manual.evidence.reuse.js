@@ -55,14 +55,17 @@ function manualItemToPage(item = {}) {
   };
 }
 
-function pageDtcText(page = {}, item = {}) {
+function pageDtcText(page = {}) {
+  // Keep cross-context qualification on the same mechanic-visible source text
+  // that survives into Quick Ask's final applicability guard. Historical
+  // matchedKeywords/facts are useful ranking metadata, but they must not rescue
+  // a page whose title/path/snippet no longer demonstrates the current DTC
+  // anchor or its deterministic meaning.
   return [
     page.title,
     ...(Array.isArray(page.headings) ? page.headings : []),
     page.url,
-    page.bodyText,
-    item.meta?.matchedKeywords,
-    item.meta?.facts
+    page.bodyText
   ].filter(Boolean).join(' ');
 }
 
@@ -171,7 +174,7 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       const page = manualItemToPage(item);
       const relevance = scoreTargetedPage(page, terms, scope, queryProfile);
       if (!(relevance.matchedTerms || []).length) continue;
-      if (!hasStrongStoredMatch(relevance, queryProfile, dtcIntent, pageDtcText(page, item))) continue;
+      if (!hasStrongStoredMatch(relevance, queryProfile, dtcIntent, pageDtcText(page))) continue;
 
       const enriched = applyCurrentRelevance(item, relevance);
       const key = candidateKey(enriched);
