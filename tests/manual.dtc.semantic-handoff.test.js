@@ -7,6 +7,10 @@ const {
   buildCurrentSearchContext,
   rerankStoredManualEvidence
 } = require('../src/services/manual.evidence.reuse');
+const {
+  buildTargetedSearchContext,
+  scorePage
+} = require('../scripts/scrape-lemon-targeted-evidence');
 
 function storedRow(vehicle, item) {
   return {
@@ -56,6 +60,42 @@ test('resolved DTC meaning terms survive the canonical-system boundary for manua
   assert.ok(search.terms.includes('system too lean'));
 });
 
+test('live crawler gives deterministic DTC meanings high-signal ranking instead of collapsing them to a generic system', () => {
+  const vehicle = { year: 2008, make: 'KIA', model: 'Sorento', engine: '3.8L', drivetrain: '4WD' };
+  const context = { query: 'P0171 system too lean bank 1 fuel trim', obdCodes: ['P0171'] };
+  const search = buildTargetedSearchContext(vehicle, context);
+
+  assert.equal(search.dtcIntent.mode, 'DTC_ANCHORED');
+  assert.ok(search.resolvedDtcTerms.includes('fuel trim'));
+  assert.ok(search.terms.includes('fuel trim'));
+
+  const focused = scorePage(
+    {
+      title: 'Fuel Trim Testing and Inspection',
+      headings: [],
+      url: 'https://lemon-manuals.la/test/fuel-trim',
+      bodyText: 'System too lean diagnosis.'
+    },
+    search.terms,
+    'diagnosis',
+    search.queryProfile
+  );
+  const generic = scorePage(
+    {
+      title: 'Engine Control Overview',
+      headings: [],
+      url: 'https://lemon-manuals.la/test/engine',
+      bodyText: 'General engine information.'
+    },
+    search.terms,
+    'diagnosis',
+    search.queryProfile
+  );
+
+  assert.ok(focused.score > generic.score, `focused DTC meaning score ${focused.score} should outrank generic engine ${generic.score}`);
+  assert.ok(focused.matchedTerms.includes('fuel trim'));
+});
+
 test('body-only deterministic P0171 meaning can qualify retained corpus without a literal code or generic engine word', () => {
   const vehicle = { year: 2008, make: 'KIA', model: 'Sorento', engine: '3.8L', drivetrain: '4WD' };
   const rows = [storedRow(vehicle, manualItem({
@@ -78,8 +118,11 @@ test('body-only deterministic P0171 meaning can qualify retained corpus without 
 
 test('unknown DTC still receives no invented manual meaning terms', () => {
   const vehicle = { year: 2008, make: 'KIA', model: 'Sorento', engine: '3.8L', drivetrain: '4WD' };
-  const search = buildCurrentSearchContext(vehicle, { query: 'P1999 fuel trim', obdCodes: ['P1999'] });
+  const warmSearch = buildCurrentSearchContext(vehicle, { query: 'P1999 fuel trim', obdCodes: ['P1999'] });
+  const liveSearch = buildTargetedSearchContext(vehicle, { query: 'P1999 fuel trim', obdCodes: ['P1999'] });
 
-  assert.equal(search.dtcIntent.mode, 'SYMPTOM_FALLBACK_UNRESOLVED_DTC');
-  assert.deepEqual(search.resolvedDtcTerms, []);
+  assert.equal(warmSearch.dtcIntent.mode, 'SYMPTOM_FALLBACK_UNRESOLVED_DTC');
+  assert.deepEqual(warmSearch.resolvedDtcTerms, []);
+  assert.equal(liveSearch.dtcIntent.mode, 'SYMPTOM_FALLBACK_UNRESOLVED_DTC');
+  assert.deepEqual(liveSearch.resolvedDtcTerms, []);
 });
