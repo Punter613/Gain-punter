@@ -54,7 +54,7 @@ test('manual-root boundary accepts descendants and rejects sibling vehicle/manua
   );
 });
 
-test('same-vehicle navigation index yields deterministic DTC-meaning seeds without generic engine links', () => {
+test('same-vehicle navigation ranking keeps direct DTC meaning ahead of structural shortcuts and rejects sibling manuals', () => {
   const rows = [storedRow([
     {
       url: `${rootUrl}Powertrain%20Management/Computers%20and%20Control%20Systems/Testing%20and%20Inspection/System%20Too%20Lean%20Bank%201/`,
@@ -77,10 +77,35 @@ test('same-vehicle navigation index yields deterministic DTC-meaning seeds witho
     'diagnosis'
   );
 
-  assert.equal(seeds.length, 1);
+  assert.equal(seeds.length, 2);
+  assert.equal(seeds[0].seedKind, 'DTC_ANCHOR');
   assert.match(seeds[0].text, /fuel trim/i);
   assert.deepEqual(seeds[0].matchedDtcs, ['P0171']);
-  assert.ok(seeds[0].priority > 0);
+  assert.equal(seeds[1].seedKind, 'STRUCTURAL_NAVIGATION');
+  assert.match(seeds[1].text, /engine control/i);
+  assert.deepEqual(seeds[1].matchedDtcs, []);
+  assert.ok(seeds[0].priority > seeds[1].priority);
+  assert.ok(seeds.every(seed => seed.url.startsWith(rootUrl)));
+});
+
+test('structural navigation shortcuts are routing hints only and do not claim DTC coverage', () => {
+  const rows = [storedRow([
+    {
+      url: `${rootUrl}Powertrain%20Management/Ignition%20System/Testing%20and%20Inspection/`,
+      text: 'Ignition System Testing and Inspection'
+    }
+  ])];
+
+  const seeds = buildStoredNavigationSeeds(
+    rows,
+    vehicle,
+    { query: 'P0300 random misfire', obdCodes: ['P0300'] },
+    'diagnosis'
+  );
+
+  assert.equal(seeds.length, 1);
+  assert.equal(seeds[0].seedKind, 'STRUCTURAL_NAVIGATION');
+  assert.deepEqual(seeds[0].matchedDtcs, []);
 });
 
 test('stored navigation seeds do not cross explicit vehicle engine identity', () => {
