@@ -7,9 +7,20 @@ const {
 } = require('../../scripts/scrape-lemon-targeted-evidence');
 
 const inFlightScrapes = new Map();
+const DTC_PATTERN = /\b[PCBU][0-3][0-9A-F]{3}\b/i;
 
 function clean(value) {
   return String(value || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function hasDtcContext(context = {}) {
+  const text = [
+    context.query,
+    context.symptoms,
+    ...(Array.isArray(context.obdCodes) ? context.obdCodes : [context.obdCodes]),
+    ...(Array.isArray(context.keywords) ? context.keywords : [context.keywords])
+  ].filter(Boolean).join(' ');
+  return DTC_PATTERN.test(text);
 }
 
 function pageToManualItem(page = {}) {
@@ -84,8 +95,31 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
   const task = (async () => {
     const cached = await getCachedManual(vehicle, context);
     if (cached && cached.data) {
-      console.log(`[Scraper] Context cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
-      return { ...cached.data, fromCache: true, cacheMode: 'exact-context', cachedAt: cached.scraped_at };
+      if (hasDtcContext(context)) {
+        const exactRevalidated = rerankStoredManualEvidence(
+          [cached],
+          vehicle,
+          context,
+          context.scope || 'diagnosis',
+          { maxItems: positiveNumber(options.storedReuseMaxItems ?? process.env.LEMON_STORED_REUSE_MAX_ITEMS, 12) }
+        );
+        if (exactRevalidated) {
+          console.log(`[Scraper] Context cache HIT+REVALIDATED for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
+          return {
+            ...exactRevalidated,
+            fromCache: true,
+            cacheMode: 'exact-context-revalidated',
+            cachedAt: cached.scraped_at
+          };
+        }
+        console.log(
+          `[Scraper] Context cache REJECTED for ${vehicle.year} ${vehicle.make} ${vehicle.model}; ` +
+          'cached DTC evidence no longer satisfies the visible current-context gate'
+        );
+      } else {
+        console.log(`[Scraper] Context cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
+        return { ...cached.data, fromCache: true, cacheMode: 'exact-context', cachedAt: cached.scraped_at };
+      }
     }
 
     let storedRows = [];
@@ -214,5 +248,6 @@ module.exports = {
   scorePage,
   extractFacts,
   pageToManualItem,
-  targetedToManual
+  targetedToManual,
+  hasDtcContext
 };
