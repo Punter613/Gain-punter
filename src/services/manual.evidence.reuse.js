@@ -157,6 +157,13 @@ function candidateKey(item = {}) {
   return `url:${normalized(item.url)}|${normalized(item.title)}`;
 }
 
+function storedItemsForRow(row = {}) {
+  return [
+    ...(Array.isArray(row.data?.corpusItems) ? row.data.corpusItems : []),
+    ...(Array.isArray(row.data?.items) ? row.data.items : [])
+  ];
+}
+
 function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope = 'diagnosis', options = {}) {
   const compatibleRows = (Array.isArray(rows) ? rows : [])
     .filter(row => row?.data?.schemaVersion === CURRENT_MANUAL_SCHEMA)
@@ -169,8 +176,11 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
   const dtcIntent = buildDtcRetrievalIntent(vehicle, dtcIntentText(context));
 
   const candidates = new Map();
+  let storedPageCount = 0;
   for (const row of compatibleRows) {
-    for (const item of row.data?.items || []) {
+    const storedItems = storedItemsForRow(row);
+    storedPageCount += storedItems.length;
+    for (const item of storedItems) {
       const page = manualItemToPage(item);
       const relevance = scoreTargetedPage(page, terms, scope, queryProfile);
       if (!(relevance.matchedTerms || []).length) continue;
@@ -219,6 +229,7 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       timeBudgetExceeded: false,
       crawlTruncated: false,
       storedContextCount: compatibleRows.length,
+      storedPageCount,
       reusedContextCount: sourceRows.length
     },
     scraped: false,
@@ -237,5 +248,6 @@ module.exports = {
   pageDtcText,
   dtcIntentText,
   hasStrongStoredMatch,
+  storedItemsForRow,
   rerankStoredManualEvidence
 };
