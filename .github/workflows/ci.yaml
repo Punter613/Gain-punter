@@ -89,16 +89,22 @@ jobs:
 
         EVIDENCE_CHANGED=0
         UNVERIFIED_CHANGED=0
+        MANUAL_REUSE_CHANGED=0
 
         if echo "$CHANGED_FILES" | grep -Eq '^(api/server\.js$|src/services/(lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/(quick\.ask\.(retriever|bounded)|dtc\.retrieval\.intent)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
           EVIDENCE_CHANGED=1
+        fi
+
+        if echo "$CHANGED_FILES" | grep -Eq '^(src/db\.js$|src/services/manual\.evidence\.reuse\.js$)'; then
+          EVIDENCE_CHANGED=1
+          MANUAL_REUSE_CHANGED=1
         fi
 
         if echo "$CHANGED_FILES" | grep -Eq '^(api/server\.js$|public/lifecycle\.html$|src/services/job\.lifecycle\.js$|src/core/evidence/unverified\.diagnosis\.js$|src/routes/(jobs|jobs\.protected)\.js$)'; then
           UNVERIFIED_CHANGED=1
         fi
 
-        echo "Runtime canaries: evidence=$EVIDENCE_CHANGED unverified=$UNVERIFIED_CHANGED"
+        echo "Runtime canaries: evidence=$EVIDENCE_CHANGED manualReuse=$MANUAL_REUSE_CHANGED unverified=$UNVERIFIED_CHANGED"
 
         if [ "$EVIDENCE_CHANGED" != "1" ] && [ "$UNVERIFIED_CHANGED" != "1" ]; then
           echo "No affected runtime canary lane; Render preview smoke skipped."
@@ -162,6 +168,41 @@ jobs:
         }
         console.log(`Render evidence smoke passed: decode=${smoke.decode.ms}ms quickAsk=${smoke.quickAsk.ms}ms total=${smoke.totalMs}ms refs=${smoke.quickAsk.repairDiagnosisReferenceCount}`);
         NODE
+
+          if [ "$MANUAL_REUSE_CHANGED" = "1" ]; then
+            REUSE_URL="$PREVIEW_URL/health/preview-evidence?vin=KNDJC736385765089&query=P0300%20P0171%20random%20misfire%20lean%20bank%201%20deceleration%20full%20lock%20clunk"
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/render-manual-reuse-smoke.json -w '%{http_code}' "$REUSE_URL" || true)"
+            cat /tmp/render-manual-reuse-smoke.json || true
+            echo
+
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Render manual-reuse smoke failed with HTTP $HTTP_CODE."
+              exit 1
+            fi
+
+            HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+        const fs = require('fs');
+        const smoke = JSON.parse(fs.readFileSync('/tmp/render-manual-reuse-smoke.json', 'utf8'));
+        const failures = [];
+        const manual = smoke.quickAsk?.retrievalTelemetry?.manual || {};
+        if (smoke.ok !== true) failures.push('reuse smoke.ok !== true');
+        if (smoke.runtime?.commit !== process.env.HEAD_SHA) failures.push('reuse runtime commit mismatch');
+        if (smoke.decode?.statusCode !== 200) failures.push(`reuse decode HTTP ${smoke.decode?.statusCode}`);
+        if (!/sorento/i.test(String(smoke.decode?.vehicle?.model || ''))) failures.push(`reuse decoded model ${smoke.decode?.vehicle?.model}`);
+        if (smoke.quickAsk?.statusCode !== 200 || smoke.quickAsk?.status !== 'SUCCESS') failures.push('reuse Quick Ask did not succeed');
+        if (manual.timedOut === true) failures.push('reuse manual retrieval timed out');
+        if (smoke.quickAsk?.repairDiagnosisFromCache !== true) failures.push('reuse manual evidence did not come from stored cache');
+        if (Number(manual.elapsedMs || Infinity) > 5000) failures.push(`reuse manual latency ${manual.elapsedMs}ms exceeded 5000ms target`);
+        if (Number(smoke.quickAsk?.repairDiagnosisReferenceCount || 0) < 1) failures.push('reuse produced no focused manual references');
+        const warnings = Array.isArray(smoke.quickAsk?.warnings) ? smoke.quickAsk.warnings : [];
+        if (!warnings.some(w => /DTC-anchored retrieval active for P0300, P0171/i.test(String(w)))) failures.push('reuse runtime did not keep P0300/P0171 DTC anchors');
+        if (failures.length) {
+          console.error(failures.join('; '));
+          process.exit(1);
+        }
+        console.log(`Render manual reuse passed: manual=${manual.elapsedMs}ms total=${smoke.quickAsk.ms}ms refs=${smoke.quickAsk.repairDiagnosisReferenceCount} fromCache=${smoke.quickAsk.repairDiagnosisFromCache}`);
+        NODE
+          fi
         else
           echo "Evidence/Quick Ask hot path unchanged; evidence canary skipped."
         fi
