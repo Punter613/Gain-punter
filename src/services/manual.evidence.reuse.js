@@ -1,10 +1,11 @@
 'use strict';
 
-const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
+const { buildCanonicalSearchTerms, extractDtcs } = require('../core/automotive.normalization');
 const { buildDtcRetrievalIntent, matchDtcAnchors } = require('../core/knowledge/dtc.retrieval.intent');
 const { scorePage: scoreTargetedPage } = require('../../scripts/scrape-lemon-targeted-evidence');
 
 const CURRENT_MANUAL_SCHEMA = 5;
+const NON_SPECIFIC_TRIMS = new Set(['', 'base', 'standard', 'unknown', 'unspecified', 'n a', 'na', 'all']);
 
 function clean(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -38,8 +39,37 @@ function vehicleIdentity(vehicle = {}) {
   ].join('|');
 }
 
+function normalizeTrimOption(value) {
+  return normalized(value)
+    .replace(/\b(?:trim|series)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function explicitTrimOptions(value) {
+  return uniq(
+    clean(value)
+      .split(/[,/|;]/)
+      .map(normalizeTrimOption)
+      .filter(option => option && !NON_SPECIFIC_TRIMS.has(option))
+  );
+}
+
+function trimOptionMatches(left, right) {
+  if (left === right) return true;
+  return left.startsWith(`${right} `) || right.startsWith(`${left} `);
+}
+
+function trimsCompatible(a = {}, b = {}) {
+  const left = explicitTrimOptions(a.trim);
+  const right = explicitTrimOptions(b.trim);
+  if (!left.length || !right.length) return true;
+  return left.some(leftOption => right.some(rightOption => trimOptionMatches(leftOption, rightOption)));
+}
+
 function sameVehicleIdentity(a = {}, b = {}) {
-  return vehicleIdentity(a) === vehicleIdentity(b);
+  return vehicleIdentity(a) === vehicleIdentity(b) && trimsCompatible(a, b);
 }
 
 function parseHeadings(meta = {}) {
@@ -106,6 +136,33 @@ function buildCurrentSearchContext(vehicle = {}, context = {}) {
   };
 }
 
+function requestedDtcs(queryProfile = {}, dtcIntent = {}) {
+  return uniq(
+    (Array.isArray(dtcIntent.dtcs) && dtcIntent.dtcs.length ? dtcIntent.dtcs : queryProfile.dtcs || [])
+      .map(code => clean(code).toUpperCase())
+  );
+}
+
+function matchedRequestedDtcs(sourceText = '', queryProfile = {}, dtcIntent = {}) {
+  const requested = requestedDtcs(queryProfile, dtcIntent);
+  if (!requested.length) return [];
+
+  const matches = new Set();
+  if (dtcIntent.mode === 'DTC_ANCHORED') {
+    const anchored = matchDtcAnchors(sourceText, dtcIntent);
+    for (const code of anchored.matchedDtcs || []) matches.add(code);
+  }
+
+  // Unresolved DTCs have no deterministic meaning vocabulary. They may only be
+  // satisfied by the literal code appearing in the mechanic-visible source.
+  const exactSourceDtcs = new Set(extractDtcs(sourceText));
+  for (const code of requested) {
+    if (exactSourceDtcs.has(code)) matches.add(code);
+  }
+
+  return requested.filter(code => matches.has(code));
+}
+
 function findMatchedTerm(relevance = {}, term = '') {
   const needle = normalized(term);
   return (relevance.matchedTerms || []).find(value => normalized(value) === needle) || '';
@@ -119,17 +176,12 @@ function hasStrongLocation(relevance = {}, term = '') {
 }
 
 function hasStrongStoredMatch(relevance = {}, queryProfile = {}, dtcIntent = {}, sourceText = '') {
-  const dtcs = Array.isArray(queryProfile.dtcs) ? queryProfile.dtcs : [];
+  const dtcs = requestedDtcs(queryProfile, dtcIntent);
   if (dtcs.length) {
-    // Mirror Quick Ask's deterministic DTC applicability boundary. A stored page
-    // may qualify by the literal code OR by a resolved, code-specific meaning
-    // term (e.g. P0300 -> cylinder misfire). Generic words such as "engine" are
-    // never DTC anchors. Unknown codes remain exact-code only so reuse cannot
-    // invent a meaning that SKSK does not know.
-    if (dtcIntent.mode === 'DTC_ANCHORED') {
-      return matchDtcAnchors(sourceText, dtcIntent).matched;
-    }
-    return dtcs.some(code => Boolean(findMatchedTerm(relevance, code)));
+    // A candidate page only needs to satisfy one requested DTC to enter the
+    // candidate pool. The final accepted set is checked separately and must
+    // collectively cover every requested DTC before stored reuse is allowed.
+    return matchedRequestedDtcs(sourceText, queryProfile, dtcIntent).length > 0;
   }
 
   const components = Array.isArray(queryProfile.components) ? queryProfile.components : [];
@@ -191,6 +243,40 @@ function storedItemsForRow(row = {}) {
   ];
 }
 
+function selectCoverageCompleteCandidates(candidates = [], requiredDtcs = [], maxItems = 12) {
+  const sorted = [...candidates]
+    .sort((a, b) => Number(b.relevance.score || 0) - Number(a.relevance.score || 0));
+  if (!requiredDtcs.length) return sorted.slice(0, maxItems);
+
+  const selected = [];
+  const selectedKeys = new Set();
+
+  // Reserve the strongest available candidate for each requested DTC first.
+  // This avoids a high-scoring cluster for one code pushing the only candidate
+  // for another requested code below the normal result slice.
+  for (const code of requiredDtcs) {
+    const candidate = sorted.find(entry => (entry.matchedDtcs || []).includes(code));
+    if (!candidate) return [];
+    const key = candidateKey(candidate.item);
+    if (!selectedKeys.has(key)) {
+      if (selected.length >= maxItems) return [];
+      selected.push(candidate);
+      selectedKeys.add(key);
+    }
+  }
+
+  for (const candidate of sorted) {
+    if (selected.length >= maxItems) break;
+    const key = candidateKey(candidate.item);
+    if (selectedKeys.has(key)) continue;
+    selected.push(candidate);
+    selectedKeys.add(key);
+  }
+
+  const covered = new Set(selected.flatMap(candidate => candidate.matchedDtcs || []));
+  return requiredDtcs.every(code => covered.has(code)) ? selected : [];
+}
+
 function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope = 'diagnosis', options = {}) {
   const compatibleRows = (Array.isArray(rows) ? rows : [])
     .filter(row => row?.data?.schemaVersion === CURRENT_MANUAL_SCHEMA)
@@ -201,6 +287,7 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
   const { queryProfile, terms, dtcIntent, resolvedDtcTerms } = buildCurrentSearchContext(vehicle, context);
   if (!terms.length) return null;
 
+  const requiredDtcs = requestedDtcs(queryProfile, dtcIntent);
   const candidates = new Map();
   let storedPageCount = 0;
   for (const row of compatibleRows) {
@@ -210,23 +297,32 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       const page = manualItemToPage(item);
       const relevance = scoreTargetedPage(page, terms, scope, queryProfile);
       if (!(relevance.matchedTerms || []).length) continue;
-      if (!hasStrongStoredMatch(relevance, queryProfile, dtcIntent, pageDtcText(page))) continue;
+      const sourceText = pageDtcText(page);
+      if (!hasStrongStoredMatch(relevance, queryProfile, dtcIntent, sourceText)) continue;
 
       const enriched = applyCurrentRelevance(item, relevance);
       const key = candidateKey(enriched);
+      const matchedDtcs = matchedRequestedDtcs(sourceText, queryProfile, dtcIntent);
       const current = candidates.get(key);
       if (!current || Number(relevance.score || 0) > Number(current.relevance.score || 0)) {
-        candidates.set(key, { item: enriched, relevance, row });
+        candidates.set(key, { item: enriched, relevance, row, matchedDtcs });
       }
     }
   }
 
   const maxItems = Math.max(1, Math.min(30, Number(options.maxItems || 12)));
-  const selectedCandidates = [...candidates.values()]
-    .sort((a, b) => Number(b.relevance.score || 0) - Number(a.relevance.score || 0))
-    .slice(0, maxItems);
+  const selectedCandidates = selectCoverageCompleteCandidates(
+    [...candidates.values()],
+    requiredDtcs,
+    maxItems
+  );
 
+  // Multi-DTC stored reuse is all-or-nothing. Partial stored coverage must not
+  // suppress a live retrieval that may find evidence for the missing code(s).
   if (!selectedCandidates.length) return null;
+
+  const coveredDtcs = uniq(selectedCandidates.flatMap(candidate => candidate.matchedDtcs || []));
+  if (requiredDtcs.some(code => !coveredDtcs.includes(code))) return null;
 
   const sourceRows = [...new Set(selectedCandidates.map(candidate => candidate.row.vehicle_key).filter(Boolean))];
   const firstData = selectedCandidates[0].row.data || {};
@@ -239,7 +335,7 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       scope,
       symptoms: context.symptoms || context.query || '',
       mechanicNotices: context.mechanicNotices || [],
-      dtcs: context.obdCodes || [],
+      dtcs: requiredDtcs,
       canonicalProfile: queryProfile,
       canonicalSearchTerms: terms,
       resolvedDtcTerms,
@@ -257,7 +353,9 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       crawlTruncated: false,
       storedContextCount: compatibleRows.length,
       storedPageCount,
-      reusedContextCount: sourceRows.length
+      reusedContextCount: sourceRows.length,
+      requestedDtcs: requiredDtcs,
+      coveredDtcs
     },
     scraped: false,
     fromCache: true,
@@ -270,12 +368,17 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
 module.exports = {
   CURRENT_MANUAL_SCHEMA,
   vehicleIdentity,
+  explicitTrimOptions,
+  trimsCompatible,
   sameVehicleIdentity,
   manualItemToPage,
   pageDtcText,
   dtcIntentText,
   buildCurrentSearchContext,
+  requestedDtcs,
+  matchedRequestedDtcs,
   hasStrongStoredMatch,
+  selectCoverageCompleteCandidates,
   storedItemsForRow,
   rerankStoredManualEvidence
 };
