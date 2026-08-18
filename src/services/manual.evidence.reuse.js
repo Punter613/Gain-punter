@@ -14,6 +14,10 @@ function normalized(value) {
   return clean(value).toLowerCase();
 }
 
+function uniq(values = []) {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function normalizeDrive(value) {
   const raw = normalized(value);
   if (/\b4wd\b|\b4x4\b|four[ -]?wheel drive/.test(raw)) return '4wd';
@@ -77,6 +81,29 @@ function dtcIntentText(context = {}) {
     ...(Array.isArray(context.obdCodes) ? context.obdCodes : [context.obdCodes]),
     ...(Array.isArray(context.keywords) ? context.keywords : [context.keywords])
   ].filter(Boolean).join(' ');
+}
+
+function buildCurrentSearchContext(vehicle = {}, context = {}) {
+  const canonical = buildCanonicalSearchTerms(vehicle, context);
+  const dtcIntent = buildDtcRetrievalIntent(vehicle, dtcIntentText(context));
+
+  // Quick Ask resolves known DTCs into deterministic meaning terms before it
+  // reaches the manual layer. The canonical automotive normalizer intentionally
+  // collapses terms such as "misfire" and "fuel trim" into broad system labels;
+  // that is useful for generic symptom retrieval but would otherwise discard the
+  // high-signal DTC vocabulary at this re-ranking boundary. Preserve only terms
+  // sourced from the deterministic DTC registry here — never model-generated
+  // vocabulary and never a guessed meaning for an unknown code.
+  const resolvedDtcTerms = dtcIntent.mode === 'DTC_ANCHORED'
+    ? uniq((dtcIntent.anchors || []).flatMap(anchor => [anchor.code, ...(anchor.terms || [])]))
+    : [];
+
+  return {
+    queryProfile: canonical.profile,
+    terms: uniq([...(canonical.terms || []), ...resolvedDtcTerms]),
+    dtcIntent,
+    resolvedDtcTerms
+  };
 }
 
 function findMatchedTerm(relevance = {}, term = '') {
@@ -171,9 +198,8 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
 
   if (!compatibleRows.length) return null;
 
-  const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
+  const { queryProfile, terms, dtcIntent, resolvedDtcTerms } = buildCurrentSearchContext(vehicle, context);
   if (!terms.length) return null;
-  const dtcIntent = buildDtcRetrievalIntent(vehicle, dtcIntentText(context));
 
   const candidates = new Map();
   let storedPageCount = 0;
@@ -216,6 +242,7 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       dtcs: context.obdCodes || [],
       canonicalProfile: queryProfile,
       canonicalSearchTerms: terms,
+      resolvedDtcTerms,
       retrievalIntentMode: dtcIntent.mode
     },
     items: selectedCandidates.map(candidate => candidate.item),
@@ -247,6 +274,7 @@ module.exports = {
   manualItemToPage,
   pageDtcText,
   dtcIntentText,
+  buildCurrentSearchContext,
   hasStrongStoredMatch,
   storedItemsForRow,
   rerankStoredManualEvidence
