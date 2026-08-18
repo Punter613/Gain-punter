@@ -1,6 +1,7 @@
 'use strict';
 
 const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
+const { buildDtcRetrievalIntent, matchDtcAnchors } = require('../core/knowledge/dtc.retrieval.intent');
 const { scorePage: scoreTargetedPage } = require('../../scripts/scrape-lemon-targeted-evidence');
 
 const CURRENT_MANUAL_SCHEMA = 5;
@@ -54,6 +55,27 @@ function manualItemToPage(item = {}) {
   };
 }
 
+function pageDtcText(page = {}, item = {}) {
+  return [
+    page.title,
+    ...(Array.isArray(page.headings) ? page.headings : []),
+    page.url,
+    page.bodyText,
+    item.meta?.matchedKeywords,
+    item.meta?.facts
+  ].filter(Boolean).join(' ');
+}
+
+function dtcIntentText(context = {}) {
+  return [
+    context.query,
+    context.symptoms,
+    ...(Array.isArray(context.mechanicNotices) ? context.mechanicNotices : [context.mechanicNotices]),
+    ...(Array.isArray(context.obdCodes) ? context.obdCodes : [context.obdCodes]),
+    ...(Array.isArray(context.keywords) ? context.keywords : [context.keywords])
+  ].filter(Boolean).join(' ');
+}
+
 function findMatchedTerm(relevance = {}, term = '') {
   const needle = normalized(term);
   return (relevance.matchedTerms || []).find(value => normalized(value) === needle) || '';
@@ -66,9 +88,17 @@ function hasStrongLocation(relevance = {}, term = '') {
   return locations.some(location => ['title', 'heading', 'path'].includes(location));
 }
 
-function hasStrongStoredMatch(relevance = {}, queryProfile = {}) {
+function hasStrongStoredMatch(relevance = {}, queryProfile = {}, dtcIntent = {}, sourceText = '') {
   const dtcs = Array.isArray(queryProfile.dtcs) ? queryProfile.dtcs : [];
   if (dtcs.length) {
+    // Mirror Quick Ask's deterministic DTC applicability boundary. A stored page
+    // may qualify by the literal code OR by a resolved, code-specific meaning
+    // term (e.g. P0300 -> cylinder misfire). Generic words such as "engine" are
+    // never DTC anchors. Unknown codes remain exact-code only so reuse cannot
+    // invent a meaning that SKSK does not know.
+    if (dtcIntent.mode === 'DTC_ANCHORED') {
+      return matchDtcAnchors(sourceText, dtcIntent).matched;
+    }
     return dtcs.some(code => Boolean(findMatchedTerm(relevance, code)));
   }
 
@@ -133,6 +163,7 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
 
   const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
   if (!terms.length) return null;
+  const dtcIntent = buildDtcRetrievalIntent(vehicle, dtcIntentText(context));
 
   const candidates = new Map();
   for (const row of compatibleRows) {
@@ -140,7 +171,7 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       const page = manualItemToPage(item);
       const relevance = scoreTargetedPage(page, terms, scope, queryProfile);
       if (!(relevance.matchedTerms || []).length) continue;
-      if (!hasStrongStoredMatch(relevance, queryProfile)) continue;
+      if (!hasStrongStoredMatch(relevance, queryProfile, dtcIntent, pageDtcText(page, item))) continue;
 
       const enriched = applyCurrentRelevance(item, relevance);
       const key = candidateKey(enriched);
@@ -171,7 +202,8 @@ function rerankStoredManualEvidence(rows = [], vehicle = {}, context = {}, scope
       mechanicNotices: context.mechanicNotices || [],
       dtcs: context.obdCodes || [],
       canonicalProfile: queryProfile,
-      canonicalSearchTerms: terms
+      canonicalSearchTerms: terms,
+      retrievalIntentMode: dtcIntent.mode
     },
     items: selectedCandidates.map(candidate => candidate.item),
     crawled_urls: 0,
@@ -199,6 +231,8 @@ module.exports = {
   vehicleIdentity,
   sameVehicleIdentity,
   manualItemToPage,
+  pageDtcText,
+  dtcIntentText,
   hasStrongStoredMatch,
   rerankStoredManualEvidence
 };
