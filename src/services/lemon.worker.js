@@ -6,6 +6,34 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function safeSeedLinks(values = []) {
+  return (Array.isArray(values) ? values : [])
+    .map(item => ({
+      url: String(item?.url || '').trim(),
+      text: String(item?.text || '').replace(/\s+/g, ' ').trim().slice(0, 240),
+      priority: Number(item?.priority || 0),
+      matchedDtcs: Array.isArray(item?.matchedDtcs) ? item.matchedDtcs.map(String).slice(0, 12) : []
+    }))
+    .filter(item => /^https?:\/\//i.test(item.url))
+    .slice(0, 24);
+}
+
+function safeWorkerOptions(options = {}) {
+  return {
+    maxPages: options.maxPages,
+    maxDepth: options.maxDepth,
+    fetchTimeoutMs: options.fetchTimeoutMs,
+    maxElapsedMs: options.maxElapsedMs,
+    corpusLimit: options.corpusLimit,
+    corpusBodyChars: options.corpusBodyChars,
+    navigationLimit: options.navigationLimit,
+    seedLinks: safeSeedLinks(options.seedLinks),
+    seedFetchTimeoutMs: options.seedFetchTimeoutMs,
+    seedProbeBudgetMs: options.seedProbeBudgetMs,
+    allowUnknownDrivetrain: options.allowUnknownDrivetrain === true
+  };
+}
+
 function runTargetedEvidenceWorker(vehicle, context, scope, options = {}) {
   const hardTimeoutMs = positiveNumber(
     options.hardTimeoutMs ?? process.env.LEMON_WORKER_HARD_TIMEOUT_MS,
@@ -20,13 +48,7 @@ function runTargetedEvidenceWorker(vehicle, context, scope, options = {}) {
         vehicle,
         context,
         scope,
-        options: {
-          maxPages: options.maxPages,
-          maxDepth: options.maxDepth,
-          fetchTimeoutMs: options.fetchTimeoutMs,
-          maxElapsedMs: options.maxElapsedMs,
-          allowUnknownDrivetrain: options.allowUnknownDrivetrain
-        }
+        options: safeWorkerOptions(options)
       }
     });
 
@@ -70,5 +92,7 @@ function runTargetedEvidenceWorker(vehicle, context, scope, options = {}) {
 }
 
 module.exports = {
-  runTargetedEvidenceWorker
+  runTargetedEvidenceWorker,
+  safeSeedLinks,
+  safeWorkerOptions
 };
