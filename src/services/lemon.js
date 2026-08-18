@@ -1,6 +1,7 @@
-const { getCachedManual, getCachedManualPathHint, saveScrapedManual, buildManualCacheKey } = require('../db');
+const { getCachedManual, getCachedManualVehicleEvidence, getCachedManualPathHint, saveScrapedManual, buildManualCacheKey } = require('../db');
 const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
 const { runTargetedEvidenceWorker } = require('./lemon.worker');
+const { rerankStoredManualEvidence } = require('./manual.evidence.reuse');
 const {
   scorePage: scoreTargetedPage
 } = require('../../scripts/scrape-lemon-targeted-evidence');
@@ -84,7 +85,39 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
     const cached = await getCachedManual(vehicle, context);
     if (cached && cached.data) {
       console.log(`[Scraper] Context cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
-      return { ...cached.data, fromCache: true, cachedAt: cached.scraped_at };
+      return { ...cached.data, fromCache: true, cacheMode: 'exact-context', cachedAt: cached.scraped_at };
+    }
+
+    let storedRows = [];
+    try {
+      if (typeof getCachedManualVehicleEvidence === 'function') {
+        storedRows = await getCachedManualVehicleEvidence(vehicle, {
+          limit: positiveNumber(options.storedContextLimit ?? process.env.LEMON_STORED_CONTEXT_LIMIT, 8)
+        });
+      }
+      const storedReuse = rerankStoredManualEvidence(
+        storedRows,
+        vehicle,
+        context,
+        context.scope || 'diagnosis',
+        { maxItems: positiveNumber(options.storedReuseMaxItems ?? process.env.LEMON_STORED_REUSE_MAX_ITEMS, 12) }
+      );
+      if (storedReuse) {
+        console.log(
+          `[Scraper] Cross-context cache HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
+          `(${storedReuse.retrieval?.reusedContextCount || 0}/${storedReuse.retrieval?.storedContextCount || storedRows.length} stored contexts, ` +
+          `${storedReuse.items.length} re-ranked page(s))`
+        );
+        return storedReuse;
+      }
+      if (storedRows.length) {
+        console.log(
+          `[Scraper] Cross-context cache MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model}; ` +
+          `${storedRows.length} stored context(s) lacked strong current-context evidence`
+        );
+      }
+    } catch (error) {
+      console.warn(`[Scraper] Cross-context cache reuse skipped for ${cacheKey}: ${error.message}`);
     }
 
     const manualPathHint = typeof getCachedManualPathHint === 'function'
@@ -122,7 +155,7 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
         `(${Number(targeted.crawledPages || 0)} crawled / ${Number(targeted.selectedPages || 0)} selected)`
       );
       if (freshResult.items.length > 0) await saveScrapedManual(vehicle, freshResult, context);
-      return { ...freshResult, fromCache: false };
+      return { ...freshResult, fromCache: false, cacheMode: 'live-targeted' };
     } catch (error) {
       console.warn(`[Scraper] Targeted retrieval ${cacheKey} failed fast: ${error.message}`);
       return { items: [], source: null, error: error.message, fromCache: false };
