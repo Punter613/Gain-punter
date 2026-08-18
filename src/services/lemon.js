@@ -54,21 +54,25 @@ function pageToManualItem(page = {}) {
 }
 
 function targetedToManual(output = {}) {
+  const corpusItems = (output.corpusPages || []).map(pageToManualItem);
   return {
     schemaVersion: 5,
     source: output.source || 'LEMON_MANUALS',
     vehicle: output.vehicle || {},
     query: output.query || {},
     items: (output.pages || []).map(pageToManualItem),
+    corpusItems,
     crawled_urls: Number(output.crawledPages || 0),
     relevant_pages: Number(output.selectedPages || 0),
+    corpus_pages: Number(output.corpusPageCount || corpusItems.length || 0),
     resolved_url: output.resolvedUrl || '',
     path_resolution: output.pathResolution || '',
     applicability: output.applicability || null,
     retrieval: {
       elapsedMs: Number(output.elapsedMs || 0),
       timeBudgetExceeded: !!output.timeBudgetExceeded,
-      crawlTruncated: !!output.crawlTruncated
+      crawlTruncated: !!output.crawlTruncated,
+      corpusPageCount: Number(output.corpusPageCount || corpusItems.length || 0)
     },
     scraped: true,
     scraped_at: output.scrapedAt || new Date().toISOString()
@@ -180,15 +184,20 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
           fetchTimeoutMs: positiveNumber(options.fetchTimeoutMs ?? process.env.LEMON_LIVE_FETCH_TIMEOUT_MS, 6000),
           maxElapsedMs: positiveNumber(options.maxElapsedMs ?? process.env.LEMON_LIVE_MAX_ELAPSED_MS, 20000),
           hardTimeoutMs: positiveNumber(options.hardTimeoutMs ?? process.env.LEMON_WORKER_HARD_TIMEOUT_MS, 30000),
+          corpusLimit: positiveNumber(options.corpusLimit ?? process.env.LEMON_CORPUS_MAX_PAGES, 80),
+          corpusBodyChars: positiveNumber(options.corpusBodyChars ?? process.env.LEMON_CORPUS_BODY_CHARS, 3500),
           allowUnknownDrivetrain: true
         }
       );
       const freshResult = targetedToManual(targeted);
       console.log(
         `[Scraper] Targeted retrieval ${cacheKey} completed in ${Number(targeted.elapsedMs || 0)}ms ` +
-        `(${Number(targeted.crawledPages || 0)} crawled / ${Number(targeted.selectedPages || 0)} selected)`
+        `(${Number(targeted.crawledPages || 0)} crawled / ${Number(targeted.selectedPages || 0)} selected / ` +
+        `${Number(targeted.corpusPageCount || 0)} retained for local re-ranking)`
       );
-      if (freshResult.items.length > 0) await saveScrapedManual(vehicle, freshResult, context);
+      if (freshResult.items.length > 0 || freshResult.corpusItems.length > 0) {
+        await saveScrapedManual(vehicle, freshResult, context);
+      }
       return { ...freshResult, fromCache: false, cacheMode: 'live-targeted' };
     } catch (error) {
       console.warn(`[Scraper] Targeted retrieval ${cacheKey} failed fast: ${error.message}`);
