@@ -11,6 +11,7 @@ const {
   classifyManualSection,
   buildCanonicalSearchTerms
 } = require('../src/core/automotive.normalization');
+const { buildDtcRetrievalIntent } = require('../src/core/knowledge/dtc.retrieval.intent');
 
 const MANUAL_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy', 'charm.li']);
 const DEFAULT_MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 160);
@@ -104,6 +105,38 @@ function parseCsv(value) {
   return String(value || '').split(',').map(v => v.trim()).filter(Boolean);
 }
 
+function uniq(values = []) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function dtcIntentText(context = {}) {
+  return [
+    context.query,
+    context.symptoms,
+    ...(Array.isArray(context.mechanicNotices) ? context.mechanicNotices : [context.mechanicNotices]),
+    ...(Array.isArray(context.obdCodes) ? context.obdCodes : [context.obdCodes]),
+    ...(Array.isArray(context.keywords) ? context.keywords : [context.keywords])
+  ].filter(Boolean).join(' ');
+}
+
+function buildTargetedSearchContext(vehicle = {}, context = {}) {
+  const canonical = buildCanonicalSearchTerms(vehicle, context);
+  const dtcIntent = buildDtcRetrievalIntent(vehicle, dtcIntentText(context));
+  const resolvedDtcTerms = dtcIntent.mode === 'DTC_ANCHORED'
+    ? uniq((dtcIntent.anchors || []).flatMap(anchor => anchor.terms || []))
+    : [];
+
+  return {
+    queryProfile: {
+      ...canonical.profile,
+      resolvedDtcTerms
+    },
+    terms: uniq([...(canonical.terms || []), ...resolvedDtcTerms]),
+    dtcIntent,
+    resolvedDtcTerms
+  };
+}
+
 function getInput() {
   const year = String(process.env.LEMON_YEAR || '').trim();
   const make = String(process.env.LEMON_MAKE || '').trim();
@@ -137,6 +170,7 @@ function getInput() {
 function semanticKind(term, queryProfile) {
   const normalized = normalizeText(term);
   if (queryProfile.dtcs.some(code => normalizeText(code) === normalized)) return 'dtc';
+  if ((queryProfile.resolvedDtcTerms || []).some(value => normalizeText(value) === normalized)) return 'dtc-meaning';
   if (queryProfile.triggers.includes(term)) return 'trigger';
   if (queryProfile.sounds.includes(term)) return 'sound';
   if (queryProfile.conditions.includes(term)) return 'condition';
@@ -147,6 +181,7 @@ function semanticKind(term, queryProfile) {
 function semanticMatchWeight(term, queryProfile, sectionType) {
   const kind = semanticKind(term, queryProfile);
   if (kind === 'dtc') return 28;
+  if (kind === 'dtc-meaning') return 22;
   if (kind === 'trigger') return 18;
   if (kind === 'sound') return 16;
   if (kind === 'condition') return 14;
@@ -194,7 +229,10 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
   const uniqueMatchedTerms = [...new Set(matchedTerms)];
   const matchedTrigger = uniqueMatchedTerms.some(term => queryProfile.triggers?.includes(term));
   const matchedSound = uniqueMatchedTerms.some(term => queryProfile.sounds?.includes(term));
-  const matchedDtc = uniqueMatchedTerms.some(term => queryProfile.dtcs?.some(code => normalizeText(code) === normalizeText(term)));
+  const matchedDtc = uniqueMatchedTerms.some(term =>
+    queryProfile.dtcs?.some(code => normalizeText(code) === normalizeText(term)) ||
+    queryProfile.resolvedDtcTerms?.some(value => normalizeText(value) === normalizeText(term))
+  );
 
   if (matchedTrigger && matchedSound) semanticScore += 18;
   if (matchedDtc && ['DIAGNOSIS', 'TEST'].includes(sectionType)) semanticScore += 12;
@@ -344,7 +382,7 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
   const maxElapsedMs = Math.max(0, Number(options.maxElapsedMs || 0));
   const corpusLimit = Math.max(1, Math.min(maxPages, Number(options.corpusLimit || maxPages)));
   const corpusBodyChars = Math.max(500, Math.min(10000, Number(options.corpusBodyChars || DEFAULT_CORPUS_BODY_CHARS)));
-  const { profile: queryProfile, terms } = buildCanonicalSearchTerms(vehicle, context);
+  const { queryProfile, terms, dtcIntent, resolvedDtcTerms } = buildTargetedSearchContext(vehicle, context);
   const resolution = await resolveRepairDiagnosisUrl(vehicle);
   const baseUrl = resolution.url;
   const source = resolution.source || (new URL(baseUrl).hostname.toLowerCase() === 'charm.li' ? 'CHARM' : 'LEMON_MANUALS');
@@ -451,7 +489,9 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
       mechanicNotices: context.mechanicNotices || [],
       dtcs: context.obdCodes || [],
       canonicalProfile: queryProfile,
-      canonicalSearchTerms: terms
+      canonicalSearchTerms: terms,
+      resolvedDtcTerms,
+      retrievalIntentMode: dtcIntent.mode
     },
     applicability,
     resolvedUrl: baseUrl,
@@ -501,6 +541,7 @@ module.exports = {
   normalizedRetrievalKey,
   exactDtcLinkPriority,
   buildCorpusPage,
+  buildTargetedSearchContext,
   scorePage,
   VALID_DRIVETRAINS
 };
