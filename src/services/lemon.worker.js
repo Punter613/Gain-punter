@@ -34,11 +34,23 @@ function safeWorkerOptions(options = {}) {
   };
 }
 
-function runTargetedEvidenceWorker(vehicle, context, scope, options = {}) {
-  const hardTimeoutMs = positiveNumber(
+function resolveHardTimeoutMs(options = {}) {
+  const requested = positiveNumber(
     options.hardTimeoutMs ?? process.env.LEMON_WORKER_HARD_TIMEOUT_MS,
     30000
   );
+  const elapsedBudget = Number(options.maxElapsedMs);
+  if (!Number.isFinite(elapsedBudget) || elapsedBudget <= 0) return requested;
+
+  // maxElapsedMs starts after manual-path resolution inside the worker. Keep the
+  // crawl budget strict, but leave bounded setup/resolver headroom before the
+  // parent terminates the thread. The normal 20s crawl / 30s hard wall is
+  // unchanged because 20s + 5s remains below the existing 30s default.
+  return Math.max(requested, elapsedBudget + 5000);
+}
+
+function runTargetedEvidenceWorker(vehicle, context, scope, options = {}) {
+  const hardTimeoutMs = resolveHardTimeoutMs(options);
   const workerPath = path.join(__dirname, '../workers/lemonTargetedWorker.js');
 
   return new Promise((resolve, reject) => {
@@ -94,5 +106,6 @@ function runTargetedEvidenceWorker(vehicle, context, scope, options = {}) {
 module.exports = {
   runTargetedEvidenceWorker,
   safeSeedLinks,
-  safeWorkerOptions
+  safeWorkerOptions,
+  resolveHardTimeoutMs
 };
