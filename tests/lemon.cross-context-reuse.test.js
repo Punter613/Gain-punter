@@ -49,6 +49,38 @@ function storedRow(vehicle, code = 'P1326') {
   };
 }
 
+function storedMeaningRow(vehicle, { title, snippet, key }) {
+  return {
+    vehicle_key: `stored:meaning:${key}`,
+    scraped_at: '2026-08-18T21:05:00.000Z',
+    data: {
+      schemaVersion: 5,
+      source: 'LEMON_MANUALS',
+      vehicle: { ...vehicle },
+      resolved_url: 'https://lemon-manuals.la/Kia/Repair%20and%20Diagnosis/',
+      applicability: { exact: true, requiresVerification: false },
+      items: [{
+        title,
+        url: `https://lemon-manuals.la/test/${key}`,
+        price: null,
+        meta: {
+          scraper: 'targeted-evidence-v2',
+          sectionType: 'TEST',
+          relevanceScore: '80',
+          semanticScore: '50',
+          scopeScore: '30',
+          matchedKeywords: '',
+          headings: 'Engine Control | Testing and Inspection',
+          snippet,
+          facts: JSON.stringify({ dtcs: [], sounds: [], conditions: [], systems: ['engine'], canonicalTerms: [] }),
+          contentHash: `meaning-${key}`,
+          alternateSourceUrls: ''
+        }
+      }]
+    }
+  };
+}
+
 function targetedFixture(vehicle, code = 'P0300') {
   return {
     source: 'LEMON_MANUALS',
@@ -137,6 +169,29 @@ test('same vehicle can reuse stored DTC evidence across a different context hash
   });
 });
 
+test('resolved DTC meaning can reuse a focused stored page even when the literal code is absent', async () => {
+  const vehicle = { year: 2008, make: 'KIA', model: 'Sorento', engine: '3.8L', drivetrain: '4WD' };
+  const rows = [storedMeaningRow(vehicle, {
+    title: 'Cylinder Misfire Testing and Inspection',
+    snippet: 'Inspect ignition and fuel delivery for a random or multiple cylinder misfire.',
+    key: 'cylinder-misfire'
+  })];
+
+  await withLemonDbMock(baseDbMock(rows), async ({ scrapeLEMONManuals }) => {
+    let liveCalls = 0;
+    const result = await scrapeLEMONManuals(
+      vehicle,
+      { query: 'P0300 random misfire', obdCodes: ['P0300'] },
+      { targetedRunner: async () => { liveCalls += 1; return targetedFixture(vehicle, 'P0300'); } }
+    );
+
+    assert.equal(liveCalls, 0, 'deterministically resolved P0300 meaning should qualify focused stored misfire evidence');
+    assert.equal(result.cacheMode, 'vehicle-cross-context');
+    assert.equal(result.items.length, 1);
+    assert.match(result.items[0].title, /misfire/i);
+  });
+});
+
 test('unrelated DTC context does not reuse stored pages and falls through to live crawl', async () => {
   const vehicle = { year: 2020, make: 'KIA', model: 'Optima', engine: '2.4L', drivetrain: 'FWD' };
   const rows = [storedRow(vehicle, 'P1326')];
@@ -151,6 +206,27 @@ test('unrelated DTC context does not reuse stored pages and falls through to liv
 
     assert.equal(liveCalls, 1, 'unrelated stored evidence must not suppress current-context retrieval');
     assert.equal(result.fromCache, false);
+    assert.equal(result.cacheMode, 'live-targeted');
+  });
+});
+
+test('unknown DTC does not borrow a meaning from unrelated stored evidence', async () => {
+  const vehicle = { year: 2008, make: 'KIA', model: 'Sorento', engine: '3.8L', drivetrain: '4WD' };
+  const rows = [storedMeaningRow(vehicle, {
+    title: 'Cylinder Misfire Testing and Inspection',
+    snippet: 'Inspect ignition and fuel delivery for a random cylinder misfire.',
+    key: 'unknown-code-guard'
+  })];
+
+  await withLemonDbMock(baseDbMock(rows), async ({ scrapeLEMONManuals }) => {
+    let liveCalls = 0;
+    const result = await scrapeLEMONManuals(
+      vehicle,
+      { query: 'P1999 random misfire', obdCodes: ['P1999'] },
+      { targetedRunner: async () => { liveCalls += 1; return targetedFixture(vehicle, 'P1999'); } }
+    );
+
+    assert.equal(liveCalls, 1, 'unresolved DTC reuse stays exact-code only');
     assert.equal(result.cacheMode, 'live-targeted');
   });
 });
