@@ -2,6 +2,7 @@ const { getCachedManual, getCachedManualVehicleEvidence, getCachedManualPathHint
 const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
 const { runTargetedEvidenceWorker } = require('./lemon.worker');
 const { rerankStoredManualEvidence } = require('./manual.evidence.reuse');
+const { buildStoredNavigationSeeds } = require('./manual.navigation.seeds');
 const {
   scorePage: scoreTargetedPage
 } = require('../../scripts/scrape-lemon-targeted-evidence');
@@ -55,6 +56,13 @@ function pageToManualItem(page = {}) {
 
 function targetedToManual(output = {}) {
   const corpusItems = (output.corpusPages || []).map(pageToManualItem);
+  const navigationLinks = (Array.isArray(output.navigationLinks) ? output.navigationLinks : [])
+    .map(link => ({
+      url: clean(link?.url),
+      text: clean(link?.text).slice(0, 240)
+    }))
+    .filter(link => link.url)
+    .slice(0, 1000);
   return {
     schemaVersion: 5,
     source: output.source || 'LEMON_MANUALS',
@@ -62,9 +70,11 @@ function targetedToManual(output = {}) {
     query: output.query || {},
     items: (output.pages || []).map(pageToManualItem),
     corpusItems,
+    navigationLinks,
     crawled_urls: Number(output.crawledPages || 0),
     relevant_pages: Number(output.selectedPages || 0),
     corpus_pages: Number(output.corpusPageCount || corpusItems.length || 0),
+    navigation_links: Number(output.navigationLinkCount || navigationLinks.length || 0),
     resolved_url: output.resolvedUrl || '',
     path_resolution: output.pathResolution || '',
     applicability: output.applicability || null,
@@ -72,7 +82,12 @@ function targetedToManual(output = {}) {
       elapsedMs: Number(output.elapsedMs || 0),
       timeBudgetExceeded: !!output.timeBudgetExceeded,
       crawlTruncated: !!output.crawlTruncated,
-      corpusPageCount: Number(output.corpusPageCount || corpusItems.length || 0)
+      corpusPageCount: Number(output.corpusPageCount || corpusItems.length || 0),
+      navigationLinkCount: Number(output.navigationLinkCount || navigationLinks.length || 0),
+      seedLinkCount: Number(output.seedLinkCount || 0),
+      navigationSeeded: !!output.seededNavigationUsed,
+      seedEarlyStop: !!output.seedEarlyStop,
+      seedMatchedDtcs: Array.isArray(output.seedMatchedDtcs) ? output.seedMatchedDtcs : []
     },
     scraped: true,
     scraped_at: output.scrapedAt || new Date().toISOString()
@@ -158,6 +173,21 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
       console.warn(`[Scraper] Cross-context cache reuse skipped for ${cacheKey}: ${error.message}`);
     }
 
+    const navigationSeeds = buildStoredNavigationSeeds(
+      storedRows,
+      vehicle,
+      context,
+      context.scope || 'diagnosis',
+      { limit: positiveNumber(options.seedLinkLimit ?? process.env.LEMON_SEED_LINK_LIMIT, 12) }
+    );
+    if (navigationSeeds.length) {
+      const covered = [...new Set(navigationSeeds.flatMap(seed => seed.matchedDtcs || []))];
+      console.log(
+        `[Scraper] Stored navigation seeds READY for ${vehicle.year} ${vehicle.make} ${vehicle.model}: ` +
+        `${navigationSeeds.length} link(s), DTC coverage=${covered.join(',') || 'none'}`
+      );
+    }
+
     const manualPathHint = typeof getCachedManualPathHint === 'function'
       ? await getCachedManualPathHint(vehicle, context)
       : '';
@@ -186,19 +216,25 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
           hardTimeoutMs: positiveNumber(options.hardTimeoutMs ?? process.env.LEMON_WORKER_HARD_TIMEOUT_MS, 30000),
           corpusLimit: positiveNumber(options.corpusLimit ?? process.env.LEMON_CORPUS_MAX_PAGES, 80),
           corpusBodyChars: positiveNumber(options.corpusBodyChars ?? process.env.LEMON_CORPUS_BODY_CHARS, 3500),
+          navigationLimit: positiveNumber(options.navigationLimit ?? process.env.LEMON_NAVIGATION_MAX_LINKS, 500),
+          seedLinks: navigationSeeds,
+          seedFetchTimeoutMs: positiveNumber(options.seedFetchTimeoutMs ?? process.env.LEMON_SEED_FETCH_TIMEOUT_MS, 2500),
+          seedProbeBudgetMs: positiveNumber(options.seedProbeBudgetMs ?? process.env.LEMON_SEED_PROBE_BUDGET_MS, 4500),
           allowUnknownDrivetrain: true
         }
       );
       const freshResult = targetedToManual(targeted);
+      const cacheMode = targeted.seededNavigationUsed ? 'stored-navigation-seeded' : 'live-targeted';
       console.log(
         `[Scraper] Targeted retrieval ${cacheKey} completed in ${Number(targeted.elapsedMs || 0)}ms ` +
         `(${Number(targeted.crawledPages || 0)} crawled / ${Number(targeted.selectedPages || 0)} selected / ` +
-        `${Number(targeted.corpusPageCount || 0)} retained for local re-ranking)`
+        `${Number(targeted.corpusPageCount || 0)} retained / ${Number(targeted.navigationLinkCount || 0)} navigation links` +
+        `${targeted.seededNavigationUsed ? ` / seeded${targeted.seedEarlyStop ? '-early-stop' : ''}` : ''})`
       );
-      if (freshResult.items.length > 0 || freshResult.corpusItems.length > 0) {
+      if (freshResult.items.length > 0 || freshResult.corpusItems.length > 0 || freshResult.navigationLinks.length > 0) {
         await saveScrapedManual(vehicle, freshResult, context);
       }
-      return { ...freshResult, fromCache: false, cacheMode: 'live-targeted' };
+      return { ...freshResult, fromCache: false, cacheMode };
     } catch (error) {
       console.warn(`[Scraper] Targeted retrieval ${cacheKey} failed fast: ${error.message}`);
       return { items: [], source: null, error: error.message, fromCache: false };
