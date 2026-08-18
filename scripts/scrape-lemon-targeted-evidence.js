@@ -11,12 +11,15 @@ const {
   classifyManualSection,
   buildCanonicalSearchTerms
 } = require('../src/core/automotive.normalization');
-const { buildDtcRetrievalIntent } = require('../src/core/knowledge/dtc.retrieval.intent');
+const { buildDtcRetrievalIntent, matchDtcAnchors } = require('../src/core/knowledge/dtc.retrieval.intent');
 
 const MANUAL_HOSTS = new Set(['lemon-manuals.la', 'lemon-manuals.org.ua', 'lemon-manuals.gy', 'charm.li']);
 const DEFAULT_MAX_PAGES = Number(process.env.LEMON_MAX_PAGES || 160);
 const DEFAULT_MAX_DEPTH = Number(process.env.LEMON_MAX_DEPTH || 4);
 const DEFAULT_CORPUS_BODY_CHARS = Number(process.env.LEMON_CORPUS_BODY_CHARS || 3500);
+const DEFAULT_NAVIGATION_LIMIT = Number(process.env.LEMON_NAVIGATION_MAX_LINKS || 500);
+const DEFAULT_SEED_FETCH_TIMEOUT_MS = Number(process.env.LEMON_SEED_FETCH_TIMEOUT_MS || 2500);
+const DEFAULT_SEED_PROBE_BUDGET_MS = Number(process.env.LEMON_SEED_PROBE_BUDGET_MS || 4500);
 const OUTPUT_PATH = process.env.LEMON_OUTPUT_PATH || path.join(process.cwd(), 'artifacts', 'lemon-targeted-evidence.json');
 
 const VALID_DRIVETRAINS = new Set(['2WD', '4WD', 'AWD', 'FWD', 'RWD']);
@@ -261,6 +264,72 @@ function decodeURIComponentSafe(value) {
   catch (_) { return String(value || ''); }
 }
 
+function normalizedManualPath(value) {
+  try {
+    return decodeURIComponentSafe(new URL(value).pathname)
+      .replace(/\\/g, '/')
+      .replace(/\/{2,}/g, '/')
+      .replace(/\/$/, '')
+      .toLowerCase();
+  } catch (_) {
+    return '';
+  }
+}
+
+function isWithinManualRoot(url, rootUrl) {
+  try {
+    const candidate = new URL(url);
+    const root = new URL(rootUrl);
+    if (candidate.hostname.toLowerCase() !== root.hostname.toLowerCase()) return false;
+    const candidatePath = normalizedManualPath(candidate.toString());
+    const rootPath = normalizedManualPath(root.toString());
+    return !!candidatePath && !!rootPath && (candidatePath === rootPath || candidatePath.startsWith(`${rootPath}/`));
+  } catch (_) {
+    return false;
+  }
+}
+
+function prepareSeedLinks(seedLinks = [], rootUrl, limit = 24) {
+  const best = new Map();
+  for (const seed of Array.isArray(seedLinks) ? seedLinks : []) {
+    const url = String(seed?.url || '').trim();
+    if (!url || !isWithinManualRoot(url, rootUrl)) continue;
+    const normalized = url.toLowerCase();
+    const candidate = {
+      url,
+      text: String(seed?.text || '').replace(/\s+/g, ' ').trim().slice(0, 240),
+      priority: Number(seed?.priority || 0),
+      matchedDtcs: Array.isArray(seed?.matchedDtcs) ? seed.matchedDtcs.map(String).slice(0, 12) : []
+    };
+    const current = best.get(normalized);
+    if (!current || candidate.priority > current.priority) best.set(normalized, candidate);
+  }
+  return [...best.values()]
+    .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url))
+    .slice(0, Math.max(1, Math.min(24, Number(limit || 24))));
+}
+
+function buildNavigationIndex(candidatePages = [], rootUrl, limit = DEFAULT_NAVIGATION_LIMIT) {
+  const byUrl = new Map();
+  for (const candidate of candidatePages) {
+    for (const link of candidate?.page?.links || []) {
+      if (!isWithinManualRoot(link?.url, rootUrl)) continue;
+      const url = String(link.url || '').trim();
+      if (!url) continue;
+      const key = url.toLowerCase();
+      const item = {
+        url,
+        text: String(link.text || '').replace(/\s+/g, ' ').trim().slice(0, 240)
+      };
+      const current = byUrl.get(key);
+      if (!current || item.text.length > current.text.length) byUrl.set(key, item);
+    }
+  }
+  return [...byUrl.values()]
+    .sort((a, b) => a.url.localeCompare(b.url))
+    .slice(0, Math.max(1, Math.min(1000, Number(limit || DEFAULT_NAVIGATION_LIMIT))));
+}
+
 const TRACKING_QUERY_PARAMS = new Set([
   'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
   'fbclid', 'gclid', 'msclkid', 'ref', 'refid', 'session', 'sid'
@@ -360,14 +429,22 @@ function buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority) {
     url: link.url,
     depth: next.depth + 1,
     priority: linkRelevance.score + dtcPriority,
-    exactDtc: next.exactDtc || dtcPriority > 0
+    exactDtc: next.exactDtc || dtcPriority > 0,
+    seed: false
   };
 }
 
 function compareQueueEntries(a, b) {
-  return Number(b.exactDtc) - Number(a.exactDtc) ||
+  return Number(b.seed) - Number(a.seed) ||
+    Number(b.exactDtc) - Number(a.exactDtc) ||
     Number(b.priority || 0) - Number(a.priority || 0) ||
     Number(a.depth || 0) - Number(b.depth || 0);
+}
+
+function seedCoverageSatisfied(dtcIntent = {}, matchedDtcs = new Set()) {
+  if (dtcIntent.mode !== 'DTC_ANCHORED') return false;
+  const required = (dtcIntent.anchors || []).map(anchor => anchor.code);
+  return required.length > 0 && required.every(code => matchedDtcs.has(code));
 }
 
 async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis', options = {}) {
@@ -382,6 +459,9 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
   const maxElapsedMs = Math.max(0, Number(options.maxElapsedMs || 0));
   const corpusLimit = Math.max(1, Math.min(maxPages, Number(options.corpusLimit || maxPages)));
   const corpusBodyChars = Math.max(500, Math.min(10000, Number(options.corpusBodyChars || DEFAULT_CORPUS_BODY_CHARS)));
+  const navigationLimit = Math.max(1, Math.min(1000, Number(options.navigationLimit || DEFAULT_NAVIGATION_LIMIT)));
+  const seedFetchTimeoutMs = Math.max(250, Math.min(fetchTimeoutMs, Number(options.seedFetchTimeoutMs || DEFAULT_SEED_FETCH_TIMEOUT_MS)));
+  const seedProbeBudgetMs = Math.max(500, Number(options.seedProbeBudgetMs || DEFAULT_SEED_PROBE_BUDGET_MS));
   const { queryProfile, terms, dtcIntent, resolvedDtcTerms } = buildTargetedSearchContext(vehicle, context);
   const resolution = await resolveRepairDiagnosisUrl(vehicle);
   const baseUrl = resolution.url;
@@ -392,11 +472,23 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     { allowUnknown: options.allowUnknownDrivetrain === true }
   );
   const crawlStartedAt = Date.now();
+  const preparedSeeds = prepareSeedLinks(options.seedLinks, baseUrl, 24);
 
-  const queue = [{ url: baseUrl, depth: 0, priority: 1000, exactDtc: false }];
-  const queued = new Set([baseUrl]);
+  const queue = [
+    ...preparedSeeds.map((seed, index) => ({
+      url: seed.url,
+      depth: 0,
+      priority: 20000 + Number(seed.priority || 0) - index,
+      exactDtc: true,
+      seed: true
+    })),
+    { url: baseUrl, depth: 0, priority: 1000, exactDtc: false, seed: false }
+  ];
+  const queued = new Set(queue.map(item => item.url));
   const visited = new Set();
   const candidatePages = [];
+  const seedMatchedDtcs = new Set();
+  let seedEarlyStop = false;
   let timeBudgetExceeded = false;
 
   while (queue.length && visited.size < maxPages) {
@@ -408,6 +500,7 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     queue.sort(compareQueueEntries);
     const next = queue.shift();
     if (!next || visited.has(next.url) || next.depth > maxDepth) continue;
+    if (next.seed && Date.now() - crawlStartedAt >= seedProbeBudgetMs) continue;
     visited.add(next.url);
 
     try {
@@ -416,12 +509,26 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
         timeBudgetExceeded = true;
         break;
       }
-      const requestTimeoutMs = maxElapsedMs > 0
+      let requestTimeoutMs = maxElapsedMs > 0
         ? Math.max(250, Math.min(fetchTimeoutMs, remainingMs))
         : fetchTimeoutMs;
+      if (next.seed) requestTimeoutMs = Math.min(requestTimeoutMs, seedFetchTimeoutMs);
+
       const page = { ...extractPage(await fetchHtml(next.url, requestTimeoutMs), next.url), url: next.url };
       const relevance = scorePage(page, terms, normalizedScope, queryProfile);
       candidatePages.push({ page, relevance, depth: next.depth });
+
+      if (next.seed && dtcIntent.mode === 'DTC_ANCHORED' &&
+          ['DIAGNOSIS', 'TEST', 'SPEC'].includes(relevance.sectionType) &&
+          Number(relevance.score || 0) > 0) {
+        const visibleText = [page.title, ...(page.headings || []), page.url, page.bodyText].filter(Boolean).join(' ');
+        const anchored = matchDtcAnchors(visibleText, dtcIntent);
+        for (const code of anchored.matchedDtcs || []) seedMatchedDtcs.add(code);
+        if (seedCoverageSatisfied(dtcIntent, seedMatchedDtcs)) {
+          seedEarlyStop = true;
+          break;
+        }
+      }
 
       for (const link of page.links) {
         if (visited.has(link.url) || queued.has(link.url) || next.depth + 1 > maxDepth) continue;
@@ -435,6 +542,8 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
       if (options.onFetchError) options.onFetchError(next.url, error);
     }
   }
+
+  const navigationLinks = buildNavigationIndex(candidatePages, baseUrl, navigationLimit);
 
   const corpusByHash = new Map();
   for (const candidate of candidatePages) {
@@ -499,8 +608,14 @@ async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis'
     crawledPages: visited.size,
     selectedPages: selected.length,
     corpusPageCount: corpusPages.length,
+    navigationLinkCount: navigationLinks.length,
+    seedLinkCount: preparedSeeds.length,
+    seededNavigationUsed: preparedSeeds.length > 0,
+    seedEarlyStop,
+    seedMatchedDtcs: [...seedMatchedDtcs],
     pages: selected,
     corpusPages,
+    navigationLinks,
     elapsedMs: Date.now() - startedAt,
     timeBudgetExceeded,
     crawlTruncated: queue.length > 0,
@@ -519,7 +634,10 @@ async function main() {
   console.log('Canonical query profile:', output.query.canonicalProfile);
   fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
   fs.writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2));
-  console.log(`Selected ${output.selectedPages} relevant page(s) from ${output.crawledPages} crawled page(s); retained ${output.corpusPageCount} bounded corpus page(s)`);
+  console.log(
+    `Selected ${output.selectedPages} relevant page(s) from ${output.crawledPages} crawled page(s); ` +
+    `retained ${output.corpusPageCount} bounded corpus page(s) and ${output.navigationLinkCount} navigation link(s)`
+  );
   console.log(`Wrote ${OUTPUT_PATH}`);
 }
 
@@ -537,6 +655,11 @@ module.exports = {
   checkDrivetrainCompatibility,
   buildDescendantQueueEntry,
   compareQueueEntries,
+  normalizedManualPath,
+  isWithinManualRoot,
+  prepareSeedLinks,
+  buildNavigationIndex,
+  seedCoverageSatisfied,
   normalizedRetrievalPath,
   normalizedRetrievalKey,
   exactDtcLinkPriority,
