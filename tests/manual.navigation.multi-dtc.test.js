@@ -40,7 +40,7 @@ function storedRow(links) {
   };
 }
 
-test('multi-DTC stored navigation seeds are balanced across requested DTC routing families', () => {
+test('multi-DTC stored navigation seeds are balanced and reserve probe depth below branch roots', () => {
   const links = [
     link('Powertrain%20Management/Ignition%20System/A', 'Ignition System Testing A'),
     link('Powertrain%20Management/Ignition%20System/B', 'Ignition System Testing B'),
@@ -61,10 +61,10 @@ test('multi-DTC stored navigation seeds are balanced across requested DTC routin
     vehicle,
     { query: 'P0300 P0171 random misfire lean bank 1', obdCodes: ['P0300', 'P0171'] },
     'diagnosis',
-    { limit: 6 }
+    { limit: 12 }
   );
 
-  assert.equal(seeds.length, 6);
+  assert.equal(seeds.length, 6, 'two-DTC probe keeps three structural entry points per code and leaves page budget for descendants');
   assert.ok(seeds.some(seed => seed.routingDtcs.includes('P0300')), 'seed set must route toward P0300');
   assert.ok(seeds.some(seed => seed.routingDtcs.includes('P0171')), 'seed set must route toward P0171');
   assert.ok(seeds.some(seed => /ignition/i.test(`${seed.text} ${decodeURIComponent(seed.url)}`)));
