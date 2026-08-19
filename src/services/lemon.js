@@ -235,9 +235,11 @@ async function runMultiDtcNavigationProbe({
 
   if (anchors.length < 2 || anchors.length > maxCodes) return null;
 
+  // Independent per-code probes need depth more than breadth. Two strong stored
+  // entry points leave the bounded page/time budget available for descendants.
   const seedLimitPerDtc = positiveNumber(
     options.seedLinkLimitPerDtc ?? process.env.LEMON_SEED_LINK_LIMIT_PER_DTC,
-    6
+    2
   );
   const probeSpecs = anchors.map(anchor => {
     const probeContext = perDtcProbeContext(anchor, context);
@@ -270,7 +272,8 @@ async function runMultiDtcNavigationProbe({
   const startedAt = Date.now();
   console.log(
     `[Scraper] Multi-DTC navigation probe START for ${vehicle.year} ${vehicle.make} ${vehicle.model}: ` +
-    `${anchors.map(anchor => anchor.code).join(',')} concurrently, budget=${probeBudgetMs}ms/code`
+    `${anchors.map(anchor => anchor.code).join(',')} concurrently, budget=${probeBudgetMs}ms/code, ` +
+    `seeds=${probeSpecs.map(spec => `${spec.anchor.code}:${spec.seeds.length}`).join(',')}`
   );
 
   const results = await Promise.all(probeSpecs.map(async spec => {
@@ -306,6 +309,11 @@ async function runMultiDtcNavigationProbe({
   if (results.some(result => !result)) return null;
 
   const elapsedMs = Date.now() - startedAt;
+  const probeSummary = results.map(result =>
+    `${result.spec.anchor.code}:${Number(result.output?.crawledPages || 0)} fetched/` +
+    `${Number(result.output?.selectedPages || 0)} selected/` +
+    `coverage=${(result.output?.seedMatchedDtcs || []).join('+') || 'none'}`
+  ).join('; ');
   const mergedManual = mergeProbeManuals(results.map(result => result.manual), vehicle, context, elapsedMs);
   const mergedRelevant = mergedManual
     ? rerankStoredManualEvidence(
@@ -320,7 +328,7 @@ async function runMultiDtcNavigationProbe({
   if (!mergedRelevant) {
     console.log(
       `[Scraper] Multi-DTC navigation probe MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
-      `after ${elapsedMs}ms; merged visible evidence did not cover every requested DTC`
+      `after ${elapsedMs}ms; ${probeSummary}; merged visible evidence did not cover every requested DTC`
     );
     return null;
   }
@@ -328,7 +336,7 @@ async function runMultiDtcNavigationProbe({
   await saveScrapedManual(vehicle, mergedManual, context);
   console.log(
     `[Scraper] Multi-DTC navigation probe HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
-    `in ${elapsedMs}ms (${mergedRelevant.items.length} merged DTC-relevant page(s), ` +
+    `in ${elapsedMs}ms (${probeSummary}; ${mergedRelevant.items.length} merged DTC-relevant page(s), ` +
     `coverage=${(mergedRelevant.retrieval?.coveredDtcs || []).join(',')})`
   );
 
