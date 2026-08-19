@@ -1,7 +1,7 @@
 const { getCachedManual, getCachedManualVehicleEvidence, getCachedManualPathHint, saveScrapedManual, buildManualCacheKey } = require('../db');
 const { buildCanonicalSearchTerms } = require('../core/automotive.normalization');
 const { runTargetedEvidenceWorker } = require('./lemon.worker');
-const { rerankStoredManualEvidence } = require('./manual.evidence.reuse');
+const { rerankStoredManualEvidence, buildCurrentSearchContext } = require('./manual.evidence.reuse');
 const { buildStoredNavigationSeeds } = require('./manual.navigation.seeds');
 const {
   scorePage: scoreTargetedPage
@@ -12,6 +12,10 @@ const DTC_PATTERN = /\b[PCBU][0-3][0-9A-F]{3}\b/i;
 
 function clean(value) {
   return String(value || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function uniq(values = []) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function hasDtcContext(context = {}) {
@@ -119,6 +123,232 @@ function storedRowFromManual(cacheKey, manual) {
   };
 }
 
+function manualItemKey(item = {}) {
+  const hash = clean(item.meta?.contentHash);
+  if (hash) return `hash:${hash}`;
+  return `url:${clean(item.url).toLowerCase()}|${clean(item.title).toLowerCase()}`;
+}
+
+function dedupeManualItems(items = []) {
+  const best = new Map();
+  for (const item of items) {
+    const key = manualItemKey(item);
+    const current = best.get(key);
+    const score = Number(item?.meta?.relevanceScore || 0);
+    const currentScore = Number(current?.meta?.relevanceScore || 0);
+    if (!current || score > currentScore) best.set(key, item);
+  }
+  return [...best.values()];
+}
+
+function dedupeNavigationLinks(links = []) {
+  const best = new Map();
+  for (const link of links) {
+    const url = clean(link?.url);
+    if (!url) continue;
+    const key = url.toLowerCase();
+    const candidate = { url, text: clean(link?.text).slice(0, 240) };
+    const current = best.get(key);
+    if (!current || candidate.text.length > current.text.length) best.set(key, candidate);
+  }
+  return [...best.values()].slice(0, 1000);
+}
+
+function mergeProbeManuals(manuals = [], vehicle = {}, context = {}, elapsedMs = 0) {
+  const usable = manuals.filter(Boolean);
+  if (!usable.length) return null;
+
+  const items = dedupeManualItems(usable.flatMap(manual => manual.items || []));
+  const corpusItems = dedupeManualItems(usable.flatMap(manual => manual.corpusItems || []));
+  const navigationLinks = dedupeNavigationLinks(usable.flatMap(manual => manual.navigationLinks || []));
+  const first = usable[0];
+  const scrapedTimes = usable.map(manual => manual.scraped_at).filter(Boolean).sort();
+
+  return {
+    schemaVersion: 5,
+    source: first.source || 'LEMON_MANUALS',
+    vehicle: { ...vehicle },
+    query: {
+      scope: context.scope || 'diagnosis',
+      symptoms: context.symptoms || context.query || '',
+      mechanicNotices: context.mechanicNotices || [],
+      dtcs: Array.isArray(context.obdCodes) ? context.obdCodes : [context.obdCodes].filter(Boolean)
+    },
+    items,
+    corpusItems,
+    navigationLinks,
+    crawled_urls: usable.reduce((sum, manual) => sum + Number(manual.crawled_urls || 0), 0),
+    relevant_pages: items.length,
+    corpus_pages: corpusItems.length,
+    navigation_links: navigationLinks.length,
+    resolved_url: usable.map(manual => clean(manual.resolved_url)).find(Boolean) || '',
+    path_resolution: 'stored-navigation-multi-dtc-probe',
+    applicability: first.applicability || null,
+    retrieval: {
+      elapsedMs: Number(elapsedMs || 0),
+      timeBudgetExceeded: usable.some(manual => manual.retrieval?.timeBudgetExceeded === true),
+      crawlTruncated: usable.some(manual => manual.retrieval?.crawlTruncated === true),
+      corpusPageCount: corpusItems.length,
+      navigationLinkCount: navigationLinks.length,
+      seedLinkCount: usable.reduce((sum, manual) => sum + Number(manual.retrieval?.seedLinkCount || 0), 0),
+      navigationSeeded: true,
+      seedEarlyStop: usable.every(manual => manual.retrieval?.seedEarlyStop === true),
+      seedMatchedDtcs: uniq(usable.flatMap(manual => manual.retrieval?.seedMatchedDtcs || [])),
+      multiDtcProbe: true
+    },
+    scraped: true,
+    scraped_at: scrapedTimes.slice(-1)[0] || new Date().toISOString()
+  };
+}
+
+function perDtcProbeContext(anchor = {}, context = {}) {
+  const code = clean(anchor.code).toUpperCase();
+  const terms = uniq((anchor.terms || []).map(clean));
+  const query = uniq([code, ...terms]).join(' ');
+  return {
+    ...context,
+    query,
+    symptoms: query,
+    obdCodes: code ? [code] : [],
+    keywords: terms
+  };
+}
+
+async function runMultiDtcNavigationProbe({
+  storedRows = [],
+  vehicle = {},
+  context = {},
+  scope = 'diagnosis',
+  cacheKey,
+  manualPathHint,
+  targetedRunner,
+  options = {}
+}) {
+  const currentSearch = buildCurrentSearchContext(vehicle, context);
+  const anchors = currentSearch.dtcIntent?.mode === 'DTC_ANCHORED'
+    ? currentSearch.dtcIntent.anchors || []
+    : [];
+  const maxCodes = Math.max(2, Math.min(4, positiveNumber(
+    options.multiDtcProbeMaxCodes ?? process.env.LEMON_MULTI_DTC_PROBE_MAX_CODES,
+    4
+  )));
+
+  if (anchors.length < 2 || anchors.length > maxCodes) return null;
+
+  const seedLimitPerDtc = positiveNumber(
+    options.seedLinkLimitPerDtc ?? process.env.LEMON_SEED_LINK_LIMIT_PER_DTC,
+    6
+  );
+  const probeSpecs = anchors.map(anchor => {
+    const probeContext = perDtcProbeContext(anchor, context);
+    const seeds = buildStoredNavigationSeeds(
+      storedRows,
+      vehicle,
+      probeContext,
+      scope,
+      { limit: seedLimitPerDtc }
+    );
+    return { anchor, probeContext, seeds };
+  });
+
+  if (probeSpecs.some(spec => !spec.seeds.length)) {
+    console.log(
+      `[Scraper] Multi-DTC navigation probe unavailable for ${vehicle.year} ${vehicle.make} ${vehicle.model}; ` +
+      'at least one requested DTC has no stored navigation seed'
+    );
+    return null;
+  }
+
+  const probeBudgetMs = positiveNumber(
+    options.seedProbeBudgetMs ?? process.env.LEMON_SEED_PROBE_BUDGET_MS,
+    4500
+  );
+  const probeHardTimeoutMs = Math.max(
+    probeBudgetMs + 1500,
+    positiveNumber(options.seedProbeHardTimeoutMs ?? process.env.LEMON_SEED_PROBE_HARD_TIMEOUT_MS, 6500)
+  );
+  const startedAt = Date.now();
+  console.log(
+    `[Scraper] Multi-DTC navigation probe START for ${vehicle.year} ${vehicle.make} ${vehicle.model}: ` +
+    `${anchors.map(anchor => anchor.code).join(',')} concurrently, budget=${probeBudgetMs}ms/code`
+  );
+
+  const results = await Promise.all(probeSpecs.map(async spec => {
+    try {
+      const output = await targetedRunner(
+        workerVehicle(vehicle, manualPathHint),
+        workerContext(spec.probeContext),
+        scope,
+        {
+          maxPages: positiveNumber(options.seedProbeMaxPagesPerDtc ?? process.env.LEMON_SEED_PROBE_MAX_PAGES_PER_DTC, 18),
+          maxDepth: positiveNumber(options.maxDepth ?? process.env.LEMON_LIVE_MAX_DEPTH, 4),
+          fetchTimeoutMs: positiveNumber(options.seedFetchTimeoutMs ?? process.env.LEMON_SEED_FETCH_TIMEOUT_MS, 2500),
+          maxElapsedMs: probeBudgetMs,
+          hardTimeoutMs: probeHardTimeoutMs,
+          corpusLimit: positiveNumber(options.seedProbeCorpusLimitPerDtc ?? process.env.LEMON_SEED_PROBE_CORPUS_PAGES_PER_DTC, 18),
+          corpusBodyChars: positiveNumber(options.corpusBodyChars ?? process.env.LEMON_CORPUS_BODY_CHARS, 3500),
+          navigationLimit: positiveNumber(options.navigationLimit ?? process.env.LEMON_NAVIGATION_MAX_LINKS, 500),
+          seedLinks: spec.seeds,
+          seedFetchTimeoutMs: positiveNumber(options.seedFetchTimeoutMs ?? process.env.LEMON_SEED_FETCH_TIMEOUT_MS, 2500),
+          seedProbeBudgetMs: probeBudgetMs,
+          allowUnknownDrivetrain: true
+        }
+      );
+      return { spec, output, manual: targetedToManual(output) };
+    } catch (error) {
+      console.warn(
+        `[Scraper] Multi-DTC navigation probe ${spec.anchor.code} failed for ${cacheKey}: ${error.message}`
+      );
+      return null;
+    }
+  }));
+
+  if (results.some(result => !result)) return null;
+
+  const elapsedMs = Date.now() - startedAt;
+  const mergedManual = mergeProbeManuals(results.map(result => result.manual), vehicle, context, elapsedMs);
+  const mergedRelevant = mergedManual
+    ? rerankStoredManualEvidence(
+        [storedRowFromManual(cacheKey, mergedManual)],
+        vehicle,
+        context,
+        scope,
+        { maxItems: positiveNumber(options.storedReuseMaxItems ?? process.env.LEMON_STORED_REUSE_MAX_ITEMS, 12) }
+      )
+    : null;
+
+  if (!mergedRelevant) {
+    console.log(
+      `[Scraper] Multi-DTC navigation probe MISS for ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
+      `after ${elapsedMs}ms; merged visible evidence did not cover every requested DTC`
+    );
+    return null;
+  }
+
+  await saveScrapedManual(vehicle, mergedManual, context);
+  console.log(
+    `[Scraper] Multi-DTC navigation probe HIT for ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
+    `in ${elapsedMs}ms (${mergedRelevant.items.length} merged DTC-relevant page(s), ` +
+    `coverage=${(mergedRelevant.retrieval?.coveredDtcs || []).join(',')})`
+  );
+
+  return {
+    ...mergedRelevant,
+    fromCache: false,
+    scraped: true,
+    cacheMode: 'stored-navigation-multi-dtc-probe',
+    retrieval: {
+      ...(mergedRelevant.retrieval || {}),
+      elapsedMs,
+      navigationSeeded: true,
+      seedProbe: true,
+      multiDtcProbe: true,
+      probedDtcs: anchors.map(anchor => anchor.code),
+      seedLinkCount: probeSpecs.reduce((sum, spec) => sum + spec.seeds.length, 0)
+    }
+  };
+}
+
 async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
   if (!vehicle || !vehicle.make || !vehicle.year || !vehicle.model) {
     return { items: [], error: 'Insufficient vehicle data for scraping' };
@@ -219,7 +449,30 @@ async function scrapeLEMONManuals(vehicle, context = {}, options = {}) {
       ? options.targetedRunner
       : runTargetedEvidenceWorker;
 
-    if (navigationSeeds.length) {
+    const currentSearch = buildCurrentSearchContext(vehicle, context);
+    const resolvedAnchors = currentSearch.dtcIntent?.mode === 'DTC_ANCHORED'
+      ? currentSearch.dtcIntent.anchors || []
+      : [];
+    const multiDtcProbeEligible = resolvedAnchors.length >= 2 && resolvedAnchors.length <= Math.max(2, Math.min(4, positiveNumber(
+      options.multiDtcProbeMaxCodes ?? process.env.LEMON_MULTI_DTC_PROBE_MAX_CODES,
+      4
+    )));
+
+    if (multiDtcProbeEligible && storedRows.length) {
+      const multiProbe = await runMultiDtcNavigationProbe({
+        storedRows,
+        vehicle,
+        context,
+        scope: context.scope || 'diagnosis',
+        cacheKey,
+        manualPathHint,
+        targetedRunner,
+        options
+      });
+      if (multiProbe) return multiProbe;
+    }
+
+    if (navigationSeeds.length && !multiDtcProbeEligible) {
       const probeBudgetMs = positiveNumber(
         options.seedProbeBudgetMs ?? process.env.LEMON_SEED_PROBE_BUDGET_MS,
         4500
@@ -386,5 +639,11 @@ module.exports = {
   hasDtcContext,
   workerVehicle,
   workerContext,
-  storedRowFromManual
+  storedRowFromManual,
+  manualItemKey,
+  dedupeManualItems,
+  dedupeNavigationLinks,
+  mergeProbeManuals,
+  perDtcProbeContext,
+  runMultiDtcNavigationProbe
 };
