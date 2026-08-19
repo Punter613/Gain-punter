@@ -172,6 +172,13 @@ function selectBalancedNavigationSeeds(ranked = [], requiredDtcs = [], limit = 1
     .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url));
   if (!requiredDtcs.length) return sorted.slice(0, limit);
 
+  // Preserve room in the probe's page budget to descend below structural branch
+  // roots. Three entry points per DTC is enough diversification without letting a
+  // two-code request spend all 12 slots before any child pages can be fetched.
+  const effectiveLimit = requiredDtcs.length > 1
+    ? Math.min(limit, requiredDtcs.length * 3)
+    : limit;
+
   const byCode = new Map(requiredDtcs.map(code => [
     code,
     sorted.filter(seed => (seed.routingDtcs || []).includes(code))
@@ -183,7 +190,7 @@ function selectBalancedNavigationSeeds(ranked = [], requiredDtcs = [], limit = 1
   // Round-robin across requested DTC families so one broad branch cannot consume
   // every seed slot. Structural routing labels guide navigation only; they never
   // count as evidence coverage.
-  while (selected.length < limit) {
+  while (selected.length < effectiveLimit) {
     let addedThisRound = false;
     for (const code of requiredDtcs) {
       const candidates = byCode.get(code) || [];
@@ -197,21 +204,21 @@ function selectBalancedNavigationSeeds(ranked = [], requiredDtcs = [], limit = 1
       selected.push(candidate);
       selectedUrls.add(key);
       addedThisRound = true;
-      if (selected.length >= limit) break;
+      if (selected.length >= effectiveLimit) break;
     }
     if (!addedThisRound) break;
     round += 1;
   }
 
   for (const candidate of sorted) {
-    if (selected.length >= limit) break;
+    if (selected.length >= effectiveLimit) break;
     const key = candidate.url.toLowerCase();
     if (selectedUrls.has(key)) continue;
     selected.push(candidate);
     selectedUrls.add(key);
   }
 
-  return selected.slice(0, limit);
+  return selected.slice(0, effectiveLimit);
 }
 
 function buildStoredNavigationSeeds(rows = [], vehicle = {}, context = {}, scope = 'diagnosis', options = {}) {
