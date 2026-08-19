@@ -1,12 +1,15 @@
 #!/usr/bin/env node
+'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { resolveRepairDiagnosisUrl, classifyDrivetrain, drivetrainsConflict } = require('../src/services/lemon.path.resolver');
 const {
-  cleanText,
-  normalizeText,
+  classifyDrivetrain,
+  drivetrainsConflict,
+  resolveRepairDiagnosisUrl
+} = require('../src/services/lemon.path.resolver');
+const {
   extractCanonicalProfile,
   classifyManualSection,
   buildCanonicalSearchTerms
@@ -25,83 +28,46 @@ const OUTPUT_PATH = process.env.LEMON_OUTPUT_PATH || path.join(process.cwd(), 'a
 const VALID_DRIVETRAINS = new Set(['2WD', '4WD', 'AWD', 'FWD', 'RWD']);
 
 const SCOPE_SECTION_WEIGHTS = {
-  diagnosis: { DIAGNOSIS: 30, TEST: 28, SPEC: 18, TSB: 16, REPAIR: 5, PARTS: 3, LABOR: 3, OTHER: 0 },
-  repair: { REPAIR: 30, PARTS: 24, LABOR: 24, SPEC: 22, TEST: 12, DIAGNOSIS: 8, TSB: 8, OTHER: 0 },
-  all: { DIAGNOSIS: 18, TEST: 18, SPEC: 18, REPAIR: 18, PARTS: 18, LABOR: 18, TSB: 18, OTHER: 0 }
+  diagnosis: {
+    DIAGNOSIS: 30,
+    TEST: 24,
+    SPEC: 14,
+    REMOVAL_INSTALL: 4,
+    OVERHAUL: -4,
+    OTHER: 0
+  },
+  repair: {
+    REMOVAL_INSTALL: 30,
+    OVERHAUL: 22,
+    SPEC: 16,
+    TEST: 10,
+    DIAGNOSIS: 8,
+    OTHER: 0
+  }
 };
 
-function decodeHtml(value) {
-  return String(value || '')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#x2F;/gi, '/')
-    .replace(/&#47;/g, '/');
+const SYSTEM_BREADCRUMBS = [
+  ['engine', 'Engine'],
+  ['fuel_emissions', 'Powertrain Management'],
+  ['ignition', 'Ignition System'],
+  ['brakes', 'Brakes and Traction Control'],
+  ['steering', 'Steering and Suspension'],
+  ['suspension', 'Steering and Suspension'],
+  ['hvac', 'Heating and Air Conditioning'],
+  ['electrical', 'Electrical'],
+  ['transmission', 'Transmission and Drivetrain']
+];
+
+function clean(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function stripTags(value) {
-  return decodeHtml(String(value || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-    .replace(/<[^>]*>/g, ' '))
-    .replace(/\s+/g, ' ')
-    .trim();
+function normalizeText(value) {
+  return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-function extractPage(html, url) {
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = stripTags(titleMatch?.[1] || 'Factory Service Reference');
-  const headings = [];
-  const headingRegex = /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi;
-  let headingMatch;
-  while ((headingMatch = headingRegex.exec(html))) {
-    const text = stripTags(headingMatch[1]);
-    if (text) headings.push(text);
-  }
-
-  const links = [];
-  const linkRegex = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let linkMatch;
-  while ((linkMatch = linkRegex.exec(html))) {
-    const href = decodeHtml(linkMatch[1]).trim();
-    const text = stripTags(linkMatch[2]);
-    if (!href || href.startsWith('#') || /^javascript:/i.test(href)) continue;
-    try {
-      const absolute = new URL(href, url).toString();
-      const parsed = new URL(absolute);
-      if (!MANUAL_HOSTS.has(parsed.hostname.toLowerCase())) continue;
-      if (/\.(pdf|jpg|jpeg|png|gif|zip)(\?|$)/i.test(absolute)) continue;
-      links.push({ url: absolute, text });
-    } catch (_) {}
-  }
-
-  return { title, headings, bodyText: stripTags(html), links };
-}
-
-function contentHash(page) {
-  const stable = [page.title, ...(page.headings || []), page.bodyText].map(cleanText).join('\n');
-  return crypto.createHash('sha256').update(stable).digest('hex');
-}
-
-async function fetchHtml(url, timeoutMs = 12000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.3; manufacturer-evidence-retrieval)'
-      }
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
+function normalizeForSearch(value) {
+  return normalizeText(value);
 }
 
 function parseCsv(value) {
@@ -144,30 +110,26 @@ function getInput() {
   const year = String(process.env.LEMON_YEAR || '').trim();
   const make = String(process.env.LEMON_MAKE || '').trim();
   const model = String(process.env.LEMON_MODEL || '').trim();
-  if (!year || !make || !model) throw new Error('LEMON_YEAR, LEMON_MAKE, and LEMON_MODEL are required');
+  const trim = String(process.env.LEMON_TRIM || '').trim();
+  const engine = String(process.env.LEMON_ENGINE || '').trim();
+  const drivetrain = String(process.env.LEMON_DRIVETRAIN || '').trim();
+  const scope = String(process.env.LEMON_SCOPE || 'diagnosis').trim().toLowerCase();
+  const symptoms = String(process.env.LEMON_SYMPTOMS || '').trim();
+  const obdCodes = parseCsv(process.env.LEMON_DTCS || '');
+  const mechanicNotices = parseCsv(process.env.LEMON_MECHANIC_NOTICES || '');
 
-  const scopeRaw = String(process.env.LEMON_SCOPE || 'diagnosis').trim().toLowerCase();
-  const scope = SCOPE_SECTION_WEIGHTS[scopeRaw] ? scopeRaw : 'diagnosis';
-  const drivetrainRaw = String(process.env.LEMON_DRIVETRAIN || '').trim();
-  if (drivetrainRaw && !VALID_DRIVETRAINS.has(drivetrainRaw.toUpperCase())) {
-    throw new Error(
-      `LEMON_DRIVETRAIN must be one of 2WD, 4WD, AWD, FWD, or RWD (case-insensitive). Received: "${drivetrainRaw}"`
-    );
+  if (!year || !make || !model) {
+    throw new Error('LEMON_YEAR, LEMON_MAKE, and LEMON_MODEL are required');
   }
-  const vehicle = {
-    year,
-    make,
-    model,
-    trim: String(process.env.LEMON_TRIM || '').trim(),
-    engine: String(process.env.LEMON_ENGINE || '').trim(),
-    drivetrain: drivetrainRaw
+  if (drivetrain && !VALID_DRIVETRAINS.has(drivetrain.toUpperCase())) {
+    throw new Error('LEMON_DRIVETRAIN must be one of 2WD, 4WD, AWD, FWD, or RWD');
+  }
+
+  return {
+    vehicle: { year, make, model, trim, engine, drivetrain },
+    context: { query: symptoms, symptoms, obdCodes, mechanicNotices },
+    scope
   };
-  const context = {
-    symptoms: String(process.env.LEMON_SYMPTOMS || '').trim(),
-    mechanicNotices: parseCsv(process.env.LEMON_MECHANIC_NOTICES),
-    obdCodes: parseCsv(process.env.LEMON_DTCS)
-  };
-  return { vehicle, context, scope };
 }
 
 function semanticKind(term, queryProfile) {
@@ -177,6 +139,7 @@ function semanticKind(term, queryProfile) {
   if (queryProfile.triggers.includes(term)) return 'trigger';
   if (queryProfile.sounds.includes(term)) return 'sound';
   if (queryProfile.conditions.includes(term)) return 'condition';
+  if (queryProfile.components.includes(term)) return 'component';
   if (queryProfile.systems.includes(term)) return 'system';
   return 'other';
 }
@@ -188,35 +151,48 @@ function semanticMatchWeight(term, queryProfile, sectionType) {
   if (kind === 'trigger') return 18;
   if (kind === 'sound') return 16;
   if (kind === 'condition') return 14;
-  if (kind === 'system') return sectionType === 'SPEC' ? 4 : 8;
-  return 5;
+  if (kind === 'component') return 12;
+  if (kind === 'system') return ['DIAGNOSIS', 'TEST'].includes(sectionType) ? 8 : 4;
+  return 3;
+}
+
+function wordBoundaryIncludes(text, term) {
+  const haystack = ` ${normalizeText(text)} `;
+  const needle = normalizeText(term);
+  if (!needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i').test(haystack);
+}
+
+function termLocations(page, term) {
+  const result = [];
+  if (wordBoundaryIncludes(page.title, term)) result.push('title');
+  if ((page.headings || []).some(heading => wordBoundaryIncludes(heading, term))) result.push('heading');
+  if (wordBoundaryIncludes(decodeURIComponentSafe(page.url || ''), term)) result.push('path');
+  if (wordBoundaryIncludes(page.bodyText, term)) result.push('body');
+  return result;
 }
 
 function scorePage(page, searchTerms, scope, queryProfile = {}) {
-  const title = normalizeText(page.title);
-  const headings = normalizeText((page.headings || []).join(' '));
-  const url = normalizeText(page.url);
-  const body = normalizeText(page.bodyText).slice(0, 50000);
+  const normalizedScope = SCOPE_SECTION_WEIGHTS[scope] ? scope : 'diagnosis';
   const sectionType = classifyManualSection(page);
-  const profile = extractCanonicalProfile(page);
+  const profile = {
+    dtcs: queryProfile.dtcs || [],
+    resolvedDtcTerms: queryProfile.resolvedDtcTerms || [],
+    triggers: queryProfile.triggers || [],
+    sounds: queryProfile.sounds || [],
+    conditions: queryProfile.conditions || [],
+    components: queryProfile.components || [],
+    systems: queryProfile.systems || [],
+    canonicalTerms: queryProfile.canonicalTerms || []
+  };
+  let semanticScore = 0;
   const matchedTerms = [];
   const matchLocations = {};
-  let semanticScore = 0;
 
-  for (const term of searchTerms) {
-    const normalized = normalizeText(term);
-    if (!normalized || normalized.length < 3) continue;
-
-    const locations = [];
-    if (title.includes(normalized)) locations.push('title');
-    if (headings.includes(normalized)) locations.push('heading');
-    if (url.includes(normalized)) locations.push('path');
-    if (body.includes(normalized)) locations.push('body');
+  for (const term of searchTerms || []) {
+    const locations = termLocations(page, term);
     if (!locations.length) continue;
-
-    const kind = semanticKind(term, queryProfile);
-    if (kind === 'system' && !locations.some(location => location === 'title' || location === 'heading')) continue;
-
     const baseWeight = semanticMatchWeight(term, queryProfile, sectionType);
     let locationMultiplier = 0;
     if (locations.includes('title')) locationMultiplier = Math.max(locationMultiplier, 1.0);
@@ -240,7 +216,7 @@ function scorePage(page, searchTerms, scope, queryProfile = {}) {
   if (matchedTrigger && matchedSound) semanticScore += 18;
   if (matchedDtc && ['DIAGNOSIS', 'TEST'].includes(sectionType)) semanticScore += 12;
 
-  const scopeScore = uniqueMatchedTerms.length ? (SCOPE_SECTION_WEIGHTS[scope][sectionType] || 0) : 0;
+  const scopeScore = uniqueMatchedTerms.length ? (SCOPE_SECTION_WEIGHTS[normalizedScope][sectionType] || 0) : 0;
   const score = semanticScore + scopeScore;
 
   return {
@@ -364,6 +340,12 @@ function normalizedRetrievalKey(page, relevance) {
   return `${relevance.sectionType}|${title}|${pathKey}`;
 }
 
+function contentHash(page) {
+  return crypto.createHash('sha256')
+    .update([page.title, ...(page.headings || []), page.bodyText].join('\n'))
+    .digest('hex');
+}
+
 function buildOutputPage(candidate, source) {
   const { page, relevance, alternates = [] } = candidate;
   return {
@@ -430,7 +412,12 @@ function buildDescendantQueueEntry(next, link, linkRelevance, dtcPriority) {
     depth: next.depth + 1,
     priority: linkRelevance.score + dtcPriority,
     exactDtc: next.exactDtc || dtcPriority > 0,
-    seed: false
+    // A stored-navigation seed represents a bounded subtree probe, not just one
+    // root URL. Preserve the seed marker through descendants so child diagnostic
+    // pages stay under seed fetch limits and can contribute visible DTC coverage
+    // to the early-stop condition. Structural routing still never counts as
+    // evidence by itself; only fetched page text is matched below.
+    seed: next.seed === true
   };
 }
 
@@ -445,6 +432,69 @@ function seedCoverageSatisfied(dtcIntent = {}, matchedDtcs = new Set()) {
   if (dtcIntent.mode !== 'DTC_ANCHORED') return false;
   const required = (dtcIntent.anchors || []).map(anchor => anchor.code);
   return required.length > 0 && required.every(code => matchedDtcs.has(code));
+}
+
+function stripTags(value) {
+  return clean(String(value || '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'"));
+}
+
+function extractLinks(html, baseUrl) {
+  const links = [];
+  const regex = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = regex.exec(String(html || '')))) {
+    const href = String(match[1] || '').replace(/&amp;/g, '&').trim();
+    const text = stripTags(match[2] || '');
+    if (!href || href.startsWith('#') || /^javascript:/i.test(href)) continue;
+    try {
+      const absolute = new URL(href, baseUrl).toString();
+      if (!MANUAL_HOSTS.has(new URL(absolute).hostname.toLowerCase())) continue;
+      links.push({ url: absolute, text });
+    } catch (_) {}
+  }
+  return links;
+}
+
+function extractPage(html, url) {
+  const titleMatch = String(html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const headings = [];
+  const headingRegex = /<h[1-4][^>]*>([\s\S]*?)<\/h[1-4]>/gi;
+  let headingMatch;
+  while ((headingMatch = headingRegex.exec(String(html || '')))) {
+    headings.push(stripTags(headingMatch[1]));
+  }
+  return {
+    url,
+    title: stripTags(titleMatch?.[1] || 'Repair & Diagnosis'),
+    headings: headings.filter(Boolean).slice(0, 30),
+    bodyText: stripTags(html),
+    links: extractLinks(html, url)
+  };
+}
+
+async function fetchHtml(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (compatible; SKSK-ProTech/1.6; targeted-evidence)'
+      }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function scrapeTargetedEvidence(vehicle, context = {}, scope = 'diagnosis', options = {}) {
