@@ -79,7 +79,7 @@ test('multi-DTC stored navigation seeds include the bounded DTC index and preser
 test('deterministic DTC index remains under the resolved manual root and is routing-only', () => {
   const seed = buildDtcIndexSeed(rootUrl, ['P0300', 'P0171']);
   assert.ok(seed);
-  assert.match(decodeURIComponent(seed.url), /ALL\s+Diagnostic Trouble Codes\s+\(\s*DTC\s*\)/i);
+  assert.match(decodeURIComponent(seed.url), /A\s+L\s+L\s+Diagnostic Trouble Codes\s+\(\s*DTC\s*\)/i);
   assert.equal(seed.seedKind, 'DTC_INDEX_NAVIGATION');
   assert.deepEqual(seed.matchedDtcs, []);
 });
