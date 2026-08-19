@@ -10,6 +10,8 @@ const {
 } = require('../core/knowledge/dtc.retrieval.intent');
 const { scorePage } = require('../../scripts/scrape-lemon-targeted-evidence');
 
+const DTC_INDEX_SEGMENT = 'A%20L%20L%20%20Diagnostic%20Trouble%20Codes%20%28%20DTC%20%29';
+
 const STRUCTURAL_DTC_HINTS = Object.freeze({
   P0300: Object.freeze([
     ['ignition', 900], ['fuel delivery', 800], ['fuel injection', 800],
@@ -93,6 +95,28 @@ function isWithinManualRoot(url, rootUrl) {
   }
 }
 
+function buildDtcIndexSeed(rootUrl, requiredDtcs = []) {
+  const root = clean(rootUrl).replace(/\/+$/, '');
+  const routingDtcs = uniq(requiredDtcs.map(code => clean(code).toUpperCase()));
+  if (!root || !routingDtcs.length) return null;
+  const url = `${root}/${DTC_INDEX_SEGMENT}/`;
+  if (!isWithinManualRoot(url, rootUrl)) return null;
+
+  // This is a routing hint only. Never mark the synthetic index path as matched
+  // DTC evidence; the fetched descendant page must prove the code/meaning in its
+  // own visible source text before it can survive the evidence gate.
+  return {
+    url,
+    text: 'All Diagnostic Trouble Codes (DTC)',
+    priority: 20000,
+    seedKind: 'DTC_INDEX_NAVIGATION',
+    matchedDtcs: [],
+    matchedDtcTerms: [],
+    routingDtcs,
+    structuralMatches: []
+  };
+}
+
 function navigationSourceText(link = {}) {
   return [link.text, decodeSafe(link.url)].filter(Boolean).join(' ');
 }
@@ -172,9 +196,6 @@ function selectBalancedNavigationSeeds(ranked = [], requiredDtcs = [], limit = 1
     .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url));
   if (!requiredDtcs.length) return sorted.slice(0, limit);
 
-  // Preserve room in the probe's page budget to descend below structural branch
-  // roots. Three entry points per DTC is enough diversification without letting a
-  // two-code request spend all 12 slots before any child pages can be fetched.
   const effectiveLimit = requiredDtcs.length > 1
     ? Math.min(limit, requiredDtcs.length * 3)
     : limit;
@@ -187,9 +208,6 @@ function selectBalancedNavigationSeeds(ranked = [], requiredDtcs = [], limit = 1
   const selectedUrls = new Set();
   let round = 0;
 
-  // Round-robin across requested DTC families so one broad branch cannot consume
-  // every seed slot. Structural routing labels guide navigation only; they never
-  // count as evidence coverage.
   while (selected.length < effectiveLimit) {
     let addedThisRound = false;
     for (const code of requiredDtcs) {
@@ -226,6 +244,7 @@ function buildStoredNavigationSeeds(rows = [], vehicle = {}, context = {}, scope
   const search = buildCurrentSearchContext(vehicle, context);
   if (search.dtcIntent?.mode !== 'DTC_ANCHORED') return [];
 
+  const requiredDtcs = (search.dtcIntent.anchors || []).map(anchor => anchor.code);
   const best = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
     if (row?.data?.schemaVersion !== 5) continue;
@@ -233,6 +252,13 @@ function buildStoredNavigationSeeds(rows = [], vehicle = {}, context = {}, scope
 
     const rootUrl = clean(row.data?.resolved_url || row.data?.resolvedUrl);
     if (!rootUrl) continue;
+
+    const dtcIndexSeed = buildDtcIndexSeed(rootUrl, requiredDtcs);
+    if (dtcIndexSeed) {
+      const key = dtcIndexSeed.url.toLowerCase();
+      const current = best.get(key);
+      if (!current || dtcIndexSeed.priority > current.priority) best.set(key, dtcIndexSeed);
+    }
 
     for (const link of Array.isArray(row.data?.navigationLinks) ? row.data.navigationLinks : []) {
       if (!isWithinManualRoot(link?.url, rootUrl)) continue;
@@ -244,14 +270,15 @@ function buildStoredNavigationSeeds(rows = [], vehicle = {}, context = {}, scope
     }
   }
 
-  const requiredDtcs = (search.dtcIntent.anchors || []).map(anchor => anchor.code);
   return selectBalancedNavigationSeeds([...best.values()], requiredDtcs, limit);
 }
 
 module.exports = {
+  DTC_INDEX_SEGMENT,
   STRUCTURAL_DTC_HINTS,
   normalizedPathname,
   isWithinManualRoot,
+  buildDtcIndexSeed,
   navigationSourceText,
   structuralNavigationMatches,
   structuralNavigationScore,
