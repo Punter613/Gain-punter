@@ -43,10 +43,10 @@ function resolveHardTimeoutMs(options = {}) {
   if (!Number.isFinite(elapsedBudget) || elapsedBudget <= 0) return requested;
 
   // maxElapsedMs starts after manual-path resolution inside the worker. Keep the
-  // crawl budget strict, but leave bounded setup/resolver headroom before the
-  // parent terminates the thread. The normal 20s crawl / 30s hard wall is
-  // unchanged because 20s + 5s remains below the existing 30s default.
-  return Math.max(requested, elapsedBudget + 5000);
+  // crawl budget strict, but leave bounded resolver + worker startup/serialization
+  // headroom before the parent terminates the thread. The normal 20s crawl / 30s
+  // hard wall is unchanged because 20s + 7s remains below the existing 30s default.
+  return Math.max(requested, elapsedBudget + 7000);
 }
 
 function runTargetedEvidenceWorker(vehicle, context, scope, options = {}) {
