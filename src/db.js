@@ -51,6 +51,10 @@ function buildManualCacheKey(vehicle, context = {}) {
   return `${vehicleKey}|ctx-${contextHash}`;
 }
 
+function escapeLikePattern(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
 function extractManualPathHint(manualData = {}) {
   const direct = String(manualData.resolved_url || manualData.resolvedUrl || '').trim();
   if (direct) return direct;
@@ -95,6 +99,33 @@ async function getCachedManual(vehicle, context = {}) {
   }
 }
 
+async function getCachedManualVehicleEvidence(vehicle, options = {}) {
+  if (!supabase) return [];
+  const vehicleKey = buildVehicleCacheKey(vehicle);
+  const limit = Math.max(1, Math.min(25, Number(options.limit || 8)));
+  const contextPattern = `${escapeLikePattern(vehicleKey)}|ctx-%`;
+
+  try {
+    const { data, error } = await supabase
+      .from('scraped_manuals')
+      .select('vehicle_key,data,scraped_at')
+      .like('vehicle_key', contextPattern)
+      .order('scraped_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.warn('[DB] getCachedManualVehicleEvidence lookup failed, treating as empty:', error.message);
+      return [];
+    }
+
+    return (Array.isArray(data) ? data : [])
+      .filter(row => row?.data?.schemaVersion === CURRENT_MANUAL_SCHEMA);
+  } catch (err) {
+    console.warn('[DB] getCachedManualVehicleEvidence threw, treating as empty:', err.message);
+    return [];
+  }
+}
+
 async function getCachedManualPathHint(vehicle, context = {}) {
   if (!supabase) return '';
   const cacheKey = buildManualCacheKey(vehicle, context);
@@ -105,8 +136,17 @@ async function getCachedManualPathHint(vehicle, context = {}) {
       .select('data')
       .eq('vehicle_key', cacheKey)
       .maybeSingle();
-    if (error) return '';
-    return extractManualPathHint(data?.data || {});
+    if (!error) {
+      const exactHint = extractManualPathHint(data?.data || {});
+      if (exactHint) return exactHint;
+    }
+
+    const vehicleRows = await getCachedManualVehicleEvidence(vehicle, { limit: 4 });
+    for (const row of vehicleRows) {
+      const hint = extractManualPathHint(row?.data || {});
+      if (hint) return hint;
+    }
+    return '';
   } catch (_) {
     return '';
   }
@@ -140,12 +180,14 @@ async function saveScrapedManual(vehicle, manualData, context = {}) {
 module.exports = {
   supabase,
   getCachedManual,
+  getCachedManualVehicleEvidence,
   getCachedManualPathHint,
   saveScrapedManual,
   buildVehicleCacheKey,
   buildManualCacheKey,
   normalizeManualContext,
   extractManualPathHint,
+  escapeLikePattern,
   CURRENT_MANUAL_SCHEMA,
   normalizeDriveType
 };

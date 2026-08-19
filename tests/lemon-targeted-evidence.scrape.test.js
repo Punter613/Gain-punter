@@ -103,7 +103,7 @@ test('4WD request rejects an FWD resolved path', () => {
 
 test('exact-DTC flag is inherited by generic descendants', () => {
   const entry = buildDescendantQueueEntry(
-    { depth: 2, exactDtc: true },
+    { depth: 2, exactDtc: true, seed: false },
     {
       url: 'https://lemon-manuals.la/Kia/2008/Sorento/P0300/Testing%20and%20Inspection/',
       text: 'Testing and Inspection'
@@ -115,6 +115,22 @@ test('exact-DTC flag is inherited by generic descendants', () => {
   assert.equal(entry.depth, 3);
   assert.equal(entry.priority, 8);
   assert.equal(entry.exactDtc, true);
+  assert.equal(entry.seed, false);
+});
+
+test('stored-navigation seed marker is inherited by descendants so child evidence stays inside the bounded probe', () => {
+  const entry = buildDescendantQueueEntry(
+    { depth: 1, exactDtc: false, seed: true },
+    {
+      url: 'https://lemon-manuals.la/Kia/2008/Sorento/Powertrain%20Management/Ignition%20System/Testing%20and%20Inspection/',
+      text: 'Testing and Inspection'
+    },
+    { score: 14 },
+    0
+  );
+
+  assert.equal(entry.depth, 2);
+  assert.equal(entry.seed, true, 'seed subtree descendants must retain the bounded-probe marker');
 });
 
 test('crawl queue prefers relevant deeper evidence over irrelevant shallow navigation', () => {
