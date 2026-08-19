@@ -102,9 +102,6 @@ function buildDtcIndexSeed(rootUrl, requiredDtcs = []) {
   const url = `${root}/${DTC_INDEX_SEGMENT}/`;
   if (!isWithinManualRoot(url, rootUrl)) return null;
 
-  // This is a routing hint only. Never mark the synthetic index path as matched
-  // DTC evidence; the fetched descendant page must prove the code/meaning in its
-  // own visible source text before it can survive the evidence gate.
   return {
     url,
     text: 'All Diagnostic Trouble Codes (DTC)',
@@ -252,15 +249,23 @@ function buildStoredNavigationSeeds(rows = [], vehicle = {}, context = {}, scope
 
     const rootUrl = clean(row.data?.resolved_url || row.data?.resolvedUrl);
     if (!rootUrl) continue;
+    const storedLinks = Array.isArray(row.data?.navigationLinks) ? row.data.navigationLinks : [];
 
-    const dtcIndexSeed = buildDtcIndexSeed(rootUrl, requiredDtcs);
-    if (dtcIndexSeed) {
-      const key = dtcIndexSeed.url.toLowerCase();
-      const current = best.get(key);
-      if (!current || dtcIndexSeed.priority > current.priority) best.set(key, dtcIndexSeed);
+    // Keep the synthetic DTC-index shortcut narrow: it is available only when a
+    // prior exact-vehicle crawl actually retained a navigation map. Multi-DTC
+    // mixed ranking may include it, and the dedicated per-code probe requests a
+    // <=2 seed limit. Ordinary single-DTC fallback keeps its prior behavior.
+    const shouldAddDtcIndex = storedLinks.length > 0 && (requiredDtcs.length > 1 || limit <= 2);
+    if (shouldAddDtcIndex) {
+      const dtcIndexSeed = buildDtcIndexSeed(rootUrl, requiredDtcs);
+      if (dtcIndexSeed) {
+        const key = dtcIndexSeed.url.toLowerCase();
+        const current = best.get(key);
+        if (!current || dtcIndexSeed.priority > current.priority) best.set(key, dtcIndexSeed);
+      }
     }
 
-    for (const link of Array.isArray(row.data?.navigationLinks) ? row.data.navigationLinks : []) {
+    for (const link of storedLinks) {
       if (!isWithinManualRoot(link?.url, rootUrl)) continue;
       const ranked = rankNavigationLink(link, vehicle, search, scope);
       if (!ranked) continue;
