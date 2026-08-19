@@ -58,6 +58,10 @@ function clean(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function uniq(values = []) {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function decodeSafe(value) {
   try { return decodeURIComponent(String(value || '')); }
   catch (_) { return String(value || ''); }
@@ -93,19 +97,31 @@ function navigationSourceText(link = {}) {
   return [link.text, decodeSafe(link.url)].filter(Boolean).join(' ');
 }
 
-function structuralNavigationScore(sourceText = '', dtcIntent = {}) {
-  if (dtcIntent.mode !== 'DTC_ANCHORED') return 0;
+function structuralNavigationMatches(sourceText = '', dtcIntent = {}) {
+  if (dtcIntent.mode !== 'DTC_ANCHORED') return [];
   const haystack = clean(sourceText).toLowerCase();
-  let score = 0;
+  const matches = [];
+
   for (const anchor of dtcIntent.anchors || []) {
     const hints = STRUCTURAL_DTC_HINTS[anchor.code] || [];
     let bestForCode = 0;
+    const matchedTerms = [];
     for (const [term, weight] of hints) {
-      if (haystack.includes(term)) bestForCode = Math.max(bestForCode, weight);
+      if (!haystack.includes(term)) continue;
+      bestForCode = Math.max(bestForCode, weight);
+      matchedTerms.push(term);
     }
-    score += bestForCode;
+    if (bestForCode > 0) {
+      matches.push({ code: anchor.code, score: bestForCode, matchedTerms: uniq(matchedTerms) });
+    }
   }
-  return score;
+
+  return matches;
+}
+
+function structuralNavigationScore(sourceText = '', dtcIntent = {}) {
+  return structuralNavigationMatches(sourceText, dtcIntent)
+    .reduce((total, match) => total + Number(match.score || 0), 0);
 }
 
 function rankNavigationLink(link = {}, vehicle = {}, search = {}, scope = 'diagnosis') {
@@ -114,7 +130,8 @@ function rankNavigationLink(link = {}, vehicle = {}, search = {}, scope = 'diagn
   if (!checkEngineApplicability(vehicle, sourceText).compatible) return null;
 
   const anchorMatch = matchDtcAnchors(sourceText, search.dtcIntent);
-  const structuralScore = anchorMatch.matched ? 0 : structuralNavigationScore(sourceText, search.dtcIntent);
+  const structuralMatches = structuralNavigationMatches(sourceText, search.dtcIntent);
+  const structuralScore = structuralMatches.reduce((total, match) => total + Number(match.score || 0), 0);
   if (!anchorMatch.matched && structuralScore <= 0) return null;
 
   const relevance = scorePage(
@@ -133,6 +150,10 @@ function rankNavigationLink(link = {}, vehicle = {}, search = {}, scope = 'diagn
     (anchorMatch.exactDtcs?.length || 0) * 10000 +
     (anchorMatch.matchedDtcs?.length || 0) * 1000;
   const priority = directPriority + structuralScore + Number(relevance.score || 0);
+  const routingDtcs = uniq([
+    ...(anchorMatch.matchedDtcs || []),
+    ...structuralMatches.map(match => match.code)
+  ]);
 
   return {
     url: clean(link.url),
@@ -140,8 +161,57 @@ function rankNavigationLink(link = {}, vehicle = {}, search = {}, scope = 'diagn
     priority,
     seedKind: anchorMatch.matched ? 'DTC_ANCHOR' : 'STRUCTURAL_NAVIGATION',
     matchedDtcs: anchorMatch.matchedDtcs || [],
-    matchedDtcTerms: anchorMatch.matchedTerms || []
+    matchedDtcTerms: anchorMatch.matchedTerms || [],
+    routingDtcs,
+    structuralMatches
   };
+}
+
+function selectBalancedNavigationSeeds(ranked = [], requiredDtcs = [], limit = 12) {
+  const sorted = [...ranked]
+    .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url));
+  if (!requiredDtcs.length) return sorted.slice(0, limit);
+
+  const byCode = new Map(requiredDtcs.map(code => [
+    code,
+    sorted.filter(seed => (seed.routingDtcs || []).includes(code))
+  ]));
+  const selected = [];
+  const selectedUrls = new Set();
+  let round = 0;
+
+  // Round-robin across requested DTC families so one broad branch cannot consume
+  // every seed slot. Structural routing labels guide navigation only; they never
+  // count as evidence coverage.
+  while (selected.length < limit) {
+    let addedThisRound = false;
+    for (const code of requiredDtcs) {
+      const candidates = byCode.get(code) || [];
+      let candidate = candidates[round];
+      if (candidate && selectedUrls.has(candidate.url.toLowerCase())) {
+        candidate = candidates.find(seed => !selectedUrls.has(seed.url.toLowerCase()));
+      }
+      if (!candidate) continue;
+      const key = candidate.url.toLowerCase();
+      if (selectedUrls.has(key)) continue;
+      selected.push(candidate);
+      selectedUrls.add(key);
+      addedThisRound = true;
+      if (selected.length >= limit) break;
+    }
+    if (!addedThisRound) break;
+    round += 1;
+  }
+
+  for (const candidate of sorted) {
+    if (selected.length >= limit) break;
+    const key = candidate.url.toLowerCase();
+    if (selectedUrls.has(key)) continue;
+    selected.push(candidate);
+    selectedUrls.add(key);
+  }
+
+  return selected.slice(0, limit);
 }
 
 function buildStoredNavigationSeeds(rows = [], vehicle = {}, context = {}, scope = 'diagnosis', options = {}) {
@@ -167,9 +237,8 @@ function buildStoredNavigationSeeds(rows = [], vehicle = {}, context = {}, scope
     }
   }
 
-  return [...best.values()]
-    .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url))
-    .slice(0, limit);
+  const requiredDtcs = (search.dtcIntent.anchors || []).map(anchor => anchor.code);
+  return selectBalancedNavigationSeeds([...best.values()], requiredDtcs, limit);
 }
 
 module.exports = {
@@ -177,7 +246,9 @@ module.exports = {
   normalizedPathname,
   isWithinManualRoot,
   navigationSourceText,
+  structuralNavigationMatches,
   structuralNavigationScore,
   rankNavigationLink,
+  selectBalancedNavigationSeeds,
   buildStoredNavigationSeeds
 };
