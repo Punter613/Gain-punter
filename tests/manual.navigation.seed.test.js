@@ -54,7 +54,7 @@ test('manual-root boundary accepts descendants and rejects sibling vehicle/manua
   );
 });
 
-test('same-vehicle navigation ranking keeps DTC evidence and structural shortcuts while adding a routing-only DTC index', () => {
+test('same-vehicle navigation ranking keeps direct DTC meaning ahead of structural shortcuts and rejects sibling manuals', () => {
   const rows = [storedRow([
     {
       url: `${rootUrl}Powertrain%20Management/Computers%20and%20Control%20Systems/Testing%20and%20Inspection/System%20Too%20Lean%20Bank%201/`,
@@ -77,24 +77,18 @@ test('same-vehicle navigation ranking keeps DTC evidence and structural shortcut
     'diagnosis'
   );
 
-  assert.equal(seeds.length, 3);
-  const indexSeed = seeds.find(seed => seed.seedKind === 'DTC_INDEX_NAVIGATION');
-  const directSeed = seeds.find(seed => seed.seedKind === 'DTC_ANCHOR');
-  const structuralSeed = seeds.find(seed => seed.seedKind === 'STRUCTURAL_NAVIGATION');
-
-  assert.ok(indexSeed);
-  assert.deepEqual(indexSeed.matchedDtcs, [], 'synthetic index never claims evidence');
-  assert.ok(directSeed);
-  assert.match(directSeed.text, /fuel trim/i);
-  assert.deepEqual(directSeed.matchedDtcs, ['P0171']);
-  assert.ok(structuralSeed);
-  assert.match(structuralSeed.text, /engine control/i);
-  assert.deepEqual(structuralSeed.matchedDtcs, []);
+  assert.equal(seeds.length, 2);
+  assert.equal(seeds[0].seedKind, 'DTC_ANCHOR');
+  assert.match(seeds[0].text, /fuel trim/i);
+  assert.deepEqual(seeds[0].matchedDtcs, ['P0171']);
+  assert.equal(seeds[1].seedKind, 'STRUCTURAL_NAVIGATION');
+  assert.match(seeds[1].text, /engine control/i);
+  assert.deepEqual(seeds[1].matchedDtcs, []);
+  assert.ok(seeds[0].priority > seeds[1].priority);
   assert.ok(seeds.every(seed => seed.url.startsWith(rootUrl)));
-  assert.ok(seeds.every(seed => !seed.url.includes('/Optima/')));
 });
 
-test('structural navigation shortcuts and synthetic DTC index are routing hints only', () => {
+test('structural navigation shortcuts are routing hints only and do not claim DTC coverage', () => {
   const rows = [storedRow([
     {
       url: `${rootUrl}Powertrain%20Management/Ignition%20System/Testing%20and%20Inspection/`,
@@ -109,9 +103,9 @@ test('structural navigation shortcuts and synthetic DTC index are routing hints 
     'diagnosis'
   );
 
-  assert.equal(seeds.length, 2);
-  assert.deepEqual(new Set(seeds.map(seed => seed.seedKind)), new Set(['DTC_INDEX_NAVIGATION', 'STRUCTURAL_NAVIGATION']));
-  assert.ok(seeds.every(seed => (seed.matchedDtcs || []).length === 0));
+  assert.equal(seeds.length, 1);
+  assert.equal(seeds[0].seedKind, 'STRUCTURAL_NAVIGATION');
+  assert.deepEqual(seeds[0].matchedDtcs, []);
 });
 
 test('stored navigation seeds do not cross explicit vehicle engine identity', () => {
