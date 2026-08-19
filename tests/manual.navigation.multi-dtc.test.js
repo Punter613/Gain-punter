@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   buildStoredNavigationSeeds,
+  buildDtcIndexSeed,
   rankNavigationLink
 } = require('../src/services/manual.navigation.seeds');
 const { buildCurrentSearchContext } = require('../src/services/manual.evidence.reuse');
@@ -40,7 +41,7 @@ function storedRow(links) {
   };
 }
 
-test('multi-DTC stored navigation seeds are balanced and reserve probe depth below branch roots', () => {
+test('multi-DTC stored navigation seeds include the bounded DTC index and preserve branch diversity', () => {
   const links = [
     link('Powertrain%20Management/Ignition%20System/A', 'Ignition System Testing A'),
     link('Powertrain%20Management/Ignition%20System/B', 'Ignition System Testing B'),
@@ -64,11 +65,23 @@ test('multi-DTC stored navigation seeds are balanced and reserve probe depth bel
     { limit: 12 }
   );
 
-  assert.equal(seeds.length, 6, 'two-DTC probe keeps three structural entry points per code and leaves page budget for descendants');
+  assert.equal(seeds.length, 6, 'two-DTC probe remains bounded');
+  const indexSeed = seeds.find(seed => seed.seedKind === 'DTC_INDEX_NAVIGATION');
+  assert.ok(indexSeed, 'resolved manual root should contribute the deterministic DTC-index shortcut');
+  assert.deepEqual(indexSeed.matchedDtcs, [], 'synthetic navigation index must never claim evidence coverage');
+  assert.deepEqual(new Set(indexSeed.routingDtcs), new Set(['P0300', 'P0171']));
   assert.ok(seeds.some(seed => seed.routingDtcs.includes('P0300')), 'seed set must route toward P0300');
   assert.ok(seeds.some(seed => seed.routingDtcs.includes('P0171')), 'seed set must route toward P0171');
   assert.ok(seeds.some(seed => /ignition/i.test(`${seed.text} ${decodeURIComponent(seed.url)}`)));
   assert.ok(seeds.some(seed => /air intake|fuel trim|vacuum/i.test(`${seed.text} ${decodeURIComponent(seed.url)}`)));
+});
+
+test('deterministic DTC index remains under the resolved manual root and is routing-only', () => {
+  const seed = buildDtcIndexSeed(rootUrl, ['P0300', 'P0171']);
+  assert.ok(seed);
+  assert.match(decodeURIComponent(seed.url), /ALL\s+Diagnostic Trouble Codes\s+\(\s*DTC\s*\)/i);
+  assert.equal(seed.seedKind, 'DTC_INDEX_NAVIGATION');
+  assert.deepEqual(seed.matchedDtcs, []);
 });
 
 test('structural routing metadata never masquerades as evidence DTC coverage', () => {
