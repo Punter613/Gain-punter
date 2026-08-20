@@ -21,8 +21,18 @@ function clean(value) {
 
 function isMeaningfulTestResult(value) {
   const result = clean(value);
-  if (!result || !/[a-z0-9]/i.test(result)) return false;
-  return !PLACEHOLDER_RESULTS.has(result.toLowerCase());
+  if (!result || !/[\p{L}\p{N}]/u.test(result)) return false;
+
+  // Treat punctuation-wrapped placeholder tokens as the same placeholder. This
+  // strips only leading/trailing non-alphanumeric characters for the comparison;
+  // the persisted mechanic result itself is left unchanged.
+  const placeholderCandidate = result
+    .toLowerCase()
+    .replace(/^[^\p{L}\p{N}]+/gu, '')
+    .replace(/[^\p{L}\p{N}]+$/gu, '')
+    .trim();
+
+  return !PLACEHOLDER_RESULTS.has(placeholderCandidate);
 }
 
 function nowIso() {
