@@ -10,7 +10,7 @@
     "test": "echo \"no tests configured\"",
     "test:guards": "node --test tests/completed.work.guard.edge-cases.test.js tests/diagnostic.stage.guard.edge-cases.test.js",
     "test:providers": "node --test tests/diagnose.schema.parity.test.js tests/provider.groq.contract.test.js tests/provider.router.fallback.test.js tests/specialist.router.provider.test.js tests/provider.failure-boundary.test.js",
-    "test:lifecycle": "node --test tests/lifecycle.http.test.js",
+    "test:lifecycle": "node --test tests/lifecycle.http.test.js tests/test.result.placeholder.punctuation.test.js",
     "test:measurements": "node --test tests/measurement.normalizer.test.js tests/measurement.tag.integration.test.js",
     "test:evidence": "node --test tests/nhtsa.tsb.corpus.test.js",
     "test:quick-ask": "node scripts/test-lemon-path-resolver.js && node --test tests/quick.ask.retriever.test.js tests/quick.ask.bounded.test.js tests/quick.ask.tuned.scraper.test.js tests/quick.ask.dtc.anchor.test.js tests/lemon-targeted-evidence.scrape.test.js tests/lemon.live-latency.test.js tests/lemon.cross-context-reuse.test.js tests/manual.reuse.failclosed.test.js tests/manual.multi-dtc.probe.test.js tests/manual.dtc.semantic-handoff.test.js tests/manual.navigation.seed.test.js tests/manual.navigation.multi-dtc.test.js tests/lemon.worker.timeout.test.js tests/vin.decode.latency.test.js",
