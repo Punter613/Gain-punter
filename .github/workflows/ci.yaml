@@ -90,6 +90,7 @@ jobs:
         EVIDENCE_CHANGED=0
         UNVERIFIED_CHANGED=0
         MANUAL_REUSE_CHANGED=0
+        TEST_EVIDENCE_CHANGED=0
 
         if echo "$CHANGED_FILES" | grep -Eq '^(api/server\.js$|src/services/(lemon|lemon\.worker|lemon\.path\.resolver|vehicle\.warmup|vin)\.js$|src/workers/lemonTargetedWorker\.js$|scripts/scrape-lemon-targeted-evidence\.js$|src/core/knowledge/(quick\.ask\.(retriever|bounded)|dtc\.retrieval\.intent)\.js$|src/routes/(quick\.ask|vehicle)\.js$)'; then
           EVIDENCE_CHANGED=1
@@ -104,7 +105,11 @@ jobs:
           UNVERIFIED_CHANGED=1
         fi
 
-        echo "Runtime canaries: evidence=$EVIDENCE_CHANGED manualReuse=$MANUAL_REUSE_CHANGED unverified=$UNVERIFIED_CHANGED"
+        if echo "$CHANGED_FILES" | grep -Eq '^(src/services/job\.lifecycle\.js$|src/routes/jobs\.protected\.js$)'; then
+          TEST_EVIDENCE_CHANGED=1
+        fi
+
+        echo "Runtime canaries: evidence=$EVIDENCE_CHANGED manualReuse=$MANUAL_REUSE_CHANGED unverified=$UNVERIFIED_CHANGED testEvidence=$TEST_EVIDENCE_CHANGED"
 
         if [ "$EVIDENCE_CHANGED" != "1" ] && [ "$UNVERIFIED_CHANGED" != "1" ]; then
           echo "No affected runtime canary lane; Render preview smoke skipped."
@@ -239,6 +244,98 @@ jobs:
         }
         console.log(`Unverified diagnosis runtime smoke passed: fallback=${smoke.fallback.ms}ms state=${smoke.fallback.diagnosisState} estimateBypass=${smoke.estimateBypassAttempt.statusCode} UI=${smoke.ui.hasFallback}`);
         NODE
+
+          if [ "$TEST_EVIDENCE_CHANGED" = "1" ]; then
+            JOB_ID="$(node - <<'NODE'
+        const fs = require('fs');
+        const smoke = JSON.parse(fs.readFileSync('/tmp/render-unverified-smoke.json', 'utf8'));
+        if (!smoke.jobId) process.exit(1);
+        process.stdout.write(smoke.jobId);
+        NODE
+        )"
+            ENCODED_JOB_ID="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+            echo "Verification-evidence runtime job: $JOB_ID"
+
+            for PLACEHOLDER in '(unknown)' '“unknown.”' 'unknown…'; do
+              BODY="$(PLACEHOLDER="$PLACEHOLDER" node -e 'process.stdout.write(JSON.stringify({name:"Runtime placeholder evidence",result:process.env.PLACEHOLDER}))')"
+              HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-placeholder-test.json -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' --data "$BODY" \
+                "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/tests" || true)"
+              cat /tmp/render-placeholder-test.json || true
+              echo
+              if [ "$HTTP_CODE" != "409" ]; then
+                echo "Punctuated placeholder ${PLACEHOLDER} was not rejected; HTTP $HTTP_CODE."
+                exit 1
+              fi
+            done
+
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-verify-no-evidence.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' \
+              --data '{"confirmed":true,"confirmedCause":"Knock sensor circuit signal fault","conclusion":"Runtime verification must bind persisted evidence.","evidenceTestIds":["missing-test"]}' \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/verify" || true)"
+            cat /tmp/render-verify-no-evidence.json || true
+            echo
+            if [ "$HTTP_CODE" != "409" ]; then
+              echo "VERIFY without persisted evidence was not rejected; HTTP $HTTP_CODE."
+              exit 1
+            fi
+
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-valid-test.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' \
+              --data '{"name":"Inspect knock sensor connector","result":"Connector dry; no corrosion observed."}' \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/tests" || true)"
+            cat /tmp/render-valid-test.json || true
+            echo
+            if [ "$HTTP_CODE" != "201" ]; then
+              echo "Descriptive observation was not accepted; HTTP $HTTP_CODE."
+              exit 1
+            fi
+
+            TEST_ID="$(node - <<'NODE'
+        const fs = require('fs');
+        const body = JSON.parse(fs.readFileSync('/tmp/render-valid-test.json', 'utf8'));
+        if (!body.test?.id) process.exit(1);
+        process.stdout.write(body.test.id);
+        NODE
+        )"
+
+            TEST_ID="$TEST_ID" node - <<'NODE'
+        const fs = require('fs');
+        fs.writeFileSync('/tmp/render-valid-verify-body.json', JSON.stringify({
+          confirmed: true,
+          confirmedCause: 'Knock sensor circuit signal fault',
+          conclusion: 'Connector inspection was recorded as a real mechanic observation for the runtime verification path.',
+          evidenceTestIds: [process.env.TEST_ID]
+        }));
+        NODE
+
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-valid-verify.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' --data-binary @/tmp/render-valid-verify-body.json \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/verify" || true)"
+            cat /tmp/render-valid-verify.json || true
+            echo
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Normal VERIFY path failed with HTTP $HTTP_CODE."
+              exit 1
+            fi
+
+            TEST_ID="$TEST_ID" node - <<'NODE'
+        const fs = require('fs');
+        const body = JSON.parse(fs.readFileSync('/tmp/render-valid-verify.json', 'utf8'));
+        const failures = [];
+        if (body.status !== 'VERIFIED') failures.push(`status ${body.status}`);
+        if (body.estimateReady !== true) failures.push('estimateReady !== true');
+        if (!body.verifiedCase) failures.push('VERIFIED_CASE missing');
+        if (!Array.isArray(body.verification?.evidenceTestIds) || !body.verification.evidenceTestIds.includes(process.env.TEST_ID)) {
+          failures.push('selected test not bound to verification');
+        }
+        if (failures.length) {
+          console.error(failures.join('; '));
+          process.exit(1);
+        }
+        console.log(`Verification-evidence runtime smoke passed: placeholders=409, missing-evidence verify=409, valid test=201, verify=200 VERIFIED, test=${process.env.TEST_ID}`);
+        NODE
+          fi
         else
           echo "Unverified-diagnosis/lifecycle hot path unchanged; unverified canary skipped."
         fi
