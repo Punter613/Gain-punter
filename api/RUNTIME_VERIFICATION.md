@@ -31,6 +31,8 @@ Stored-navigation work remains bounded. Each seed worker has a strict ~4.5-secon
 
 The reuse-specific CI canary uses the 2008 Kia Sorento 3.8L 4WD (`KNDJC736385765089`) with P0300/P0171 plus deceleration/full-lock context from the production latency case; it requires at least one focused manual reference, no manual timeout, <=5 seconds for the warm manual source, and a persisted cache hit on the repeat request. Because that lane is multi-DTC, the warm stored result must survive the collective P0300+P0171 coverage guard; partial single-code reuse will fall through and fail the latency/cache assertions instead of being accepted. Render logs should demonstrate a complete per-DTC probe merge or revalidated stored result rather than a partial cache hit.
 
+For verification-evidence placeholder hardening, the exact PR head must exercise the real lifecycle HTTP boundary, not only the exported predicate. A disposable diagnosed job is used to verify that punctuation-wrapped placeholders such as `(unknown)`, `“unknown.”`, and `unknown…` receive HTTP 409 from `POST /api/jobs/:id/tests`. The same exact head must also call `POST /api/jobs/:id/verify`: verification without persisted supporting evidence must remain rejected, while a real descriptive observation may be recorded and used for the normal VERIFY path. This runtime lane confirms both the route-level protective middleware and the lifecycle-level evidence gate are active on the deployed code.
+
 The unverified-diagnosis canary passes only when:
 
 - the result state is `UNVERIFIED_DIAGNOSIS`;
