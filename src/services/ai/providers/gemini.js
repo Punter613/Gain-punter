@@ -2,6 +2,7 @@ const DEFAULT_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash';
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GEMINI_JSON_MIME_TYPE = 'APPLICATION_JSON';
 const ESTIMATE_SCHEMA_NAME = 'sksk_estimate_reasoning';
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
 function isConfigured() {
   return Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
@@ -9,6 +10,11 @@ function isConfigured() {
 
 function apiKey() {
   return process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '';
+}
+
+function requestTimeoutMs() {
+  const configured = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 function resolveModel(requestedModel) {
@@ -235,6 +241,7 @@ async function chat(payload = {}) {
   const url = `${API_BASE}/${encodeURIComponent(request.model)}:generateContent`;
   const textFormat = request.body.generationConfig?.responseFormat?.text || null;
   const schemaBytes = textFormat?.schema ? Buffer.byteLength(JSON.stringify(textFormat.schema), 'utf8') : 0;
+  const timeoutMs = requestTimeoutMs();
 
   console.log('[geminiChat] request:', {
     model: request.model,
@@ -249,10 +256,13 @@ async function chat(payload = {}) {
         }
       : null,
     messageCount: messages.length,
-    fallbackReason
+    fallbackReason,
+    timeoutMs
   });
 
   const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response;
   try {
     const httpResponse = await fetch(url, {
@@ -262,7 +272,8 @@ async function chat(payload = {}) {
         'x-goog-api-key': apiKey(),
         'x-goog-api-client': 'sksk-protech/1.0.0'
       },
-      body: JSON.stringify(request.body)
+      body: JSON.stringify(request.body),
+      signal: controller.signal
     });
 
     response = await httpResponse.json().catch(() => ({}));
@@ -280,15 +291,25 @@ async function chat(payload = {}) {
       throw error;
     }
   } catch (error) {
+    let failure = error;
+    if (error?.name === 'AbortError') {
+      failure = new Error(`Gemini request timed out after ${timeoutMs}ms`);
+      failure.status = 408;
+      failure.code = 'request_timeout';
+      failure.provider = 'gemini';
+      failure.schemaVariant = request.schemaVariant;
+    }
     console.error('[geminiChat] request FAILED after', Date.now() - startedAt, 'ms:', {
-      message: error.message,
-      status: error.status || null,
-      code: error.code || null,
-      details: compactErrorDetails(error.details),
-      schemaVariant: error.schemaVariant || request.schemaVariant,
+      message: failure.message,
+      status: failure.status || null,
+      code: failure.code || null,
+      details: compactErrorDetails(failure.details),
+      schemaVariant: failure.schemaVariant || request.schemaVariant,
       schemaBytes
     });
-    throw error;
+    throw failure;
+  } finally {
+    clearTimeout(timeout);
   }
 
   const latencyMs = Date.now() - startedAt;
@@ -315,6 +336,7 @@ module.exports = {
   chat,
   isConfigured,
   apiKey,
+  requestTimeoutMs,
   resolveModel,
   compactEstimateSchema,
   schemaForGemini,
