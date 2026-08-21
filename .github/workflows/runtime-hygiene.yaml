@@ -1,0 +1,107 @@
+name: SKSK Runtime Hygiene Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'api/RUNTIME_HYGIENE_*.md'
+      - '.github/workflows/runtime-hygiene.yaml'
+
+jobs:
+  runtime-hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wait for exact Render preview head
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+        run: |
+          set -euo pipefail
+          matched=0
+          for attempt in $(seq 1 48); do
+            code="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$code" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
+          if (health?.ok === true && health?.preview?.commit === process.env.HEAD_SHA) process.exit(0);
+          process.exit(1);
+          NODE
+              then
+                matched=1
+                break
+              fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/48, HTTP $code)."
+            sleep 5
+          done
+          if [ "$matched" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA"
+            cat /tmp/health.json 2>/dev/null || true
+            exit 1
+          fi
+          cat /tmp/health.json
+
+      - name: Verify mechanic-facing root still serves
+        env:
+          PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+        run: |
+          set -euo pipefail
+          code="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/root.html -w '%{http_code}' "$PREVIEW_URL/")"
+          test "$code" = "200"
+          bytes="$(wc -c < /tmp/root.html)"
+          test "$bytes" -gt 500
+          echo "Root served HTTP $code, bytes=$bytes"
+
+      - name: Verify intelligence route still loads
+        env:
+          PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+        run: |
+          set -euo pipefail
+          code="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/intelligence-health.json -w '%{http_code}' "$PREVIEW_URL/api/intelligence/health")"
+          test "$code" = "200"
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/intelligence-health.json', 'utf8'));
+          if (!body || typeof body !== 'object') process.exit(1);
+          console.log(body);
+          NODE
+
+      - name: Verify live Translate route survived service cleanup
+        env:
+          PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+        run: |
+          set -euo pipefail
+          code="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/translate.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{"text":"clunk when turning left at full steering lock"}' \
+            "$PREVIEW_URL/api/translate")"
+          cat /tmp/translate.json
+          test "$code" = "200"
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/translate.json', 'utf8'));
+          if (typeof body?.translated !== 'string' || !body.translated.trim()) process.exit(1);
+          if (!Array.isArray(body?.keywords)) process.exit(1);
+          console.log(`Translate route passed: keywords=${body.keywords.length}`);
+          NODE
+
+      - name: Verify live Parts router survived legacy eBay cleanup
+        env:
+          PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+        run: |
+          set -euo pipefail
+          code="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/parts.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{"year":2008,"make":"Kia","model":"Sorento","partType":"brake pads"}' \
+            "$PREVIEW_URL/api/parts/search")"
+          cat /tmp/parts.json
+          test "$code" = "200"
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/parts.json', 'utf8'));
+          if (body?.success !== true) process.exit(1);
+          if (!Array.isArray(body?.results) || body.results.length < 1) process.exit(1);
+          console.log(`Parts route passed: results=${body.results.length}`);
+          NODE
