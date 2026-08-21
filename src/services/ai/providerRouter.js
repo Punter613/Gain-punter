@@ -28,8 +28,8 @@ function isRetryableProviderError(error) {
   const code = String(error?.code || '').toLowerCase();
   const message = String(error?.message || '').toLowerCase();
   if ([408, 409, 413, 429].includes(status) || status >= 500) return true;
-  if (['rate_limit_exceeded', 'request_timeout', 'server_error'].includes(code)) return true;
-  return /rate limit|too many requests|timeout|timed out|temporarily unavailable|overloaded|capacity/.test(message);
+  if (['rate_limit_exceeded', 'request_timeout', 'server_error', 'unavailable'].includes(code)) return true;
+  return /rate limit|too many requests|timeout|timed out|temporarily unavailable|unavailable|overloaded|capacity|high demand/.test(message);
 }
 
 function fallbackReason(error) {
@@ -52,6 +52,14 @@ function geminiFallbackPayload(payload, reason) {
   return geminiPayload(payload, { fallbackReason: reason });
 }
 
+async function groqFallback(payload, reason) {
+  const response = await groq.chat(payload);
+  if (response && typeof response === 'object') {
+    response._fallbackReason = reason;
+  }
+  return response;
+}
+
 async function routeProvider(payload) {
   const provider = getProvider();
 
@@ -67,11 +75,18 @@ async function routeProvider(payload) {
     }
     return await provider.chat(payload);
   } catch (error) {
-    const canFallback = activeProvider === 'groq' && gemini.isConfigured() && isRetryableProviderError(error);
-    if (!canFallback) throw error;
+    if (!isRetryableProviderError(error)) throw error;
+
     const reason = fallbackReason(error);
-    console.warn(`[AI Router] Groq unavailable (${reason}); falling back to Gemini.`);
-    return gemini.chat(geminiFallbackPayload(payload, reason));
+    if (activeProvider === 'groq' && gemini.isConfigured()) {
+      console.warn(`[AI Router] Groq unavailable (${reason}); falling back to Gemini.`);
+      return gemini.chat(geminiFallbackPayload(payload, reason));
+    }
+    if (activeProvider === 'gemini' && process.env.GROQ_API_KEY) {
+      console.warn(`[AI Router] Gemini unavailable (${reason}); falling back to Groq.`);
+      return groqFallback(payload, reason);
+    }
+    throw error;
   }
 }
 
