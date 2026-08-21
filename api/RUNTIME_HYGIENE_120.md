@@ -6,7 +6,7 @@ Before merge, the exact PR head must boot on Render and the reviewer must record
 
 - `/health` returning HTTP 200 and reporting the exact PR commit in `preview.commit`;
 - `/` returning the current mechanic-facing application rather than a startup/static-assets failure;
-- `/api/intelligence/health` returning a successful health response, proving the mounted intelligence route still loads after the legacy core/service deletions;
+- `/api/intelligence/health` proving the mounted intelligence route still loads after the legacy core/service deletions. Current baseline has no orchestrator `health()` method, so HTTP 503 with `ORCHESTRATOR_HEALTH_UNAVAILABLE` is an accepted loaded-route result; `ORCHESTRATOR_UNAVAILABLE` is a hard failure;
 - `POST /api/translate` returning a normal successful response, proving the live `src/routes/translate.js` path remains intact after deletion of the dead `src/services/translate.js` naming collision; and
 - a representative `/api/parts` request reaching the live mounted parts router rather than failing module resolution after removal of the isolated legacy eBay adapter pair.
 
