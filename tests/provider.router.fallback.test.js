@@ -16,6 +16,15 @@ function normalizedGeminiResponse(reason) {
   };
 }
 
+function normalizedGroqResponse() {
+  return {
+    choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
+    usage: { total_tokens: 1 },
+    _provider: 'groq',
+    _fallbackReason: null
+  };
+}
+
 function diagnoseRequestPayload() {
   return {
     messages: [
@@ -124,6 +133,40 @@ test('retryable Groq runtime failure falls back to Gemini exactly once', async (
     assert.match(capturedPayload.model, /^gemini-/i);
     assert.equal(result._provider, 'gemini');
     assert.equal(result._fallbackReason, 'RATE_LIMIT_EXCEEDED_429');
+  });
+});
+
+test('retryable Gemini runtime failure falls back to Groq exactly once with provenance', async () => {
+  await withProviderMocks(async () => {
+    process.env.GROQ_API_KEY = 'test-only-key';
+    aiClient.setProvider('gemini');
+
+    let groqCalls = 0;
+    let geminiCalls = 0;
+    let capturedPayload;
+
+    geminiProvider.chat = async () => {
+      geminiCalls++;
+      throw Object.assign(new Error('This model is currently experiencing high demand.'), {
+        status: 503,
+        code: 'UNAVAILABLE'
+      });
+    };
+    groqProvider.chat = async payload => {
+      groqCalls++;
+      capturedPayload = payload;
+      return normalizedGroqResponse();
+    };
+
+    const request = diagnoseRequestPayload();
+    const result = await aiClient.aiChat(request);
+
+    assert.equal(geminiCalls, 1);
+    assert.equal(groqCalls, 1);
+    assert.deepEqual(capturedPayload, request);
+    assert.equal(result._provider, 'groq');
+    assert.equal(result._fallbackReason, 'UNAVAILABLE_503');
+    assert.equal(result.choices[0].message.content, '{"ok":true}');
   });
 });
 
