@@ -1,30 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const jobsRouter = require('./jobs');
-const { getJob } = require('../services/job.lifecycle');
-
-const PLACEHOLDER_RESULTS = new Set([
-  '?', '??', '???', 'unknown', 'tbd', 'pending', 'n/a', 'na', 'not sure', 'not tested', 'not performed'
-]);
+const { getJob, isMeaningfulTestResult } = require('../services/job.lifecycle');
 
 function clean(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
-}
-
-function isMeaningfulTestResult(value) {
-  const result = clean(value);
-  if (!result || !/[\p{L}\p{N}]/u.test(result)) return false;
-
-  // Treat punctuation-wrapped placeholder tokens as the same placeholder. This
-  // strips only leading/trailing non-alphanumeric characters for the comparison;
-  // the persisted mechanic result itself is left unchanged.
-  const placeholderCandidate = result
-    .toLowerCase()
-    .replace(/^[^\p{L}\p{N}]+/gu, '')
-    .replace(/[^\p{L}\p{N}]+$/gu, '')
-    .trim();
-
-  return !PLACEHOLDER_RESULTS.has(placeholderCandidate);
 }
 
 // Protective boundary in front of the existing jobs router.
