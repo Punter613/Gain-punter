@@ -11,3 +11,5 @@ Before merge, the exact PR head must boot on Render and the reviewer must record
 - a representative `/api/parts` request reaching the live mounted parts router rather than failing module resolution after removal of the isolated legacy eBay adapter pair.
 
 The hygiene PR does not alter the Diagnose/Test/Verify/Estimate lifecycle, Quick Ask retrieval logic, workers, or database schema. Their existing regression suites still run in CI; the runtime checks above are specifically intended to prove that the claimed-dead modules were not hidden startup or route dependencies.
+
+`.github/workflows/runtime-hygiene.yaml` automates these checks for hygiene PRs carrying an `api/RUNTIME_HYGIENE_*.md` marker. This final marker update intentionally forces both Render and the hygiene workflow to evaluate the same exact PR head before merge.
