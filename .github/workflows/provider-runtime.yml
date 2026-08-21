@@ -1,0 +1,83 @@
+name: SKSK Provider Runtime Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/services/ai/providerRouter.js'
+      - 'src/services/ai/providers/gemini.js'
+      - 'tests/provider.gemini.timeout.test.js'
+      - 'tests/provider.router.fallback.test.js'
+      - 'package.json'
+      - 'api/PROVIDER_RUNTIME_VERIFICATION.md'
+      - '.github/workflows/provider-runtime.yml'
+
+jobs:
+  provider-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.number }}.onrender.com
+
+    steps:
+      - name: Wait for exact Render preview head
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 36); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/provider-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/provider-health.json', 'utf8'));
+          if (health?.preview?.commit === process.env.HEAD_SHA) process.exit(0);
+          process.exit(1);
+          NODE
+              then
+                MATCHED=1
+                break
+              fi
+            fi
+            echo "Provider preview not on exact head yet (attempt $attempt/36, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render provider preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/provider-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Exercise real Translate provider path
+        run: |
+          START_MS="$(date +%s%3N)"
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 70 -sS -o /tmp/provider-translate.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{"text":"Customer reports a clunk when releasing the accelerator and another clunk at full steering lock."}' \
+            "$PREVIEW_URL/api/translate" || true)"
+          END_MS="$(date +%s%3N)"
+          ELAPSED_MS=$((END_MS - START_MS))
+          cat /tmp/provider-translate.json 2>/dev/null || true
+          echo
+          echo "Translate HTTP=$HTTP_CODE elapsed=${ELAPSED_MS}ms"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Real Translate provider path failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          ELAPSED_MS="$ELAPSED_MS" node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/provider-translate.json', 'utf8'));
+          const elapsed = Number(process.env.ELAPSED_MS || Infinity);
+          const failures = [];
+          if (typeof body.translated !== 'string' || !body.translated.trim()) failures.push('translated result missing');
+          if (!Array.isArray(body.keywords) || body.keywords.length < 1) failures.push('AI retrieval keywords missing');
+          // Gemini itself is capped at 30s; leave bounded room for the single Groq fallback.
+          if (!Number.isFinite(elapsed) || elapsed > 65000) failures.push(`Translate provider path exceeded 65s ceiling (${elapsed}ms)`);
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          console.log(`Provider runtime smoke passed in ${elapsed}ms with ${body.keywords.length} retrieval keyword(s).`);
+          NODE
