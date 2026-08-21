@@ -33,6 +33,8 @@ The reuse-specific CI canary uses the 2008 Kia Sorento 3.8L 4WD (`KNDJC736385765
 
 For verification-evidence placeholder hardening, the exact PR head must exercise the real lifecycle HTTP boundary, not only the exported predicate. A disposable diagnosed job is used to verify that punctuation-wrapped placeholders such as `(unknown)`, `“unknown.”`, and `unknown…` receive HTTP 409 from `POST /api/jobs/:id/tests`. The same exact head must also call `POST /api/jobs/:id/verify`: verification without persisted supporting evidence must remain rejected, while a real descriptive observation may be recorded and used for the normal VERIFY path. This runtime lane confirms both the route-level protective middleware and the lifecycle-level evidence gate are active on the deployed code. The CI runtime smoke automates those exact route calls after the unverified canary seeds its disposable job.
 
+For standalone uncertainty hardening, the lifecycle validator also treats bare uncertainty-only results such as `maybe`, `possibly`, `probably`, `unsure`, and `uncertain` as non-evidence. Because the protected jobs route now imports that lifecycle predicate instead of maintaining a duplicate denylist, focused regressions assert both bare and punctuation-wrapped uncertainty values are rejected by the same function reference. The exact-head runtime lane still exercises the real `/api/jobs/:id/tests` and `/api/jobs/:id/verify` routes to prove the shared validator is active on the deployed code and that a descriptive mechanic observation still reaches VERIFIED normally.
+
 The unverified-diagnosis canary passes only when:
 
 - the result state is `UNVERIFIED_DIAGNOSIS`;

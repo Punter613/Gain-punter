@@ -12,7 +12,9 @@ const VALID_STATES = new Set([
 ]);
 
 const PLACEHOLDER_RESULTS = new Set([
-  '?', '??', '???', 'unknown', 'tbd', 'pending', 'n/a', 'na', 'not sure', 'not tested', 'not performed'
+  '?', '??', '???', 'unknown', 'tbd', 'pending', 'n/a', 'na',
+  'not sure', 'unsure', 'uncertain', 'maybe', 'possibly', 'probably',
+  'not tested', 'not performed'
 ]);
 
 function clean(value) {
