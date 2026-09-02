@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getJob, patchJob, addTest, verifyJob, recordUnverifiedDiagnosis } = require('../services/job.lifecycle');
+const { hasNewEvidenceSinceDiagnosis, reassessDiagnosis } = require('../services/diagnostic.reassessment');
 const { buildVerifiedCase } = require('../core/evidence/verified.case');
 const {
   buildRepairCompletedEvent,
@@ -30,6 +31,31 @@ router.get('/:id', async (req, res) => {
 
 router.post('/:id/unverified-diagnosis', async (req, res) => {
   try {
+    let current = await getJob(req.params.id);
+    if (!current) return res.status(404).json({ success: false, error: 'Job not found' });
+
+    if (current.diagnosis?.result && hasNewEvidenceSinceDiagnosis(current)) {
+      try {
+        const reassessed = await reassessDiagnosis(current);
+        if (reassessed) {
+          const previousDiagnosis = current.diagnosis;
+          const revision = Math.max(1, Number(previousDiagnosis.revision) || 1) + 1;
+          current = await patchJob(req.params.id, {
+            diagnosisHistory: [...(current.diagnosisHistory || []), previousDiagnosis],
+            diagnosis: {
+              ...previousDiagnosis,
+              result: reassessed,
+              revision,
+              reassessmentReason: 'NEW_TEST_EVIDENCE',
+              recordedAt: new Date().toISOString()
+            }
+          });
+        }
+      } catch (reassessmentError) {
+        console.warn(`[jobs] diagnostic reassessment failed for ${req.params.id}; retaining prior diagnosis:`, reassessmentError.message);
+      }
+    }
+
     const job = await recordUnverifiedDiagnosis(req.params.id);
     if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
 
@@ -38,6 +64,8 @@ router.post('/:id/unverified-diagnosis', async (req, res) => {
       jobId: job.jobId,
       status: job.status,
       diagnosisState: job.unverifiedDiagnosis?.state || 'UNVERIFIED_DIAGNOSIS',
+      diagnosisRevision: Number(job.diagnosis?.revision) || 1,
+      reassessmentApplied: job.diagnosis?.result?.reassessment?.applied === true,
       unverifiedDiagnosis: job.unverifiedDiagnosis,
       verifiedCase: job.verifiedCase || null,
       estimateReady: false
