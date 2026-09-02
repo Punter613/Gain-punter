@@ -18,6 +18,8 @@
 - Record the commands/routes exercised and the observed result in the PR description or a PR comment before merge.
 - A clean boot plus green syntax/static checks is necessary but not sufficient; runtime behavior is the merge criterion.
 - If the runtime environment or required credentials are unavailable, do not merge. Document what is blocked instead.
+- Render currently uses `api/` as the backend service Root Directory. Any PR that changes backend/runtime files outside `api/` must also contain an `api/`-visible change so Render creates the PR preview and production autodeploy. Run `npm run render:preview -- "reason"` and commit `api/.render-preview-trigger` when needed.
+- A missing Render preview is a failed runtime gate, not a successful or skipped verification. The exact PR head SHA must be live before merge.
 
 ## TAG Safety Invariants
 - Missing does not mean safe. Missing does not mean unsafe. Missing means unknown.

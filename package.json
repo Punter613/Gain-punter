@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node api/server.js",
     "dev": "nodemon api/server.js",
+    "render:preview": "node scripts/bump-render-preview-trigger.js",
     "lint": "echo \"no linter configured\"",
     "test": "echo \"no tests configured\"",
     "test:guards": "node --test tests/completed.work.guard.edge-cases.test.js tests/diagnostic.stage.guard.edge-cases.test.js",

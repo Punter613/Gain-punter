@@ -1,1 +1,3 @@
-trigger preview for PR #98 live provider validation
+Render preview trigger
+reason: harden exact-head runtime gate and restore backend deploy visibility
+updated: 2026-09-02T23:12:00Z
