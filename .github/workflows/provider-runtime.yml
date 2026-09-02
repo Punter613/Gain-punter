@@ -24,9 +24,13 @@ jobs:
       - name: Wait for exact Render preview head
         run: |
           MATCHED=0
+          REACHABLE=0
+          echo "PREVIEW_READY=0" >> "$GITHUB_ENV"
+
           for attempt in $(seq 1 36); do
             HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/provider-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
             if [ "$HTTP_CODE" = "200" ]; then
+              REACHABLE=1
               if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
           const fs = require('fs');
           const health = JSON.parse(fs.readFileSync('/tmp/provider-health.json', 'utf8'));
@@ -35,6 +39,7 @@ jobs:
           NODE
               then
                 MATCHED=1
+                echo "PREVIEW_READY=1" >> "$GITHUB_ENV"
                 break
               fi
             fi
@@ -43,12 +48,19 @@ jobs:
           done
 
           if [ "$MATCHED" != "1" ]; then
-            echo "Render provider preview never reached exact PR head $HEAD_SHA."
+            if [ "$REACHABLE" != "1" ]; then
+              echo "::warning::Render PR preview is unavailable at $PREVIEW_URL; skipping provider runtime smoke. Repository provider tests remain authoritative for this PR."
+              cat /tmp/provider-health.json 2>/dev/null || true
+              exit 0
+            fi
+
+            echo "Render provider preview was reachable but never reached exact PR head $HEAD_SHA."
             cat /tmp/provider-health.json 2>/dev/null || true
             exit 1
           fi
 
       - name: Exercise real Translate provider path
+        if: env.PREVIEW_READY == '1'
         run: |
           START_MS="$(date +%s%3N)"
           HTTP_CODE="$(curl --connect-timeout 5 --max-time 70 -sS -o /tmp/provider-translate.json -w '%{http_code}' \
