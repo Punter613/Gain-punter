@@ -1,0 +1,111 @@
+name: Render Exact-Head Runtime Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'api/**'
+      - 'src/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'openapi.yaml'
+      - '.github/workflows/render-exact-head.yml'
+
+jobs:
+  exact-head-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.number }}.onrender.com
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require Render-visible trigger for backend changes
+        run: |
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || true
+          CHANGED_FILES="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          echo "$CHANGED_FILES"
+
+          BACKEND_RELEVANT=0
+          API_VISIBLE=0
+
+          if echo "$CHANGED_FILES" | grep -Eq '^(src/|public/|api/|package\.json$|package-lock\.json$|openapi\.yaml$)'; then
+            BACKEND_RELEVANT=1
+          fi
+
+          if echo "$CHANGED_FILES" | grep -Eq '^api/'; then
+            API_VISIBLE=1
+          fi
+
+          if [ "$BACKEND_RELEVANT" = "1" ] && [ "$API_VISIBLE" != "1" ]; then
+            echo "::error::Render backend uses api/ as its Root Directory. This PR changes backend/runtime files outside api/, so Render will not create a PR preview or production autodeploy. Run: npm run render:preview -- \"describe the backend change\"; commit api/.render-preview-trigger; then push again."
+            exit 1
+          fi
+
+          echo "Render root-directory visibility check passed."
+
+      - name: Wait for exact Render preview head
+        run: |
+          echo "Waiting for exact PR head $HEAD_SHA at $PREVIEW_URL"
+          MATCHED=0
+          LAST_HTTP=000
+
+          for attempt in $(seq 1 60); do
+            LAST_HTTP="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/render-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+
+            if [ "$LAST_HTTP" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/render-health.json', 'utf8'));
+          if (health?.preview?.commit === process.env.HEAD_SHA) process.exit(0);
+          console.error(`preview commit ${health?.preview?.commit || 'missing'} != ${process.env.HEAD_SHA}`);
+          process.exit(1);
+          NODE
+              then
+                MATCHED=1
+                break
+              fi
+            fi
+
+            echo "Preview not ready on exact head (attempt $attempt/60, HTTP $LAST_HTTP)."
+            sleep 5
+          done
+
+          if [ "$MATCHED" != "1" ]; then
+            echo "::error::Required Render PR preview never booted the exact PR head $HEAD_SHA (last HTTP $LAST_HTTP). Runtime verification is mandatory; do not merge."
+            cat /tmp/render-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Exact Render PR head is live."
+
+      - name: Baseline runtime health assertion
+        run: |
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-health-final.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+          cat /tmp/render-health-final.json || true
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Exact-head preview became unhealthy; HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/render-health-final.json', 'utf8'));
+          const failures = [];
+          if (health?.ok !== true) failures.push('health.ok !== true');
+          if (health?.preview?.commit !== process.env.HEAD_SHA) failures.push('preview commit mismatch');
+          if (health?.preview?.service == null) failures.push('preview service identity missing');
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          console.log(`Render exact-head runtime gate passed for ${process.env.HEAD_SHA}.`);
+          NODE
