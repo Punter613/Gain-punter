@@ -70,11 +70,23 @@ function buildRationale(job = {}, result = {}, mostLikelyCause) {
   if (matching?.cause) {
     const likelihood = Number(matching.likelihood);
     reasons.push(Number.isFinite(likelihood)
-      ? `Diagnostic ranking: ${clean(matching.cause, 300)} at ${Math.max(0, Math.min(100, Math.round(likelihood)))}% model likelihood`
-      : `Diagnostic ranking: ${clean(matching.cause, 300)}`);
+      ? `Candidate ranking weight: ${clean(matching.cause, 300)} at ${Math.max(0, Math.min(100, Math.round(likelihood)))}% of the current candidate weighting`
+      : `Candidate ranking: ${clean(matching.cause, 300)}`);
   }
   if (result.notes) reasons.push(clean(result.notes, 500));
   return reasons.slice(0, 8);
+}
+
+function uniqueAlternatives(values = [], mostLikelyCause = '') {
+  const primaryKey = clean(mostLikelyCause, 300).toLowerCase();
+  const seen = new Set();
+  return values.filter(value => {
+    const cleaned = clean(value, 300);
+    const key = cleaned.toLowerCase();
+    if (!key || key === primaryKey || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 5);
 }
 
 function buildUnverifiedDiagnosis(job = {}, recordedAt = new Date().toISOString()) {
@@ -84,10 +96,10 @@ function buildUnverifiedDiagnosis(job = {}, recordedAt = new Date().toISOString(
   const mostLikelyCause = selectMostLikelyCause(result);
   const evidencePacket = job.diagnosis?.evidencePacket || {};
   const evidence = result.evidence || {};
-  const alternatives = [
+  const alternatives = uniqueAlternatives([
     ...list(result.secondaryCauses, 5, 300),
     ...(Array.isArray(result.probability) ? result.probability.map(item => clean(item?.cause, 300)) : [])
-  ].filter((value, index, all) => value && value.toLowerCase() !== mostLikelyCause.toLowerCase() && all.indexOf(value) === index).slice(0, 5);
+  ], mostLikelyCause);
 
   return Object.freeze({
     schemaVersion: SCHEMA_VERSION,
@@ -123,5 +135,6 @@ module.exports = {
   buildUnverifiedDiagnosis,
   normalizeConfidence,
   selectMostLikelyCause,
-  remainingVerificationSteps
+  remainingVerificationSteps,
+  uniqueAlternatives
 };
