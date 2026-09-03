@@ -1,0 +1,204 @@
+name: Atomic Evidence Reassessment Runtime Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/services/atomic.evidence.reassessment.js'
+      - 'src/routes/atomic.evidence.reassessment.js'
+      - 'src/routes/jobs.protected.js'
+      - 'public/lifecycle.html'
+      - 'public/js/atomic-evidence-ui.js'
+      - 'tests/atomic.evidence.reassessment.test.js'
+      - 'tests/frontend.atomic.evidence.reassessment.test.js'
+      - 'package.json'
+      - 'api/.render-preview-trigger'
+      - '.github/workflows/atomic-evidence-reassessment-runtime.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-atomic-reassessment:
+    runs-on: ubuntu-latest
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Run deterministic atomic reassessment regressions
+        run: npm install --ignore-scripts && npm run test:atomic-reassessment
+
+      - name: Wait for exact Render preview head
+        shell: bash
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 60); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/atomic-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/atomic-health.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) process.exit(1);
+          NODE
+              then MATCHED=1; break; fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/60, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/atomic-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Prove save-fail-closed-retry idempotency on live preview
+        shell: bash
+        run: |
+          cat > /tmp/atomic-diagnose.json <<'JSON'
+          {
+            "customer": {"name": "ATOMIC RUNTIME CANARY"},
+            "vehicle": {"year": 2018, "make": "Honda", "model": "Accord", "engine": "1.5L", "mileage": 90000},
+            "mileage": 90000,
+            "symptoms": ["Mechanical vibration is felt under light acceleration and changes on throttle release"],
+            "notes": ["Runtime canary only; no repair authorization"],
+            "dtcEvidence": []
+          }
+          JSON
+
+          DIAG_HTTP=000
+          for attempt in $(seq 1 5); do
+            DIAG_HTTP="$(curl --connect-timeout 5 --max-time 150 -sS -o /tmp/atomic-diagnose-response.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' --data-binary @/tmp/atomic-diagnose.json \
+              "$PREVIEW_URL/api/diagnose" || true)"
+            if [ "$DIAG_HTTP" = "200" ]; then break; fi
+            echo "Atomic canary Diagnose not ready (attempt $attempt/5, HTTP $DIAG_HTTP)."
+            cat /tmp/atomic-diagnose-response.json 2>/dev/null || true
+            sleep 3
+          done
+          cat /tmp/atomic-diagnose-response.json || true
+          echo
+          if [ "$DIAG_HTTP" != "200" ]; then
+            echo "Atomic canary Diagnose failed with HTTP $DIAG_HTTP"
+            exit 1
+          fi
+
+          JOB_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/atomic-diagnose-response.json', 'utf8'));
+          if (!body.jobId) process.exit(1);
+          process.stdout.write(body.jobId);
+          NODE
+          )"
+          ENCODED_JOB_ID="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+
+          cat > /tmp/atomic-evidence.json <<'JSON'
+          {
+            "evidence": [{
+              "id": "atomic-runtime-road-test-1",
+              "name": "Controlled throttle-release road test",
+              "result": "Mechanical vibration changes immediately during throttle release and torque reversal.",
+              "passed": null,
+              "evidenceRole": "NEUTRAL",
+              "confirmedFault": ""
+            }]
+          }
+          JSON
+
+          FAIL_HTTP="$(curl --connect-timeout 5 --max-time 60 -sS -o /tmp/atomic-fail.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' -H 'x-sksk-preview-reassessment-failure: true' \
+            --data-binary @/tmp/atomic-evidence.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/unverified-diagnosis" || true)"
+          cat /tmp/atomic-fail.json || true
+          echo
+          if [ "$FAIL_HTTP" != "409" ]; then
+            echo "Expected fail-closed 409, got HTTP $FAIL_HTTP"
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/atomic-fail.json', 'utf8'));
+          const failures = [];
+          if (body.code !== 'REASSESSMENT_FAILED_AFTER_EVIDENCE_SAVE') failures.push(`code ${body.code}`);
+          if (body.evidenceSaved !== true) failures.push('evidenceSaved !== true');
+          if (body.evidenceSavedCount !== 1) failures.push(`saved ${body.evidenceSavedCount}`);
+          if (body.diagnosisStale !== true) failures.push('diagnosisStale !== true');
+          if (body.estimateReady !== false) failures.push('estimateReady not false');
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          NODE
+
+          FOUND=0
+          for attempt in $(seq 1 10); do
+            JOB_HTTP="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/atomic-job-after-fail.json -w '%{http_code}' \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID" || true)"
+            if [ "$JOB_HTTP" = "200" ]; then FOUND=1; break; fi
+            echo "Persisted atomic job not readable yet (attempt $attempt/10, HTTP $JOB_HTTP)."
+            sleep 2
+          done
+          if [ "$FOUND" != "1" ]; then
+            cat /tmp/atomic-job-after-fail.json 2>/dev/null || true
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/atomic-job-after-fail.json', 'utf8'));
+          const job = body.job || {};
+          const failures = [];
+          if ((job.tests || []).filter(t => t.id === 'atomic-runtime-road-test-1').length !== 1) failures.push('saved evidence missing or duplicated after forced failure');
+          if (job.diagnosis?.stale !== true) failures.push('persisted diagnosis not stale after forced failure');
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          NODE
+
+          # The success hook is PR-preview-only. It proves the state transition
+          # independently of temporary AI provider invalid-JSON/outage behavior;
+          # production never exposes this deterministic reassessment hook.
+          RETRY_HTTP="$(curl --connect-timeout 5 --max-time 60 -sS -o /tmp/atomic-retry.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' -H 'x-sksk-preview-reassessment-success: true' \
+            --data-binary @/tmp/atomic-evidence.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/unverified-diagnosis" || true)"
+          cat /tmp/atomic-retry.json || true
+          echo
+          if [ "$RETRY_HTTP" != "200" ]; then
+            echo "Atomic retry reassessment failed with HTTP $RETRY_HTTP"
+            exit 1
+          fi
+
+          REVISION="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/atomic-retry.json', 'utf8'));
+          const failures = [];
+          if (body.diagnosisState !== 'UNVERIFIED_DIAGNOSIS') failures.push(`state ${body.diagnosisState}`);
+          if (body.evidenceSavedCount !== 0) failures.push(`retry unexpectedly saved ${body.evidenceSavedCount}`);
+          if (body.evidenceReusedCount !== 1) failures.push(`retry reused ${body.evidenceReusedCount}`);
+          if (body.diagnosisStale !== false) failures.push('fresh diagnosis still stale');
+          if (Number(body.diagnosisRevision) < 2) failures.push(`revision ${body.diagnosisRevision}`);
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          process.stdout.write(String(body.diagnosisRevision));
+          NODE
+          )"
+
+          REPEAT_HTTP="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/atomic-repeat.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' -H 'x-sksk-preview-reassessment-success: true' \
+            --data-binary @/tmp/atomic-evidence.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/unverified-diagnosis" || true)"
+          if [ "$REPEAT_HTTP" != "200" ]; then
+            cat /tmp/atomic-repeat.json || true
+            echo "Idempotent repeat failed with HTTP $REPEAT_HTTP"
+            exit 1
+          fi
+
+          REVISION="$REVISION" node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/atomic-repeat.json', 'utf8'));
+          const failures = [];
+          if (String(body.diagnosisRevision) !== process.env.REVISION) failures.push(`duplicate revision ${body.diagnosisRevision} != ${process.env.REVISION}`);
+          if (body.evidenceSavedCount !== 0 || body.evidenceReusedCount !== 1) failures.push('repeat was not idempotent');
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          console.log(`Atomic evidence runtime passed: evidence persisted through forced reassessment failure, stale diagnosis stayed closed, retry produced revision ${body.diagnosisRevision}, repeat did not duplicate evidence or revision.`);
+          NODE
