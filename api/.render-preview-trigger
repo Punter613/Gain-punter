@@ -1,3 +1,3 @@
 Render preview trigger
-reason: atomic evidence save -> stale diagnosis -> reassess -> fresh revision; source outage runtime accepts only explicit low-confidence insufficient-evidence no-candidate responses
-updated: 2026-09-03T18:56:00Z
+reason: Work Order authorization snapshot -> execution state -> completed-work boundary without changing diagnostic truth or invoice truth
+updated: 2026-09-03T19:18:00Z
