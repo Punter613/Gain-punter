@@ -25,6 +25,16 @@ function errorPayload(error, jobId) {
   };
 }
 
+function previewReassessmentOptions(req) {
+  const requested = String(req.get('x-sksk-preview-reassessment-failure') || '').toLowerCase() === 'true';
+  if (process.env.IS_PULL_REQUEST !== 'true' || !requested) return {};
+  return {
+    reassessDiagnosisFn: async () => {
+      throw new Error('PR preview forced reassessment failure canary');
+    }
+  };
+}
+
 router.post('/:id/tests/batch', async (req, res) => {
   try {
     const result = await persistEvidenceBatch(req.params.id, req.body?.evidence || req.body?.tests || []);
@@ -50,7 +60,11 @@ router.post('/:id/tests/batch', async (req, res) => {
 // response fails closed and explicitly reports that the prior diagnosis is stale.
 router.post('/:id/unverified-diagnosis', async (req, res) => {
   try {
-    const result = await atomicUnverifiedDiagnosis(req.params.id, req.body?.evidence || []);
+    const result = await atomicUnverifiedDiagnosis(
+      req.params.id,
+      req.body?.evidence || [],
+      previewReassessmentOptions(req)
+    );
     const job = result.job;
     return res.json({
       success: true,
@@ -75,3 +89,4 @@ router.post('/:id/unverified-diagnosis', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.previewReassessmentOptions = previewReassessmentOptions;
