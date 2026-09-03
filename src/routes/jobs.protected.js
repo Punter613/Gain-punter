@@ -4,6 +4,7 @@ const jobsRouter = require('./jobs');
 const customerEstimateCenter = require('./customer.estimate.center');
 const atomicEvidenceReassessment = require('./atomic.evidence.reassessment');
 const workOrderRouter = require('./work.order');
+const finalWorkInvoiceRouter = require('./final.work.invoice');
 const {
   getJob,
   isMeaningfulTestResult,
@@ -24,6 +25,11 @@ router.use('/estimate-center', customerEstimateCenter);
 // estimate lines. The route is separate from diagnostic verification truth:
 // authorization approves scope, but never proves that a repair is required.
 router.use('/:id/work-orders', workOrderRouter);
+
+// Final invoice truth is built only from Work Order lines that are both
+// AUTHORIZED and COMPLETED. Deferred, declined, cancelled, blocked, ready, and
+// in-progress scope cannot become billable invoice lines.
+router.use(finalWorkInvoiceRouter);
 
 // Atomic evidence/reassessment routes intentionally mount before the legacy
 // jobs router. They preserve the old endpoint shape while making the mobile
