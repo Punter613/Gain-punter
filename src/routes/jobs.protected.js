@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const jobsRouter = require('./jobs');
 const customerEstimateCenter = require('./customer.estimate.center');
+const atomicEvidenceReassessment = require('./atomic.evidence.reassessment');
 const {
   getJob,
   isMeaningfulTestResult,
@@ -17,6 +18,11 @@ function clean(value) {
 // remain separate from diagnostic verification truth. A QUICK_ESTIMATE never
 // creates VERIFIED_CASE and never unlocks the verified Estimate -> Invoice lane.
 router.use('/estimate-center', customerEstimateCenter);
+
+// Atomic evidence/reassessment routes intentionally mount before the legacy
+// jobs router. They preserve the old endpoint shape while making the mobile
+// flow save -> stale -> reassess -> present a single serialized mutation.
+router.use(atomicEvidenceReassessment);
 
 // Protective boundary in front of the existing jobs router.
 // A recorded confirmation test must contain an actual mechanic observation or measurement.
