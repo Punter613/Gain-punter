@@ -17,7 +17,9 @@ function clean(value, max = 120) {
 
 function normalizeDtcCode(value) {
   const compact = clean(value, 32).toUpperCase().replace(/\s+/g, '');
-  if (!/^[PBCU][0-9A-F]{4}$/.test(compact)) return '';
+  // Keep the provenance boundary identical to the Diagnose provider schema:
+  // one system letter, a standards family digit 0-3, then three hex digits.
+  if (!/^[PBCU][0-3][0-9A-F]{3}$/.test(compact)) return '';
   return compact;
 }
 
@@ -69,6 +71,10 @@ function normalizeRecord(value, fallbackSource = DTC_SOURCES.LEGACY_UNSPECIFIED)
 function recordTrustRank(record = {}) {
   if (isTrustedDtcEvidence(record)) return 100;
   switch (normalizeSource(record.source)) {
+    // Preserve the strongest claimed provenance for audit purposes even when a
+    // scanner record has not been explicitly verified. It still remains
+    // excluded from diagnostic reasoning.
+    case DTC_SOURCES.SCAN_TOOL: return 50;
     case DTC_SOURCES.MANUAL_ENTRY: return 40;
     case DTC_SOURCES.CUSTOMER_REPORTED: return 30;
     case DTC_SOURCES.LEGACY_UNSPECIFIED: return 20;
