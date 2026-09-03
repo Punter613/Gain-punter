@@ -13,7 +13,8 @@ const SOURCE_CLASS = Object.freeze({
   OFFICIAL_STORED: 'OFFICIAL_STORED',
   OFFICIAL_PUBLIC_API: 'OFFICIAL_PUBLIC_API',
   OPTIONAL_EXTERNAL_REFERENCE: 'OPTIONAL_EXTERNAL_REFERENCE',
-  INTERNAL_TRUSTED: 'INTERNAL_TRUSTED'
+  INTERNAL_TRUSTED: 'INTERNAL_TRUSTED',
+  STORED_EVIDENCE_INDEX: 'STORED_EVIDENCE_INDEX'
 });
 
 const SOURCE_DEFINITIONS = Object.freeze({
@@ -21,7 +22,8 @@ const SOURCE_DEFINITIONS = Object.freeze({
   NHTSA_ODI: Object.freeze({ sourceClass: SOURCE_CLASS.OFFICIAL_PUBLIC_API, required: false, durable: true }),
   LEMON_MANUALS: Object.freeze({ sourceClass: SOURCE_CLASS.OPTIONAL_EXTERNAL_REFERENCE, required: false, durable: false }),
   LEMON_TSB_CORPUS: Object.freeze({ sourceClass: SOURCE_CLASS.OPTIONAL_EXTERNAL_REFERENCE, required: false, durable: false }),
-  CONFIRMED_REPAIRS: Object.freeze({ sourceClass: SOURCE_CLASS.INTERNAL_TRUSTED, required: false, durable: true })
+  CONFIRMED_REPAIRS: Object.freeze({ sourceClass: SOURCE_CLASS.INTERNAL_TRUSTED, required: false, durable: true }),
+  PUBLISHED_TSB_CORPUS: Object.freeze({ sourceClass: SOURCE_CLASS.STORED_EVIDENCE_INDEX, required: false, durable: true })
 });
 
 function clean(value, max = 300) {
