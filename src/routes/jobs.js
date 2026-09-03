@@ -5,8 +5,11 @@ const {
   hasNewEvidenceSinceDiagnosis,
   needsDtcProvenanceReassessment,
   reassessmentReason,
-  reassessDiagnosis
+  reassessDiagnosis,
+  jobDtcEvidence,
+  trustedJobDtcs
 } = require('../services/diagnostic.reassessment');
+const { publicDtcEvidence, summarizeDtcProvenance } = require('../core/evidence/dtc.provenance');
 const { buildVerifiedCase } = require('../core/evidence/verified.case');
 const {
   buildRepairCompletedEvent,
@@ -49,10 +52,28 @@ router.post('/:id/unverified-diagnosis', async (req, res) => {
         if (reassessed) {
           const previousDiagnosis = current.diagnosis;
           const revision = Math.max(1, Number(previousDiagnosis.revision) || 1) + 1;
+          const migrationRecords = provenanceRefreshRequired ? jobDtcEvidence(current) : null;
+          const migratedEvidencePacket = provenanceRefreshRequired
+            ? {
+                ...(previousDiagnosis.evidencePacket || {}),
+                schemaVersion: 2,
+                dtcs: trustedJobDtcs(current),
+                dtcProvenance: summarizeDtcProvenance(migrationRecords)
+              }
+            : previousDiagnosis.evidencePacket;
+
           current = await patchJob(req.params.id, {
+            ...(provenanceRefreshRequired ? {
+              intake: {
+                ...(current.intake || {}),
+                dtcEvidence: publicDtcEvidence(migrationRecords),
+                obdCodes: trustedJobDtcs(current)
+              }
+            } : {}),
             diagnosisHistory: [...(current.diagnosisHistory || []), previousDiagnosis],
             diagnosis: {
               ...previousDiagnosis,
+              evidencePacket: migratedEvidencePacket,
               result: reassessed,
               revision,
               reassessmentReason: reason || reassessed.reassessment?.reason || 'REASSESSMENT',
@@ -70,7 +91,7 @@ router.post('/:id/unverified-diagnosis', async (req, res) => {
     }
 
     // Never surface a stale pre-provenance candidate if the mandatory refresh
-    // failed to replace it.
+    // failed to replace and persist its DTC boundary.
     if (needsDtcProvenanceReassessment(current)) {
       throw new Error('This diagnosis predates DTC provenance enforcement. Re-run Diagnose before relying on an unverified diagnosis.');
     }
