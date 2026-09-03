@@ -1,0 +1,217 @@
+name: Work Order Authorization Runtime Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/services/work.order.js'
+      - 'src/routes/work.order.js'
+      - 'src/routes/jobs.protected.js'
+      - 'tests/work.order.authorization.test.js'
+      - 'docs/work-order-authorization.md'
+      - 'package.json'
+      - 'api/.render-preview-trigger'
+      - '.github/workflows/work-order-runtime.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-work-order:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Run deterministic Work Order regressions
+        run: npm install --ignore-scripts && npm run test:work-order
+
+      - name: Wait for exact Render preview head
+        shell: bash
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 60); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/wo-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/wo-health.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) process.exit(1);
+          NODE
+              then MATCHED=1; break; fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/60, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/wo-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Prove authorization snapshot and execution truth on live preview
+        shell: bash
+        run: |
+          cat > /tmp/wo-job.json <<'JSON'
+          {
+            "customer": {"name": "WORK ORDER RUNTIME CANARY"},
+            "vehicle": {"year": 2018, "make": "Honda", "model": "Accord", "mileage": 90000},
+            "requestedService": "Customer-requested service runtime canary"
+          }
+          JSON
+
+          JOB_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-job-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-job.json \
+            "$PREVIEW_URL/api/jobs/estimate-center/job" || true)"
+          if [ "$JOB_HTTP" != "201" ]; then cat /tmp/wo-job-response.json || true; exit 1; fi
+
+          JOB_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/wo-job-response.json', 'utf8'));
+          if (!body.jobId) process.exit(1);
+          process.stdout.write(body.jobId);
+          NODE
+          )"
+          ENCODED_JOB="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+
+          cat > /tmp/wo-estimate.json <<'JSON'
+          {
+            "basis": "CUSTOMER_REQUEST",
+            "laborRate": 100,
+            "taxRate": 0,
+            "workItems": [
+              {"description": "Front brake service", "partsCost": 300, "laborHours": 2, "priority": "WARNING"},
+              {"description": "Wheel alignment", "partsCost": 0, "laborHours": 1, "priority": "ROUTINE"},
+              {"description": "Cabin air filter", "partsCost": 40, "laborHours": 0.2, "priority": "ADVISORY"}
+            ]
+          }
+          JSON
+
+          EST_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-estimate-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-estimate.json \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB/quick" || true)"
+          if [ "$EST_HTTP" != "201" ]; then cat /tmp/wo-estimate-response.json || true; exit 1; fi
+
+          cat > /tmp/wo-decisions.json <<'JSON'
+          {
+            "decisions": [
+              {"itemId": "LI-001", "decision": "AUTHORIZED", "note": "Customer approved brakes"},
+              {"itemId": "LI-002", "decision": "AUTHORIZED", "note": "Customer approved alignment"},
+              {"itemId": "LI-003", "decision": "DEFERRED", "note": "Do later"}
+            ]
+          }
+          JSON
+
+          DEC_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-decisions-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-decisions.json \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB/quick/QE-001/1/decisions" || true)"
+          if [ "$DEC_HTTP" != "200" ]; then cat /tmp/wo-decisions-response.json || true; exit 1; fi
+
+          cat > /tmp/wo-create.json <<'JSON'
+          {
+            "estimateId": "QE-001",
+            "revision": 1,
+            "itemIds": ["LI-001", "LI-002"],
+            "requestId": "work-order-runtime-canary-1",
+            "recordedBy": "runtime service desk"
+          }
+          JSON
+
+          CREATE_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-create-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-create.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders" || true)"
+          if [ "$CREATE_HTTP" != "201" ]; then cat /tmp/wo-create-response.json || true; exit 1; fi
+
+          WORK_ORDER_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/wo-create-response.json', 'utf8'));
+          const order = body.workOrder || {};
+          const failures = [];
+          if (body.created !== true) failures.push('initial work order not created');
+          if (order.truthPolicy !== 'CUSTOMER_AUTHORIZATION_IS_NOT_DIAGNOSTIC_PROOF') failures.push(`truth policy ${order.truthPolicy}`);
+          if (order.diagnosticTruthSnapshot?.physicallyVerified !== false) failures.push('preliminary work order incorrectly marked diagnostic truth verified');
+          if ((order.workItems || []).length !== 2) failures.push(`work item count ${order.workItems?.length}`);
+          if ((order.workItems || []).some(item => item.sourceItemId === 'LI-003')) failures.push('deferred item leaked into work order');
+          if (order.totals?.authorizedPlanned !== 600) failures.push(`planned total ${order.totals?.authorizedPlanned}`);
+          if (!order.scopeFingerprint) failures.push('scope fingerprint missing');
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          process.stdout.write(order.workOrderId);
+          NODE
+          )"
+          ENCODED_WO="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$WORK_ORDER_ID")"
+
+          REPEAT_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-repeat.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-create.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders" || true)"
+          if [ "$REPEAT_HTTP" != "200" ]; then cat /tmp/wo-repeat.json || true; exit 1; fi
+          WORK_ORDER_ID="$WORK_ORDER_ID" node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/wo-repeat.json', 'utf8'));
+          if (body.created !== false || body.workOrder?.workOrderId !== process.env.WORK_ORDER_ID) {
+            console.error('idempotent repeat created or returned a different Work Order');
+            process.exit(1);
+          }
+          NODE
+
+          cat > /tmp/wo-bad-scope.json <<'JSON'
+          {"estimateId":"QE-001","revision":1,"itemIds":["LI-003"],"requestId":"bad-deferred-scope"}
+          JSON
+          BAD_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-bad-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-bad-scope.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders" || true)"
+          if [ "$BAD_HTTP" != "409" ]; then cat /tmp/wo-bad-response.json || true; echo "Deferred scope was not blocked"; exit 1; fi
+
+          cat > /tmp/wo-progress.json <<'JSON'
+          {"state":"IN_PROGRESS","recordedBy":"runtime tech label"}
+          JSON
+          PROGRESS_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-progress-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-progress.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders/$ENCODED_WO/items/WOI-001/state" || true)"
+          if [ "$PROGRESS_HTTP" != "200" ]; then cat /tmp/wo-progress-response.json || true; exit 1; fi
+
+          cat > /tmp/wo-complete.json <<'JSON'
+          {
+            "state":"COMPLETED",
+            "completionNote":"Front brake service completed and final mechanical check performed.",
+            "recordedBy":"runtime tech label"
+          }
+          JSON
+          COMPLETE_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-complete-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/wo-complete.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders/$ENCODED_WO/items/WOI-001/state" || true)"
+          if [ "$COMPLETE_HTTP" != "200" ]; then cat /tmp/wo-complete-response.json || true; exit 1; fi
+
+          JOB_READ_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-job-read.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB" || true)"
+          LIST_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/wo-list.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders" || true)"
+          if [ "$JOB_READ_HTTP" != "200" ] || [ "$LIST_HTTP" != "200" ]; then
+            cat /tmp/wo-job-read.json 2>/dev/null || true
+            cat /tmp/wo-list.json 2>/dev/null || true
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const complete = JSON.parse(fs.readFileSync('/tmp/wo-complete-response.json', 'utf8')).workOrder || {};
+          const jobBody = JSON.parse(fs.readFileSync('/tmp/wo-job-read.json', 'utf8'));
+          const list = JSON.parse(fs.readFileSync('/tmp/wo-list.json', 'utf8'));
+          const job = jobBody.job || {};
+          const failures = [];
+          if (complete.status !== 'PARTIALLY_COMPLETED') failures.push(`order status ${complete.status}`);
+          if (complete.totals?.completed !== 500) failures.push(`completed total ${complete.totals?.completed}`);
+          if (complete.totals?.remaining !== 100) failures.push(`remaining total ${complete.totals?.remaining}`);
+          if (complete.workItems?.[0]?.executionHistory?.at(-1)?.actor?.identityVerified !== false) failures.push('actor identity boundary missing');
+          if (job.verifiedCase) failures.push('Work Order created VERIFIED_CASE');
+          if (job.invoice) failures.push('Work Order created invoice before #132');
+          if ((list.workOrders || []).length !== 1) failures.push(`persisted Work Order count ${list.workOrders?.length}`);
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          console.log('Work Order runtime passed: authorized scope snapshot persisted, deferred work stayed out, repeat was idempotent, completion stayed separate from invoice/diagnostic truth.');
+          NODE
