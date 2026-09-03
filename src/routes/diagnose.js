@@ -55,6 +55,16 @@ function withDynamicRisk(profile, dynamicRisk) {
   return { ...profile, dynamicCalculatedRisk: dynamicRisk };
 }
 
+function filterCodeExplanations(value, trustedCodes = []) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const output = {};
+  for (const code of trustedCodes) {
+    const explanation = String(source[code] ?? '').replace(/\s+/g, ' ').trim();
+    if (explanation) output[code] = explanation.slice(0, 800);
+  }
+  return output;
+}
+
 router.post('/', async (req, res) => {
   const executionTrace = { traceId: 'TR-' + Date.now().toString(16).toUpperCase(), stage: 'INGESTION', logs: [], log(stage, message) { this.stage = stage; this.logs.push(`[${stage}] ${message}`); } };
   executionTrace.log('API_ROUTER', 'Payload received.');
@@ -176,6 +186,9 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     parsed = guardResult.output;
 
     const finalResult = { ...safeResult(), ...parsed };
+    // Provider output is never allowed to resurrect a DTC that provenance
+    // excluded. Keep explanations strictly keyed to trusted scan-tool codes.
+    finalResult.codeExplanations = filterCodeExplanations(parsed.codeExplanations, targetCodes);
     finalResult.knownIssues = relevantTsbs.slice(0, 3).map(x => `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
     finalResult.evidence = { oem: oemReferences, tsbs: relevantTsbs.slice(0, 5), sources: vehicleEvidence.sources || [], available: vehicleEvidence.available, warmup: warmupStatus, packetSchemaVersion: evidencePacket.schemaVersion };
     finalResult.probability = calibrateProbabilityArray(finalResult.probability || [], confidence);
@@ -200,3 +213,4 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
 });
 
 module.exports = router;
+module.exports.filterCodeExplanations = filterCodeExplanations;
