@@ -1,0 +1,142 @@
+name: DTC Provenance Runtime Gate
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/core/evidence/dtc.provenance.js'
+      - 'src/core/evidence/diagnostic.evidence.packet.js'
+      - 'src/routes/diagnose.js'
+      - 'src/middleware/job.lifecycle.middleware.js'
+      - 'src/services/diagnostic.reassessment.js'
+      - 'src/services/ai/diagnose.schema.js'
+      - 'public/lifecycle.html'
+      - '.github/workflows/dtc-provenance-runtime.yaml'
+      - 'api/.render-preview-trigger'
+
+jobs:
+  exact-head-dtc-provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.number }}.onrender.com
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Wait for exact Render preview head
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 48); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/dtc-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/dtc-health.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) {
+            console.error(`preview commit ${health?.preview?.commit || 'missing'} != ${process.env.HEAD_SHA}`);
+            process.exit(1);
+          }
+          NODE
+              then
+                MATCHED=1
+                break
+              fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/48, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/dtc-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Prove mixed DTC provenance on real Diagnose route
+        run: |
+          cat > /tmp/dtc-request.json <<'JSON'
+          {
+            "vehicle": {"year": 2016, "make": "Chevrolet", "model": "Malibu", "engine": "2.5L"},
+            "customerStates": ["Intermittent rough idle; diagnostic provenance runtime canary"],
+            "mechanicNotices": ["No repair authorization; test-only runtime request"],
+            "dtcEvidence": [
+              {"code": "P0300", "source": "SCAN_TOOL", "verified": true},
+              {"code": "P0171", "source": "PLACEHOLDER", "verified": false},
+              {"code": "U0100", "source": "MANUAL_ENTRY", "verified": false}
+            ]
+          }
+          JSON
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 90 -sS -o /tmp/dtc-diagnose.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/dtc-request.json \
+            "$PREVIEW_URL/api/diagnose" || true)"
+          cat /tmp/dtc-diagnose.json || true
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Diagnose DTC provenance canary failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          JOB_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/dtc-diagnose.json', 'utf8'));
+          const failures = [];
+          if (body.success !== true) failures.push('success !== true');
+          if (!body.jobId) failures.push('jobId missing');
+          if (body.result?.dtcProvenance?.policy !== 'VERIFIED_SCAN_TOOL_ONLY') failures.push(`policy ${body.result?.dtcProvenance?.policy}`);
+          if (body.result?.dtcProvenance?.verifiedCount !== 1) failures.push(`verifiedCount ${body.result?.dtcProvenance?.verifiedCount}`);
+          if (body.result?.dtcProvenance?.excludedCount !== 2) failures.push(`excludedCount ${body.result?.dtcProvenance?.excludedCount}`);
+          const explanationKeys = Object.keys(body.result?.codeExplanations || {});
+          if (explanationKeys.some(code => code !== 'P0300')) failures.push(`untrusted code explanation leaked: ${explanationKeys.join(',')}`);
+          const trace = Array.isArray(body.traceLog?.logs) ? body.traceLog.logs.join(' ') : '';
+          if (!/2 entered DTC record\(s\) excluded/i.test(trace)) failures.push('exclusion trace missing');
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          process.stdout.write(body.jobId);
+          NODE
+          )"
+
+          ENCODED_JOB_ID="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/dtc-job.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID" || true)"
+          cat /tmp/dtc-job.json || true
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Persisted DTC provenance job fetch failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/dtc-job.json', 'utf8'));
+          const job = body.job || {};
+          const failures = [];
+          if (JSON.stringify(job.intake?.obdCodes || []) !== JSON.stringify(['P0300'])) {
+            failures.push(`trusted intake obdCodes ${JSON.stringify(job.intake?.obdCodes)}`);
+          }
+          const audit = Array.isArray(job.intake?.dtcEvidence) ? job.intake.dtcEvidence : [];
+          const auditByCode = Object.fromEntries(audit.map(item => [item.code, item]));
+          if (auditByCode.P0300?.source !== 'SCAN_TOOL' || auditByCode.P0300?.verified !== true) failures.push('P0300 trusted audit provenance missing');
+          if (auditByCode.P0171?.source !== 'PLACEHOLDER' || auditByCode.P0171?.verified !== false) failures.push('P0171 placeholder audit provenance missing');
+          if (auditByCode.U0100?.source !== 'MANUAL_ENTRY' || auditByCode.U0100?.verified !== false) failures.push('U0100 manual audit provenance missing');
+
+          const packet = job.diagnosis?.evidencePacket || {};
+          if (packet.schemaVersion !== 2) failures.push(`packet schemaVersion ${packet.schemaVersion}`);
+          if (packet.dtcProvenance?.policy !== 'VERIFIED_SCAN_TOOL_ONLY') failures.push(`packet policy ${packet.dtcProvenance?.policy}`);
+          if (JSON.stringify(packet.dtcs || []) !== JSON.stringify(['P0300'])) failures.push(`packet dtcs ${JSON.stringify(packet.dtcs)}`);
+          const serializedPacket = JSON.stringify(packet);
+          if (/P0171|U0100/.test(serializedPacket)) failures.push('excluded DTC value leaked into model-facing evidence packet');
+
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          console.log('DTC provenance runtime passed: P0300 trusted; P0171/U0100 audit-only; model packet trusted-only.');
+          NODE
