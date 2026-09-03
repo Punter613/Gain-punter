@@ -1,3 +1,3 @@
 Render preview trigger
-reason: atomic evidence save -> stale diagnosis -> reassess -> fresh revision with fail-closed retry safety
-updated: 2026-09-03T18:35:00Z
+reason: atomic evidence save -> stale diagnosis -> reassess -> fresh revision; preview runtime isolates lifecycle proof from provider/edge transients
+updated: 2026-09-03T18:50:00Z
