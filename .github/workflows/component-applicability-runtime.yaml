@@ -1,0 +1,157 @@
+name: Component Applicability Runtime Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/core/evidence/component.applicability.js'
+      - 'src/middleware/job.lifecycle.middleware.js'
+      - 'src/services/diagnostic.reassessment.js'
+      - 'tests/component.applicability.test.js'
+      - 'package.json'
+      - 'api/.render-preview-trigger'
+      - '.github/workflows/component-applicability-runtime.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-component-applicability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Run deterministic applicability regressions
+        run: npm install --ignore-scripts && npm run test:component-applicability
+
+      - name: Wait for exact Render preview head
+        shell: bash
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 48); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/applicability-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/applicability-health.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) {
+            console.error(`preview commit ${health?.preview?.commit || 'missing'} != ${process.env.HEAD_SHA}`);
+            process.exit(1);
+          }
+          NODE
+              then
+                MATCHED=1
+                break
+              fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/48, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/applicability-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Prove manual configuration cannot become unqualified component diagnosis
+        shell: bash
+        run: |
+          cat > /tmp/applicability-request.json <<'JSON'
+          {
+            "vehicle": {"year": 2008, "make": "Kia", "model": "Sorento", "engine": "2.7L V6", "mileage": 150000},
+            "mileage": 150000,
+            "customerStates": ["Continuous klunk thump"],
+            "mechanicNotices": [],
+            "dtcEvidence": [
+              {"code":"P0300","source":"MANUAL_ENTRY","verified":false},
+              {"code":"P0171","source":"MANUAL_ENTRY","verified":false}
+            ]
+          }
+          JSON
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 120 -sS -o /tmp/applicability-diagnose.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/applicability-request.json \
+            "$PREVIEW_URL/api/diagnose" || true)"
+          cat /tmp/applicability-diagnose.json || true
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Component applicability Diagnose canary failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          JOB_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/applicability-diagnose.json', 'utf8'));
+          const result = body.result || {};
+          const config = result.vehicleConfiguration || {};
+          const failures = [];
+          if (body.success !== true) failures.push('success !== true');
+          if (!body.jobId) failures.push('jobId missing');
+          if (config.policy !== 'PROVE_COMPONENT_EXISTS_OR_QUALIFY_IF_EQUIPPED') failures.push(`policy ${config.policy}`);
+          if (config.vinStatus !== 'MANUAL_UNVERIFIED') failures.push(`vinStatus ${config.vinStatus}`);
+          if (config.engineStatus !== 'MANUAL_UNVERIFIED') failures.push(`engineStatus ${config.engineStatus}`);
+          if (config.drivetrainStatus !== 'UNKNOWN') failures.push(`drivetrainStatus ${config.drivetrainStatus}`);
+          if (!Array.isArray(config.warnings) || !config.warnings.some(x => /manual intake/i.test(String(x)))) failures.push('manual intake warning missing');
+
+          const sensitive = /center support bearing|carrier bearing|transfer case|power transfer unit|\bPTU\b|center differential|front differential|rear differential|drive\s*shaft|driveshaft|propeller shaft|universal joint|u[-\s]?joint|turbocharger|supercharger|high[-\s]?voltage battery|traction battery|hybrid battery|diesel particulate filter|\bDPF\b/i;
+          const qualified = /if equipped|specific component fitment not yet verified|configuration not verified/i;
+          const primary = String(result.primaryCause || '');
+          if (sensitive.test(primary) && !qualified.test(primary)) failures.push(`unqualified primary: ${primary}`);
+
+          for (const cause of result.secondaryCauses || []) {
+            if (sensitive.test(String(cause)) && !qualified.test(String(cause))) failures.push(`unqualified secondary: ${cause}`);
+          }
+          for (const item of result.probability || []) {
+            const cause = String(item?.cause || '');
+            if (sensitive.test(cause) && !qualified.test(cause)) failures.push(`unqualified probability cause: ${cause}`);
+          }
+          for (const test of [...(result.recommendedTests || []), ...(result.additionalChecks || [])]) {
+            const text = String(test || '');
+            if (sensitive.test(text) && !/^If equipped on this exact vehicle configuration:/i.test(text)) failures.push(`unqualified test: ${text}`);
+          }
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          process.stdout.write(body.jobId);
+          NODE
+          )"
+
+          ENCODED_JOB_ID="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+          FOUND=0
+          for attempt in $(seq 1 6); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/applicability-job.json -w '%{http_code}' \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then FOUND=1; break; fi
+            echo "Persisted job not readable yet (attempt $attempt/6, HTTP $HTTP_CODE)."
+            sleep 2
+          done
+          if [ "$FOUND" != "1" ]; then
+            cat /tmp/applicability-job.json 2>/dev/null || true
+            echo "Persisted applicability job fetch failed."
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/applicability-job.json', 'utf8'));
+          const job = body.job || {};
+          const config = job.diagnosis?.evidencePacket?.vehicleConfiguration || {};
+          const failures = [];
+          if (config.policy !== 'PROVE_COMPONENT_EXISTS_OR_QUALIFY_IF_EQUIPPED') failures.push('persisted configuration policy missing');
+          if (config.drivetrainStatus !== 'UNKNOWN') failures.push(`persisted drivetrainStatus ${config.drivetrainStatus}`);
+          if (JSON.stringify(job.intake?.obdCodes || []) !== '[]') failures.push(`manual DTCs leaked into trusted intake: ${JSON.stringify(job.intake?.obdCodes)}`);
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          console.log('Component applicability runtime passed: manual 2008 Sorento intake stayed configuration-bounded and unverified DTCs stayed audit-only.');
+          NODE
