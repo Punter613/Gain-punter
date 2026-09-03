@@ -29,21 +29,30 @@ function jobFixture() {
     vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
     diagnosis: {
       result: { primaryCause: 'Engine mount failure', probability: [{ cause: 'Engine mount failure', likelihood: 80 }] },
-      evidencePacket
+      evidencePacket,
+      revision: 2
     },
-    tests: [{ id: 'T1', name: 'Power-brake mount test', result: 'excess movement', recordedAt: '2026-08-15T00:00:00.000Z' }],
+    tests: [{
+      id: 'T1',
+      name: 'Power-brake mount test',
+      result: 'excess movement',
+      evidenceRole: 'CONFIRMS',
+      confirmedFault: 'Engine mount failure',
+      recordedAt: '2026-08-15T00:00:00.000Z'
+    }],
     verification: {
       confirmed: true,
       confirmedCause: 'Engine mount failure',
       conclusion: 'Excess engine movement observed under load',
       evidenceTestIds: ['T1'],
       notes: 'Fault confirmed by technician',
+      diagnosisRevision: 2,
       verifiedAt: '2026-08-15T00:01:00.000Z'
     }
   };
 }
 
-test('VERIFIED_CASE freezes the persisted diagnosis packet, tests, explicit fault, and selected supporting evidence', () => {
+test('VERIFIED_CASE freezes the persisted diagnosis packet, tests, explicit fault, and confirmation-grade evidence', () => {
   const source = jobFixture();
   const verifiedCase = buildVerifiedCase(source);
 
@@ -51,6 +60,10 @@ test('VERIFIED_CASE freezes the persisted diagnosis packet, tests, explicit faul
   assert.equal(verifiedCase.stage, 'VERIFIED');
   assert.equal(verifiedCase.verification.confirmedCause, 'Engine mount failure');
   assert.deepEqual(verifiedCase.verification.evidenceTestIds, ['T1']);
+  assert.equal(verifiedCase.verification.diagnosisRevision, 2);
+  assert.equal(verifiedCase.diagnosis.revision, 2);
+  assert.equal(verifiedCase.tests[0].evidenceRole, 'CONFIRMS');
+  assert.equal(verifiedCase.tests[0].confirmedFault, 'Engine mount failure');
   assert.equal(verifiedCase.tests[0].result, 'excess movement');
   assert.equal(verifiedCase.evidencePacket.dtcs[0], 'P0300');
   assert.equal(verifiedCase.evidencePacket.measurements.values.brakes.padThickness, 0);
@@ -80,7 +93,7 @@ test('tampering with a persisted VERIFIED_CASE fails integrity validation', () =
   assert.throws(() => verifiedEstimateInput(verifiedCase), /integrity check failed/i);
 });
 
-test('verified case cannot be created from unverified state, implicit cause, or unbound evidence', () => {
+test('verified case cannot be created from unverified state, implicit cause, unbound evidence, or non-confirming evidence', () => {
   const unverified = jobFixture();
   unverified.status = 'TESTING';
   assert.throws(() => buildVerifiedCase(unverified), /VERIFIED status/i);
@@ -91,9 +104,18 @@ test('verified case cannot be created from unverified state, implicit cause, or 
 
   const missingEvidence = jobFixture();
   missingEvidence.verification.evidenceTestIds = [];
-  assert.throws(() => buildVerifiedCase(missingEvidence), /selected supporting test evidence/i);
+  assert.throws(() => buildVerifiedCase(missingEvidence), /confirmation-grade test evidence/i);
 
   const foreignEvidence = jobFixture();
   foreignEvidence.verification.evidenceTestIds = ['NOT-A-JOB-TEST'];
   assert.throws(() => buildVerifiedCase(foreignEvidence), /persisted job tests/i);
+
+  const neutralEvidence = jobFixture();
+  neutralEvidence.tests[0].evidenceRole = 'NEUTRAL';
+  neutralEvidence.tests[0].confirmedFault = '';
+  assert.throws(() => buildVerifiedCase(neutralEvidence), /classified CONFIRMS/i);
+
+  const mismatchedFault = jobFixture();
+  mismatchedFault.tests[0].confirmedFault = 'Transmission mount failure';
+  assert.throws(() => buildVerifiedCase(mismatchedFault), /same confirmed fault/i);
 });

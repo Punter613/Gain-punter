@@ -21,6 +21,15 @@
 - Render currently uses `api/` as the backend service Root Directory. Any PR that changes backend/runtime files outside `api/` must also contain an `api/`-visible change so Render creates the PR preview and production autodeploy. Run `npm run render:preview -- "reason"` and commit `api/.render-preview-trigger` when needed.
 - A missing Render preview is a failed runtime gate, not a successful or skipped verification. The exact PR head SHA must be live before merge.
 
+## Verification Evidence Boundary
+- Meaningful evidence is not automatically confirmation evidence.
+- Persisted test evidence has one explicit semantic role: `NEUTRAL`, `SUPPORTS`, `REFUTES`, or `CONFIRMS`.
+- `NEUTRAL`, `SUPPORTS`, and `REFUTES` may change diagnostic ranking but must never unlock VERIFY or Estimate.
+- A positive VERIFY requires at least one persisted `CONFIRMS` test, a non-empty `confirmedFault` on that test, an explicitly typed `confirmedCause`, and a mechanic conclusion explaining the physical basis.
+- Every selected `CONFIRMS` test must bind to the same normalized fault as `confirmedCause`; do not infer or translate a different component into a match.
+- AI hypotheses, model confidence, candidate weights, TSBs, known patterns, customer wording, and unverified diagnoses never become repair authorization by themselves.
+- New evidence invalidates the prior unverified-diagnosis presentation until reassessment; preserve diagnosis revision lineage in verified truth.
+
 ## TAG Safety Invariants
 - Missing does not mean safe. Missing does not mean unsafe. Missing means unknown.
 - The Brain owns interpretation and uncertainty. TAG owns deterministic policy evaluation.

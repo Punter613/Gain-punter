@@ -55,40 +55,69 @@ test('Run Diagnosis stays primary while read-only knowledge search is secondary'
   assert.match(html, /id="quickAsk" class="btn knowledge compact"[^>]*>📚 Search Knowledge/);
 });
 
-test('unverified diagnosis fallback is downstream of confirmation tests and remains explicitly locked', () => {
+test('unverified diagnosis fallback is downstream of saved mechanic evidence and remains explicitly locked', () => {
   const testCardIndex = html.indexOf('id="testCard"');
+  const saveIndex = html.indexOf('id="saveTests"');
   const fallbackIndex = html.indexOf('id="unverifiedDiagnosis"');
   const verifyCardIndex = html.indexOf('id="verifyCard"');
-  assert.ok(testCardIndex >= 0 && fallbackIndex > testCardIndex, 'fallback must appear inside/after Confirmation Tests');
-  assert.ok(verifyCardIndex > fallbackIndex, 'fallback must appear before the explicit VERIFY card');
+  assert.ok(testCardIndex >= 0 && saveIndex > testCardIndex, 'test save must live in Confirmation Tests');
+  assert.ok(fallbackIndex > saveIndex, 'unverified reassessment must come after evidence-save controls');
+  assert.ok(verifyCardIndex > fallbackIndex, 'fallback must appear before explicit VERIFY card');
   assert.match(html, /⚠️ Unable to Complete Verification Testing\?/);
   assert.match(html, /Get an Unverified Diagnosis/);
+  assert.match(html, /hasUnsavedEvidence\(\)/);
+  assert.match(html, /Save the new mechanic evidence before requesting reassessment/);
   assert.match(html, /This diagnosis has not been physically verified\. It does not authorize a repair and does not unlock Estimate\./);
   assert.match(html, /\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/unverified-diagnosis/);
   assert.match(html, /d\.diagnosisState!==['"]UNVERIFIED_DIAGNOSIS['"]/);
   assert.match(html, /\$\('estimateCard'\)\.hidden=true/);
 });
 
+test('frontend exposes evidence meaning separately from measurement status', () => {
+  assert.match(html, /class="testEvidenceRole"/);
+  assert.match(html, /value="NEUTRAL">Observed \/ neutral — rerank only/);
+  assert.match(html, /value="SUPPORTS">Supports hypothesis — not verification/);
+  assert.match(html, /value="REFUTES">Refutes hypothesis/);
+  assert.match(html, /value="CONFIRMS">CONFIRMS a specific fault — VERIFY eligible/);
+  assert.match(html, /class="testConfirmedFault"/);
+  assert.match(html, /Required only when Evidence meaning = CONFIRMS/);
+});
+
+test('additional mechanic finding is persisted as neutral reranking evidence', () => {
+  assert.match(html, /Additional findings are stored as NEUTRAL evidence by default/);
+  assert.match(html, /name:'Additional mechanic finding',result:extra,passed:null,evidenceRole:'NEUTRAL',confirmedFault:''/);
+});
+
 test('frontend exposes explicit verify action before estimate unlock', () => {
-  assert.match(html, /id="verify"[^>]*>✅ VERIFY FAULT — Unlock Estimate/);
+  assert.match(html, /id="verify"[^>]*disabled>✅ VERIFY FAULT — Unlock Estimate/);
   assert.match(html, /\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/tests/);
   assert.match(html, /\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/verify/);
   assert.match(html, /d\.status!==['"]VERIFIED['"]\|\|!d\.verifiedCase/);
 });
 
 test('frontend does not prefill the diagnostic hypothesis as the confirmed fault', () => {
-  assert.match(html, /\$\('candidate'\)\.textContent=cause;\$\('cause'\)\.value=''/);
+  assert.match(html, /\$\('candidate'\)\.textContent=`Revision 1 · \$\{cause\}`/);
+  assert.match(html, /\$\('cause'\)\.value=''/);
   assert.doesNotMatch(html, /\$\('cause'\)\.value=cause/);
-  assert.match(html, /Diagnostic candidate — hypothesis only/);
+  assert.match(html, /Current diagnostic candidate — hypothesis only/);
 });
 
-test('frontend requires selected persisted tests and mechanic conclusion for positive VERIFY', () => {
-  assert.match(html, /id="verifyEvidence"/);
-  assert.match(html, /class="verifyEvidenceCheck"/);
-  assert.match(html, /evidenceTestIds=\[\.\.\.document\.querySelectorAll\('\.verifyEvidenceCheck:checked'\)\]/);
-  assert.match(html, /Select at least one recorded test that supports this confirmed fault/);
-  assert.match(html, /Explain why the selected test evidence confirms this fault/);
-  assert.match(html, /placeholder.*do not count as evidence/i);
+test('new evidence invalidates stale candidate UI and reassessment refreshes diagnosis revision', () => {
+  assert.match(html, /New evidence recorded — diagnosis reassessment pending/);
+  assert.match(html, /New evidence was saved after the last diagnostic revision/);
+  assert.match(html, /currentDiagnosisRevision=Math\.max\(1,Number\(d\.diagnosisRevision\)/);
+  assert.match(html, /\$\('candidate'\)\.textContent=`Revision \$\{currentDiagnosisRevision\} · \$\{u\.mostLikelyCause/);
+});
+
+test('frontend only offers CONFIRMS evidence for positive VERIFY', () => {
+  assert.match(html, /function verificationEligibleTests\(\)/);
+  assert.match(html, /toUpperCase\(\)===['"]CONFIRMS['"]/);
+  assert.match(html, /String\(t\?\.confirmedFault\|\|''\)\.trim\(\)/);
+  assert.match(html, /No confirmation-grade evidence yet/);
+  assert.match(html, /\$\('verify'\)\.disabled=!eligible\.length/);
+  assert.match(html, /\$\('verifyCard'\)\.hidden=!eligible\.length/);
+  assert.match(html, /Select at least one CONFIRMS test tied to this exact fault/);
+  assert.match(html, /Neutral\/supporting\/refuting observations never unlock Estimate/);
 });
 
 test('Quick Ask presents focused service-manual pointers rather than scraped text dumps', () => {

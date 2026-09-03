@@ -38,6 +38,8 @@ function sorentoJob() {
         id: 'road-test-1',
         name: 'Additional mechanic finding',
         result: 'Road-tested as passenger. Mechanical driveline impact is felt during throttle release and torque reversal.',
+        evidenceRole: 'NEUTRAL',
+        confirmedFault: '',
         recordedAt: '2026-09-02T20:05:00.000Z'
       }
     ]
@@ -51,12 +53,30 @@ test('new persisted mechanic evidence makes the diagnosis eligible for reassessm
   assert.equal(hasNewEvidenceSinceDiagnosis(job), false);
 });
 
-test('reassessment packet carries original intake, DTCs, prior ranking and recorded evidence', () => {
+test('reassessment packet carries original intake, DTCs, prior ranking, evidence role, and recorded evidence', () => {
   const packet = buildReassessmentPayload(sorentoJob());
   assert.deepEqual(packet.dtcs, ['P0300', 'P0171']);
   assert.equal(packet.previousDiagnosis.primaryCause, 'Improperly installed RF wheel speed sensor');
   assert.equal(packet.recordedEvidence.length, 1);
   assert.match(packet.recordedEvidence[0].result, /torque reversal/i);
+  assert.equal(packet.recordedEvidence[0].evidenceRole, 'NEUTRAL');
+  assert.equal(packet.recordedEvidence[0].confirmedFault, '');
+});
+
+test('reassessment packet preserves explicit confirmation-grade evidence semantics', () => {
+  const job = sorentoJob();
+  job.tests.push({
+    id: 'u-joint-check',
+    name: 'U-joint physical play inspection',
+    result: 'Rear joint has visible radial play and clunks by hand under load reversal.',
+    evidenceRole: 'CONFIRMS',
+    confirmedFault: 'Rear propeller shaft U-joint failure',
+    recordedAt: '2026-09-02T20:07:00.000Z'
+  });
+  const packet = buildReassessmentPayload(job);
+  const confirming = packet.recordedEvidence.find(item => item.id === 'u-joint-check');
+  assert.equal(confirming.evidenceRole, 'CONFIRMS');
+  assert.equal(confirming.confirmedFault, 'Rear propeller shaft U-joint failure');
 });
 
 test('sanitizer removes anchoring artifacts, impossible stationary test and DTC contradiction', () => {

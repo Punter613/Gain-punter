@@ -1,7 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const jobsRouter = require('./jobs');
-const { getJob, isMeaningfulTestResult } = require('../services/job.lifecycle');
+const {
+  getJob,
+  isMeaningfulTestResult,
+  isVerificationEligibleTest,
+  testConfirmsFault
+} = require('../services/job.lifecycle');
 
 function clean(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -36,7 +41,9 @@ router.post('/:id/tests', (req, res, next) => {
 });
 
 // A positive VERIFY action must name the bounded fault explicitly, explain why,
-// and bind that conclusion to persisted test evidence selected by the mechanic.
+// and bind that conclusion to persisted confirmation-grade test evidence selected
+// by the mechanic. Neutral/supporting/refuting observations can change the
+// diagnostic ranking but can never unlock Estimate by themselves.
 router.post('/:id/verify', async (req, res, next) => {
   try {
     const body = req.body || {};
@@ -71,7 +78,7 @@ router.post('/:id/verify', async (req, res, next) => {
     if (!evidenceTestIds.length) {
       return res.status(409).json({
         success: false,
-        error: 'Verification requires at least one explicitly selected supporting test.',
+        error: 'Verification requires at least one explicitly selected confirmation-grade test.',
         jobId: req.params.id,
         status: 'TESTING'
       });
@@ -102,6 +109,24 @@ router.post('/:id/verify', async (req, res, next) => {
       });
     }
 
+    if (selectedTests.some(test => !isVerificationEligibleTest(test))) {
+      return res.status(409).json({
+        success: false,
+        error: 'Selected verification evidence must be explicitly classified CONFIRMS and bind the physical result to a named fault.',
+        jobId: req.params.id,
+        status: 'TESTING'
+      });
+    }
+
+    if (selectedTests.some(test => !testConfirmsFault(test, confirmedCause))) {
+      return res.status(409).json({
+        success: false,
+        error: 'Confirmed Cause / Fault must exactly match the fault named by every selected CONFIRMS test.',
+        jobId: req.params.id,
+        status: 'TESTING'
+      });
+    }
+
     req.body.evidenceTestIds = evidenceTestIds;
     return next();
   } catch (err) {
@@ -113,3 +138,4 @@ router.use(jobsRouter);
 
 module.exports = router;
 module.exports.isMeaningfulTestResult = isMeaningfulTestResult;
+module.exports.isVerificationEligibleTest = isVerificationEligibleTest;

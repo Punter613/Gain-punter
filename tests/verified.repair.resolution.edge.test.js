@@ -26,14 +26,21 @@ function makeVerifiedCase(confirmedCause = 'Ignition coil failure') {
     jobId: 'repair-resolution-edge-job',
     status: 'VERIFIED',
     vehicle: evidencePacket.vehicle,
-    diagnosis: { result: { primaryCause: confirmedCause, probability: [] }, evidencePacket },
-    tests: [{ id: 'T1', name: 'confirmation test', result: 'fault confirmed' }],
+    diagnosis: { result: { primaryCause: confirmedCause, probability: [] }, evidencePacket, revision: 1 },
+    tests: [{
+      id: 'T1',
+      name: 'confirmation test',
+      result: 'fault confirmed',
+      evidenceRole: 'CONFIRMS',
+      confirmedFault: confirmedCause
+    }],
     verification: {
       confirmed: true,
       confirmedCause,
       conclusion: 'Confirmed by test',
       notes: 'Edge-case fixture',
       evidenceTestIds: ['T1'],
+      diagnosisRevision: 1,
       verifiedAt: '2026-08-15T00:00:00.000Z'
     }
   });

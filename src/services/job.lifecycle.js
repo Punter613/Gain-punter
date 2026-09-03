@@ -17,6 +17,13 @@ const PLACEHOLDER_RESULTS = new Set([
   'not tested', 'not performed'
 ]);
 
+const TEST_EVIDENCE_ROLES = Object.freeze({
+  NEUTRAL: 'NEUTRAL',
+  SUPPORTS: 'SUPPORTS',
+  REFUTES: 'REFUTES',
+  CONFIRMS: 'CONFIRMS'
+});
+
 function clean(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
@@ -35,6 +42,46 @@ function isMeaningfulTestResult(value) {
     .trim();
 
   return !PLACEHOLDER_RESULTS.has(placeholderCandidate);
+}
+
+function normalizeEvidenceRole(value) {
+  const raw = clean(value).toUpperCase().replace(/[\s-]+/g, '_');
+  if (!raw) return TEST_EVIDENCE_ROLES.NEUTRAL;
+
+  const aliases = {
+    OBSERVED: TEST_EVIDENCE_ROLES.NEUTRAL,
+    OBSERVED_NEUTRAL: TEST_EVIDENCE_ROLES.NEUTRAL,
+    NEUTRAL: TEST_EVIDENCE_ROLES.NEUTRAL,
+    SUPPORT: TEST_EVIDENCE_ROLES.SUPPORTS,
+    SUPPORTS: TEST_EVIDENCE_ROLES.SUPPORTS,
+    REFUTE: TEST_EVIDENCE_ROLES.REFUTES,
+    REFUTES: TEST_EVIDENCE_ROLES.REFUTES,
+    CONFIRM: TEST_EVIDENCE_ROLES.CONFIRMS,
+    CONFIRMS: TEST_EVIDENCE_ROLES.CONFIRMS,
+    CONFIRMED: TEST_EVIDENCE_ROLES.CONFIRMS
+  };
+  return aliases[raw] || null;
+}
+
+function normalizeFault(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isVerificationEligibleTest(test = {}) {
+  return normalizeEvidenceRole(test.evidenceRole) === TEST_EVIDENCE_ROLES.CONFIRMS
+    && isMeaningfulTestResult(test.result)
+    && !!clean(test.confirmedFault);
+}
+
+function testConfirmsFault(test = {}, confirmedCause = '') {
+  if (!isVerificationEligibleTest(test)) return false;
+  const testFault = normalizeFault(test.confirmedFault);
+  const requestedFault = normalizeFault(confirmedCause);
+  return !!testFault && !!requestedFault && testFault === requestedFault;
 }
 
 function nowIso() {
@@ -165,7 +212,7 @@ async function patchJob(jobId, patch = {}) {
 async function recordDiagnosis(jobId, diagnosis, traceLog = null) {
   return patchJob(jobId, {
     status: 'TESTING',
-    diagnosis: { result: diagnosis, traceLog, recordedAt: nowIso() }
+    diagnosis: { result: diagnosis, traceLog, revision: 1, recordedAt: nowIso() }
   });
 }
 
@@ -185,7 +232,11 @@ async function recordUnverifiedDiagnosis(jobId) {
   }
 
   const unverifiedDiagnosis = buildUnverifiedDiagnosis(job, nowIso());
-  job.unverifiedDiagnosis = unverifiedDiagnosis;
+  job.unverifiedDiagnosis = {
+    ...unverifiedDiagnosis,
+    diagnosisRevision: Math.max(1, Number(job.diagnosis?.revision) || 1),
+    stale: false
+  };
   job.updatedAt = nowIso();
   await persist(job);
   return job;
@@ -205,6 +256,20 @@ async function addTest(jobId, test = {}) {
     throw new Error('Recorded test requires an actual observation or measurement; placeholders do not count as evidence');
   }
 
+  const requestedRole = clean(test.evidenceRole || test.evidenceStrength || test.role);
+  const evidenceRole = normalizeEvidenceRole(requestedRole);
+  if (!evidenceRole) {
+    throw new Error('Recorded test evidence role must be NEUTRAL, SUPPORTS, REFUTES, or CONFIRMS');
+  }
+
+  const confirmedFault = evidenceRole === TEST_EVIDENCE_ROLES.CONFIRMS
+    ? clean(test.confirmedFault)
+    : '';
+  if (evidenceRole === TEST_EVIDENCE_ROLES.CONFIRMS && !confirmedFault) {
+    throw new Error('A CONFIRMS test must name the exact fault that the physical evidence confirms');
+  }
+
+  const recordedAt = nowIso();
   const entry = {
     id: test.id || crypto.randomUUID(),
     name,
@@ -212,11 +277,21 @@ async function addTest(jobId, test = {}) {
     units: clean(test.units),
     notes: clean(test.notes),
     passed: typeof test.passed === 'boolean' ? test.passed : null,
-    recordedAt: nowIso()
+    evidenceRole,
+    confirmedFault,
+    recordedAt
   };
   job.tests = [...(job.tests || []), entry];
+  if (job.unverifiedDiagnosis?.state === 'UNVERIFIED_DIAGNOSIS') {
+    job.unverifiedDiagnosis = {
+      ...job.unverifiedDiagnosis,
+      stale: true,
+      supersededBy: 'NEW_TEST_EVIDENCE',
+      supersededAt: recordedAt
+    };
+  }
   job.status = 'TESTING';
-  job.updatedAt = nowIso();
+  job.updatedAt = recordedAt;
   await persist(job);
   return entry;
 }
@@ -235,6 +310,7 @@ async function verifyJob(jobId, verification = {}) {
       confirmedCause: clean(verification.confirmedCause),
       evidenceTestIds: [],
       notes: clean(verification.notes),
+      diagnosisRevision: Math.max(1, Number(job.diagnosis?.revision) || 1),
       verifiedAt: nowIso()
     };
     job.status = 'TESTING';
@@ -256,7 +332,7 @@ async function verifyJob(jobId, verification = {}) {
       .map(clean)
       .filter(Boolean)
   )];
-  if (!evidenceTestIds.length) throw new Error('Verification requires at least one explicitly selected supporting test');
+  if (!evidenceTestIds.length) throw new Error('Verification requires at least one explicitly selected confirmation-grade test');
 
   const testsById = new Map(job.tests.map(test => [clean(test.id), test]));
   const selectedTests = evidenceTestIds.map(id => testsById.get(id));
@@ -264,13 +340,21 @@ async function verifyJob(jobId, verification = {}) {
   if (selectedTests.some(test => !isMeaningfulTestResult(test.result))) {
     throw new Error('Selected verification evidence contains a placeholder or empty result');
   }
+  if (selectedTests.some(test => !isVerificationEligibleTest(test))) {
+    throw new Error('Selected verification evidence must be explicitly classified CONFIRMS and bind the physical result to a named fault');
+  }
+  if (selectedTests.some(test => !testConfirmsFault(test, confirmedCause))) {
+    throw new Error('Confirmed Cause / Fault must exactly match the fault named by every selected CONFIRMS test');
+  }
 
+  const diagnosisRevision = Math.max(1, Number(job.diagnosis?.revision) || 1);
   job.verification = {
     confirmed: true,
     conclusion,
     confirmedCause,
     evidenceTestIds,
     notes: clean(verification.notes),
+    diagnosisRevision,
     verifiedAt: nowIso()
   };
   if (job.unverifiedDiagnosis?.state === 'UNVERIFIED_DIAGNOSIS') {
@@ -357,5 +441,9 @@ module.exports = {
   hydrateEstimateInput,
   hydrateInvoiceInput,
   invalidateJobCache,
-  isMeaningfulTestResult
+  isMeaningfulTestResult,
+  normalizeEvidenceRole,
+  isVerificationEligibleTest,
+  testConfirmsFault,
+  TEST_EVIDENCE_ROLES
 };
