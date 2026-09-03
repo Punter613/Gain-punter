@@ -1,7 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { getJob, patchJob, addTest, verifyJob, recordUnverifiedDiagnosis } = require('../services/job.lifecycle');
-const { hasNewEvidenceSinceDiagnosis, reassessDiagnosis } = require('../services/diagnostic.reassessment');
+const {
+  hasNewEvidenceSinceDiagnosis,
+  needsDtcProvenanceReassessment,
+  reassessmentReason,
+  reassessDiagnosis
+} = require('../services/diagnostic.reassessment');
 const { buildVerifiedCase } = require('../core/evidence/verified.case');
 const {
   buildRepairCompletedEvent,
@@ -34,7 +39,11 @@ router.post('/:id/unverified-diagnosis', async (req, res) => {
     let current = await getJob(req.params.id);
     if (!current) return res.status(404).json({ success: false, error: 'Job not found' });
 
-    if (current.diagnosis?.result && hasNewEvidenceSinceDiagnosis(current)) {
+    const provenanceRefreshRequired = needsDtcProvenanceReassessment(current);
+    const newEvidenceAvailable = hasNewEvidenceSinceDiagnosis(current);
+    const reason = reassessmentReason(current);
+
+    if (current.diagnosis?.result && (newEvidenceAvailable || provenanceRefreshRequired)) {
       try {
         const reassessed = await reassessDiagnosis(current);
         if (reassessed) {
@@ -46,14 +55,24 @@ router.post('/:id/unverified-diagnosis', async (req, res) => {
               ...previousDiagnosis,
               result: reassessed,
               revision,
-              reassessmentReason: 'NEW_TEST_EVIDENCE',
+              reassessmentReason: reason || reassessed.reassessment?.reason || 'REASSESSMENT',
               recordedAt: new Date().toISOString()
             }
           });
         }
       } catch (reassessmentError) {
+        if (provenanceRefreshRequired) {
+          console.warn(`[jobs] required DTC provenance reassessment failed for ${req.params.id}:`, reassessmentError.message);
+          throw new Error('This diagnosis predates DTC provenance enforcement and could not be safely refreshed. Re-run Diagnose before relying on an unverified diagnosis.');
+        }
         console.warn(`[jobs] diagnostic reassessment failed for ${req.params.id}; retaining prior diagnosis:`, reassessmentError.message);
       }
+    }
+
+    // Never surface a stale pre-provenance candidate if the mandatory refresh
+    // failed to replace it.
+    if (needsDtcProvenanceReassessment(current)) {
+      throw new Error('This diagnosis predates DTC provenance enforcement. Re-run Diagnose before relying on an unverified diagnosis.');
     }
 
     const job = await recordUnverifiedDiagnosis(req.params.id);
@@ -66,6 +85,7 @@ router.post('/:id/unverified-diagnosis', async (req, res) => {
       diagnosisState: job.unverifiedDiagnosis?.state || 'UNVERIFIED_DIAGNOSIS',
       diagnosisRevision: Number(job.diagnosis?.revision) || 1,
       reassessmentApplied: job.diagnosis?.result?.reassessment?.applied === true,
+      reassessmentReason: job.diagnosis?.result?.reassessment?.reason || job.diagnosis?.reassessmentReason || null,
       unverifiedDiagnosis: job.unverifiedDiagnosis,
       verifiedCase: job.verifiedCase || null,
       estimateReady: false
