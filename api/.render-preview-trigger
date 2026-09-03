@@ -1,3 +1,3 @@
 Render preview trigger
-reason: final Work Order authorization truth boundary including unlinked verified-case context, strict idempotency, execution completion, and Estimate Center summary
-updated: 2026-09-03T19:34:00Z
+reason: final Work Order authorization truth boundary plus monotonic atomic reassessment timestamps so fresh diagnosis revisions are always newer than consumed evidence
+updated: 2026-09-03T19:44:00Z
