@@ -65,10 +65,12 @@ function summarizeSourceHealth(entries = []) {
   const normalized = (Array.isArray(entries) ? entries : Object.values(entries || {})).filter(Boolean);
   const unavailable = normalized.filter(entry => entry.status === SOURCE_STATUS.UNAVAILABLE);
   const degraded = normalized.filter(entry => entry.status === SOURCE_STATUS.DEGRADED);
+  const skipped = normalized.filter(entry => entry.status === SOURCE_STATUS.SKIPPED);
   const optionalUnavailable = unavailable.filter(entry => entry.required !== true);
+  const optionalAffected = normalized.filter(entry => entry.required !== true && [SOURCE_STATUS.UNAVAILABLE, SOURCE_STATUS.DEGRADED, SOURCE_STATUS.SKIPPED].includes(entry.status));
   const durableAvailable = normalized.some(entry => entry.durable === true && entry.status === SOURCE_STATUS.AVAILABLE);
   const anyAvailable = normalized.some(entry => entry.status === SOURCE_STATUS.AVAILABLE);
-  const mode = unavailable.length || degraded.length ? 'DEGRADED' : 'NORMAL';
+  const mode = unavailable.length || degraded.length || skipped.length ? 'DEGRADED' : 'NORMAL';
 
   return {
     policy: SOURCE_RESILIENCE_POLICY,
@@ -78,6 +80,7 @@ function summarizeSourceHealth(entries = []) {
     durableAvailable,
     unavailableCount: unavailable.length,
     optionalUnavailableCount: optionalUnavailable.length,
+    affectedOptionalCount: optionalAffected.length,
     entries: normalized
   };
 }
@@ -106,6 +109,7 @@ function publicSourceHealth(summary = {}) {
     mode: summary.mode || 'NORMAL',
     durableAvailable: summary.durableAvailable === true,
     optionalUnavailableCount: Number(summary.optionalUnavailableCount || 0),
+    affectedOptionalCount: Number(summary.affectedOptionalCount || 0),
     entries: (summary.entries || []).map(entry => ({
       source: clean(entry.source, 80),
       status: clean(entry.status, 30),
