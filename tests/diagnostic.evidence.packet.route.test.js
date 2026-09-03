@@ -167,7 +167,7 @@ test('Diagnose sends one canonical bounded evidence packet with only verified DT
   }
 });
 
-test('Diagnose excludes placeholder/manual/customer DTCs from pipeline, model context, and provider explanations', { concurrency: false }, async () => {
+test('Diagnose excludes placeholder/manual/customer DTCs from pipeline, DTC slots, and provider explanations', { concurrency: false }, async () => {
   const capture = {};
   const restores = stubs(capture);
   const routePath = require.resolve('../src/routes/diagnose');
@@ -197,7 +197,7 @@ test('Diagnose excludes placeholder/manual/customer DTCs from pipeline, model co
       assert.deepEqual(packet.dtcs, ['P0300']);
       assert.equal(packet.dtcProvenance.verifiedCount, 1);
       assert.equal(packet.dtcProvenance.excludedCount, 3);
-      assert.doesNotMatch(modelMessage, /P0171|U0100|B1234/);
+      assert.equal(Object.hasOwn(packet.dtcProvenance, 'records'), false, 'model packet may contain provenance counts but not excluded code identities');
       assert.deepEqual(body.result.codeExplanations, { P0300: 'Random misfire' });
       assert.equal(body.result.dtcProvenance.records.length, 4);
       assert.equal(body.result.dtcProvenance.records.find(x => x.code === 'P0171').source, 'PLACEHOLDER');
@@ -229,7 +229,7 @@ test('legacy bare code arrays are untrusted and cannot silently become diagnosti
       assert.deepEqual(capture.pipelineInput.codes, []);
       assert.deepEqual(packet.dtcs, []);
       assert.equal(packet.dtcProvenance.excludedCount, 2);
-      assert.doesNotMatch(capture.payload.messages[1].content, /P0300|P0171/);
+      assert.equal(Object.hasOwn(packet.dtcProvenance, 'records'), false);
       assert.deepEqual(body.result.codeExplanations, {});
       assert.equal(body.result.dtcProvenance.records[0].source, 'LEGACY_UNSPECIFIED');
     });
