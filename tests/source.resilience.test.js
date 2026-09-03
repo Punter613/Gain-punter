@@ -26,7 +26,20 @@ test('optional manual outage degrades source health but diagnostic operation con
   assert.equal(summary.mode, 'DEGRADED');
   assert.equal(summary.durableAvailable, true);
   assert.equal(summary.optionalUnavailableCount, 1);
+  assert.equal(summary.affectedOptionalCount, 1);
   assert.match(sourceStatusMessage(summary), /continuing with other available evidence sources/i);
+});
+
+test('intentionally skipped official live API does not make stored-official operation degraded', () => {
+  const summary = summarizeSourceHealth([
+    sourceHealthEntry('NHTSA_BULK', SOURCE_STATUS.AVAILABLE, { evidenceCount: 2 }),
+    sourceHealthEntry('NHTSA_ODI', SOURCE_STATUS.SKIPPED, { reason: 'disabled for Diagnose latency' })
+  ]);
+
+  assert.equal(summary.mode, 'NORMAL');
+  assert.equal(summary.durableAvailable, true);
+  assert.equal(summary.affectedOptionalCount, 0);
+  assert.match(sourceStatusMessage(summary), /operating normally/i);
 });
 
 test('LEMON_EVIDENCE_ENABLED is an immediate optional-source kill switch', () => {
@@ -76,7 +89,7 @@ test('Quick Ask remains successful when the optional manual provider throws', as
     telemetry: { source: 'feedback_examples', rowsScanned: 1, scanLimitReached: false, resultsMayBePartial: false }
   });
   retriever._tsbs = async () => ({
-    ranked: [{ bulletin_number: 'TEST-001', subject: 'Stored published evidence' }],
+    ranked: [{ bulletin_number: 'TEST-001', subject: 'Stored published evidence', source: 'NHTSA_BULK' }],
     telemetry: { source: 'vehicle_tsb_corpus', rowsScanned: 1, scanLimitReached: false, resultsMayBePartial: false }
   });
   retriever._manualEvidence = async () => {
@@ -97,4 +110,48 @@ test('Quick Ask remains successful when the optional manual provider throws', as
   const manual = out.sourceHealth.entries.find(entry => entry.source === 'LEMON_MANUALS');
   assert.equal(manual.status, SOURCE_STATUS.UNAVAILABLE);
   assert.match(out.warnings.join(' '), /continuing with other evidence sources/i);
+});
+
+test('Quick Ask kill switch omits LEMON manual and stored LEMON rows but keeps other stored evidence', async () => {
+  const prior = process.env.LEMON_EVIDENCE_ENABLED;
+  process.env.LEMON_EVIDENCE_ENABLED = 'false';
+  try {
+    const retriever = new BoundedQuickAskRetriever(null, null, {
+      confirmedRepairsMs: 100,
+      tsbsMs: 100,
+      manualMs: 100
+    });
+    retriever._confirmedRepairs = async () => ({
+      sampleSize: 0,
+      ranked: [],
+      telemetry: { source: 'feedback_examples', rowsScanned: 0, scanLimitReached: false, resultsMayBePartial: false }
+    });
+    retriever._tsbs = async () => ({
+      ranked: [
+        { bulletin_number: 'LM-1', subject: 'LEMON row', source: 'LEMON_MANUALS', source_url: 'https://lemon-manuals.la/test' },
+        { bulletin_number: 'NH-1', subject: 'Official stored row', source: 'NHTSA_BULK', source_url: 'https://static.nhtsa.gov/test.pdf' }
+      ],
+      telemetry: { source: 'vehicle_tsb_corpus', rowsScanned: 2, scanLimitReached: false, resultsMayBePartial: false }
+    });
+    retriever._manualEvidence = async () => {
+      throw new Error('manual lane should not execute while disabled');
+    };
+
+    const out = await retriever.ask({
+      vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
+      query: 'driveline clunk',
+      limit: 5
+    });
+
+    assert.equal(out.status, 'SUCCESS');
+    assert.deepEqual(out.publishedEvidence.map(row => row.bulletin_number), ['NH-1']);
+    assert.equal(out.repairDiagnosisEvidence.length, 0);
+    const manual = out.sourceHealth.entries.find(entry => entry.source === 'LEMON_MANUALS');
+    assert.equal(manual.status, SOURCE_STATUS.SKIPPED);
+    assert.equal(out.sourceHealth.mode, 'DEGRADED');
+    assert.match(out.sourceStatusMessage, /LEMON_MANUALS/i);
+  } finally {
+    if (prior === undefined) delete process.env.LEMON_EVIDENCE_ENABLED;
+    else process.env.LEMON_EVIDENCE_ENABLED = prior;
+  }
 });
