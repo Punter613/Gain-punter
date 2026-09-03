@@ -90,19 +90,25 @@ function diagnosticTruthSnapshot(job = {}) {
   const verified = job.verifiedCase;
   if (verified?.stage === 'VERIFIED' && verified?.fingerprint) {
     return {
-      status: 'VERIFIED_CASE_PRESENT',
-      physicallyVerified: true,
+      status: 'VERIFIED_CASE_PRESENT_BUT_SCOPE_UNLINKED',
+      verifiedCasePresent: true,
+      physicallyVerified: false,
+      scopeMatchEstablished: false,
       confirmedCause: clean(verified.verification?.confirmedCause, 300),
       verifiedCaseFingerprint: verified.fingerprint,
-      verifiedAt: verified.verification?.verifiedAt || null
+      verifiedAt: verified.verification?.verifiedAt || null,
+      note: 'A canonical VERIFIED_CASE exists on this lifecycle, but this QUICK_ESTIMATE Work Order is not automatically linked to that verified fault.'
     };
   }
   return {
     status: 'NOT_VERIFIED',
+    verifiedCasePresent: false,
     physicallyVerified: false,
+    scopeMatchEstablished: false,
     confirmedCause: '',
     verifiedCaseFingerprint: null,
-    verifiedAt: null
+    verifiedAt: null,
+    note: 'No canonical VERIFIED_CASE establishes this QUICK_ESTIMATE Work Order scope as mechanically required.'
   };
 }
 
@@ -130,6 +136,13 @@ function validateSelectedAuthorization(target, itemIds) {
     throw fail(
       `Work Order may include AUTHORIZED lines only. Not authorized: ${unauthorized.map(item => item.itemId).join(', ')}`,
       'UNAUTHORIZED_WORK_SCOPE'
+    );
+  }
+  const missingDecisionTime = selected.filter(item => !item.decisionAt);
+  if (missingDecisionTime.length) {
+    throw fail(
+      `Authorized estimate lines must contain a persisted customer-decision timestamp before Work Order creation: ${missingDecisionTime.map(item => item.itemId).join(', ')}`,
+      'AUTHORIZATION_TIMESTAMP_REQUIRED'
     );
   }
 
@@ -251,7 +264,7 @@ function buildWorkOrder(job, target, selected, input = {}) {
     },
     authorizationSnapshot: {
       decision: 'AUTHORIZED',
-      decisionAt: item.decisionAt || null,
+      decisionAt: item.decisionAt,
       decisionNote: clean(item.decisionNote, 600),
       sourceEstimateDocument: target.documentNumber,
       capturedAt: now
@@ -259,9 +272,10 @@ function buildWorkOrder(job, target, selected, input = {}) {
     truthBasis: {
       source: 'QUICK_ESTIMATE',
       diagnosticTruthStatus: diagnosticTruth.status,
-      physicallyVerified: diagnosticTruth.physicallyVerified,
-      note: diagnosticTruth.physicallyVerified
-        ? 'Customer authorization and diagnostic verification are recorded separately; this Work Order preserves both facts.'
+      physicallyVerified: false,
+      scopeMatchEstablished: false,
+      note: diagnosticTruth.verifiedCasePresent
+        ? 'A verified fault exists elsewhere on this lifecycle, but this Quick Estimate line is not automatically proven to be part of that verified repair scope.'
         : 'Customer authorization approves this scope of work but does not prove that a diagnostic repair is mechanically required.'
     },
     state: 'READY',
@@ -312,25 +326,50 @@ function buildWorkOrder(job, target, selected, input = {}) {
   return order;
 }
 
-function sameAuthorizedScope(order, target, itemIds, requestId = '') {
-  if (requestId && clean(order.authorizationRequest?.requestId, 160) === requestId) return true;
+function sameAuthorizedScope(order, target, itemIds) {
   if (order.sourceEstimate?.documentNumber !== target.documentNumber) return false;
   const existing = [...(order.workItems || []).map(item => item.sourceItemId)].sort();
   const requested = [...itemIds].sort();
   return JSON.stringify(existing) === JSON.stringify(requested);
 }
 
+function requestIdMatch(order = {}, requestId = '') {
+  return !!requestId && clean(order.authorizationRequest?.requestId, 160) === requestId;
+}
+
+function assertRequestIdCompatible(order = {}, estimateId, revision) {
+  const sameSource = order.sourceEstimate?.estimateId === estimateId
+    && Number(order.sourceEstimate?.revision) === Number(revision);
+  if (!sameSource) {
+    throw fail(
+      'The Work Order requestId/idempotencyKey was already used for a different source estimate revision.',
+      'WORK_ORDER_IDEMPOTENCY_KEY_REUSED'
+    );
+  }
+}
+
 async function createWorkOrderUnlocked(jobId, input = {}) {
   const job = await getJob(jobId);
   if (!job) throw fail('Lifecycle number not found.', 'LIFECYCLE_NOT_FOUND', 404);
-  if (job.invoice) {
-    throw fail('A new Work Order cannot be created after the final invoice on this lifecycle.', 'FINAL_INVOICE_ALREADY_EXISTS');
-  }
 
   const estimateId = clean(input.estimateId, 80);
   const revision = Number(input.revision);
   if (!estimateId || !Number.isFinite(revision) || revision < 1) {
     throw fail('Work Order requires a source estimateId and revision.', 'SOURCE_ESTIMATE_REQUIRED');
+  }
+
+  const requestId = clean(input.requestId || input.idempotencyKey, 160);
+  const priorRequest = requestId
+    ? workOrders(job).find(order => requestIdMatch(order, requestId))
+    : null;
+  if (priorRequest) {
+    assertRequestIdCompatible(priorRequest, estimateId, revision);
+    assertScopeIntegrity(priorRequest);
+    return { created: false, workOrder: clone(priorRequest) };
+  }
+
+  if (job.invoice) {
+    throw fail('A new Work Order cannot be created after the final invoice on this lifecycle.', 'FINAL_INVOICE_ALREADY_EXISTS');
   }
 
   const target = findEstimateRevision(job, estimateId, revision);
@@ -341,8 +380,7 @@ async function createWorkOrderUnlocked(jobId, input = {}) {
 
   const itemIds = requestedItemIds(input, target);
   const selected = validateSelectedAuthorization(target, itemIds);
-  const requestId = clean(input.requestId || input.idempotencyKey, 160);
-  const existing = workOrders(job).find(order => sameAuthorizedScope(order, target, itemIds, requestId));
+  const existing = workOrders(job).find(order => sameAuthorizedScope(order, target, itemIds));
   if (existing) {
     assertScopeIntegrity(existing);
     return { created: false, workOrder: clone(existing) };
