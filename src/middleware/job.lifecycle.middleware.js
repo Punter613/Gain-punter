@@ -10,6 +10,11 @@ const {
   hydrateInvoiceInput
 } = require('../services/job.lifecycle');
 const { buildDiagnosticEvidencePacket } = require('../core/evidence/diagnostic.evidence.packet');
+const {
+  resolveRequestDtcEvidence,
+  trustedDtcCodes,
+  publicDtcEvidence
+} = require('../core/evidence/dtc.provenance');
 
 function wrapJson(res, handler) {
   const originalJson = res.json.bind(res);
@@ -28,6 +33,7 @@ function packetFromDiagnosisRequest(req, payload) {
   const body = req.body || {};
   const evidence = payload?.result?.evidence || {};
   const vehicle = body.vehicle || {};
+  const dtcEvidence = resolveRequestDtcEvidence(body);
   return buildDiagnosticEvidencePacket({
     vin: body.vin || vehicle.vin || '',
     mileage: body.mileage || vehicle.mileage,
@@ -40,7 +46,7 @@ function packetFromDiagnosisRequest(req, payload) {
       ...(Array.isArray(body.mechanicNotices) ? body.mechanicNotices : []),
       ...(Array.isArray(body.notes) ? body.notes : [])
     ],
-    dtcs: Array.isArray(body.codes) && body.codes.length ? body.codes : (body.obdCodes || []),
+    dtcEvidence,
     deterministicProfile: payload?.result?.localVehicleTelemetry || null,
     localSafetyTriggered: payload?.result?.safetyRisk === true,
     safetyNotes: payload?.result?.notes || '',
@@ -66,7 +72,17 @@ async function diagnosisLifecycle(req, res, next) {
         await recordDiagnosis(job.jobId, payload.result, payload.traceLog || null);
         const persisted = await getJob(job.jobId);
         const evidencePacket = packetFromDiagnosisRequest(req, payload);
+        const dtcEvidence = resolveRequestDtcEvidence(req.body || {});
         await patchJob(job.jobId, {
+          intake: {
+            ...(persisted?.intake || {}),
+            // Audit keeps every valid entered code with its provenance. obdCodes
+            // is deliberately reduced to only verified scan-tool evidence so
+            // downstream lifecycle code cannot accidentally resurrect legacy or
+            // placeholder codes as trusted diagnostic truth.
+            dtcEvidence: publicDtcEvidence(dtcEvidence),
+            obdCodes: trustedDtcCodes(dtcEvidence)
+          },
           diagnosis: { ...(persisted?.diagnosis || {}), evidencePacket }
         });
         return { ...payload, jobId: job.jobId, invoiceNumber: job.jobId };
