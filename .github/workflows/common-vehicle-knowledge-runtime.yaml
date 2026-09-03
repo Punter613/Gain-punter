@@ -60,9 +60,39 @@ jobs:
       - name: Prove durable-first coverage planner on live preview
         shell: bash
         run: |
-          CATALOG_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/kb-catalog.json -w '%{http_code}' "$PREVIEW_URL/api/knowledge-builder/catalog" || true)"
-          COVERAGE_HTTP="$(curl --connect-timeout 5 --max-time 90 -sS -o /tmp/kb-coverage.json -w '%{http_code}' "$PREVIEW_URL/api/knowledge-builder/coverage?make=Kia&model=Sorento&limit=5" || true)"
-          PAGE_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/kb-page.html -w '%{http_code}' "$PREVIEW_URL/knowledge-builder.html" || true)"
+          fetch_preview() {
+            local url="$1"
+            local outfile="$2"
+            local timeout="$3"
+            local code=000
+            for attempt in $(seq 1 10); do
+              code="$(curl --connect-timeout 5 --max-time "$timeout" -sS -o "$outfile" -w '%{http_code}' "$url" || true)"
+              if [ "$code" = "200" ]; then
+                echo 200
+                return 0
+              fi
+              echo "Preview route miss for $url (attempt $attempt/10, HTTP $code)." >&2
+              cat "$outfile" 2>/dev/null >&2 || true
+              # Reconfirm that the preview identity still reports the exact head;
+              # this retry handles transient Render preview route misses without
+              # accepting a persistent missing route or a stale commit.
+              HEALTH_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/kb-health-recheck.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+              if [ "$HEALTH_CODE" = "200" ]; then
+                HEAD_SHA="$HEAD_SHA" node - <<'NODE' || exit 1
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/kb-health-recheck.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) process.exit(1);
+          NODE
+              fi
+              sleep 2
+            done
+            echo "$code"
+            return 1
+          }
+
+          CATALOG_HTTP="$(fetch_preview "$PREVIEW_URL/api/knowledge-builder/catalog" /tmp/kb-catalog.json 30 || true)"
+          COVERAGE_HTTP="$(fetch_preview "$PREVIEW_URL/api/knowledge-builder/coverage?make=Kia&model=Sorento&limit=5" /tmp/kb-coverage.json 90 || true)"
+          PAGE_HTTP="$(fetch_preview "$PREVIEW_URL/knowledge-builder.html" /tmp/kb-page.html 30 || true)"
 
           if [ "$CATALOG_HTTP" != "200" ] || [ "$COVERAGE_HTTP" != "200" ] || [ "$PAGE_HTTP" != "200" ]; then
             echo "Knowledge Builder runtime HTTP failure: catalog=$CATALOG_HTTP coverage=$COVERAGE_HTTP page=$PAGE_HTTP"
