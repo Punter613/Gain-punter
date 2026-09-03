@@ -333,7 +333,7 @@ function invoiceSummary(job = {}) {
     type: 'INVOICE',
     lifecycleNumber: job.jobId,
     documentNumber: job.invoice.invoiceNumber || job.jobId,
-    total: money(job.invoice.total ?? job.invoice.grandTotal),
+    total: money(job.invoice.total ?? job.invoice.grandTotal ?? job.invoice.totals?.total),
     createdAt: job.invoice.createdAt || null
   };
 }
