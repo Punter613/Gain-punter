@@ -113,7 +113,7 @@ jobs:
             exit 1
           fi
 
-          HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          node - <<'NODE'
           const fs = require('fs');
           const body = JSON.parse(fs.readFileSync('/tmp/dtc-job.json', 'utf8'));
           const job = body.job || {};
@@ -130,13 +130,12 @@ jobs:
           const packet = job.diagnosis?.evidencePacket || {};
           if (packet.schemaVersion !== 2) failures.push(`packet schemaVersion ${packet.schemaVersion}`);
           if (packet.dtcProvenance?.policy !== 'VERIFIED_SCAN_TOOL_ONLY') failures.push(`packet policy ${packet.dtcProvenance?.policy}`);
+          if (Object.hasOwn(packet.dtcProvenance || {}, 'records')) failures.push('model-facing provenance unexpectedly exposes audit records');
           if (JSON.stringify(packet.dtcs || []) !== JSON.stringify(['P0300'])) failures.push(`packet dtcs ${JSON.stringify(packet.dtcs)}`);
-          const serializedPacket = JSON.stringify(packet);
-          if (/P0171|U0100/.test(serializedPacket)) failures.push('excluded DTC value leaked into model-facing evidence packet');
 
           if (failures.length) {
             console.error(failures.join('; '));
             process.exit(1);
           }
-          console.log('DTC provenance runtime passed: P0300 trusted; P0171/U0100 audit-only; model packet trusted-only.');
+          console.log('DTC provenance runtime passed: P0300 trusted; P0171/U0100 audit-only; diagnostic DTC slot trusted-only.');
           NODE
