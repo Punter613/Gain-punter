@@ -195,6 +195,13 @@ async function applyReassessment(jobId, current, reason, reassessDiagnosisFn) {
         dtcProvenance: summarizeDtcProvenance(migrationRecords)
       }
     : previousDiagnosis.evidencePacket;
+  // A reassessment must be chronologically newer than every evidence item it consumed.
+  // The evidence saver may intentionally assign timestamps 1ms after the prior
+  // diagnosis, so Date.now() alone can still land on or before that evidence on
+  // a fast runner. Force the replacement diagnosis past the latest persisted test.
+  const latestEvidenceMs = Math.max(0, ...(current.tests || []).map(test => Date.parse(test?.recordedAt || '') || 0));
+  const previousDiagnosisMs = Date.parse(previousDiagnosis?.recordedAt || '') || 0;
+  const reassessedAt = new Date(Math.max(Date.now(), latestEvidenceMs + 1, previousDiagnosisMs + 1)).toISOString();
 
   return patchJob(jobId, {
     ...(provenanceRefreshRequired ? {
@@ -211,7 +218,7 @@ async function applyReassessment(jobId, current, reason, reassessDiagnosisFn) {
       result: reassessed,
       revision,
       reassessmentReason: reason || reassessed.reassessment?.reason || 'REASSESSMENT',
-      recordedAt: new Date().toISOString(),
+      recordedAt: reassessedAt,
       stale: false,
       staleReason: null,
       staleAt: null
