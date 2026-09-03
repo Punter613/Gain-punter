@@ -25,6 +25,16 @@ export async function diagnose(body: {
     make?: string;
     trim?: string;
   };
+  /**
+   * Source-aware DTC input. Only SCAN_TOOL records with verified=true are
+   * admitted to diagnostic reasoning; all other sources are audit-only.
+   */
+  dtcEvidence?: Array<{
+    code: string;
+    source: "SCAN_TOOL" | "MANUAL_ENTRY" | "CUSTOMER_REPORTED" | "PLACEHOLDER" | "LEGACY_UNSPECIFIED";
+    verified: boolean;
+  }>;
+  /** @deprecated Legacy arrays have no provenance and are treated as untrusted. */
   obdCodes?: string[];
   customerStates?: string[];
 }) {
