@@ -3,6 +3,11 @@ const router = express.Router();
 const { exec } = require('child_process'); 
 const cleanInput = require('../middleware/clean.input');
 
+// Durable-first knowledge coverage planner. This is intentionally independent
+// of the legacy OEM/manual bridge below so common-vehicle coverage remains
+// available even when an external manual source is unavailable.
+router.use('/api/knowledge-builder', require('./knowledge.builder'));
+
 router.get('/api/oem-data/:vin/:procedure', cleanInput, async (req, res) => {
   const requestId = `req_${Date.now()}`;
   try {

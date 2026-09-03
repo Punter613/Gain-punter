@@ -1,0 +1,100 @@
+name: Common Vehicle Knowledge Builder Runtime Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/services/common.vehicle.knowledge.builder.js'
+      - 'src/routes/knowledge.builder.js'
+      - 'src/routes/oem.js'
+      - 'public/knowledge-builder.html'
+      - 'public/_redirects'
+      - 'scripts/plan-common-vehicle-ingestion.js'
+      - 'tests/common.vehicle.knowledge.builder.test.js'
+      - 'package.json'
+      - 'api/.render-preview-trigger'
+      - '.github/workflows/common-vehicle-knowledge-runtime.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-knowledge-builder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Run deterministic knowledge builder tests
+        run: npm install --ignore-scripts && npm run test:knowledge-builder
+
+      - name: Wait for exact Render preview head
+        shell: bash
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 48); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/kb-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/kb-health.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) process.exit(1);
+          NODE
+              then MATCHED=1; break; fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/48, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/kb-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Prove durable-first coverage planner on live preview
+        shell: bash
+        run: |
+          CATALOG_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/kb-catalog.json -w '%{http_code}' "$PREVIEW_URL/api/knowledge-builder/catalog" || true)"
+          COVERAGE_HTTP="$(curl --connect-timeout 5 --max-time 90 -sS -o /tmp/kb-coverage.json -w '%{http_code}' "$PREVIEW_URL/api/knowledge-builder/coverage?make=Kia&model=Sorento&limit=5" || true)"
+          PAGE_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/kb-page.html -w '%{http_code}' "$PREVIEW_URL/knowledge-builder.html" || true)"
+
+          if [ "$CATALOG_HTTP" != "200" ] || [ "$COVERAGE_HTTP" != "200" ] || [ "$PAGE_HTTP" != "200" ]; then
+            echo "Knowledge Builder runtime HTTP failure: catalog=$CATALOG_HTTP coverage=$COVERAGE_HTTP page=$PAGE_HTTP"
+            cat /tmp/kb-catalog.json 2>/dev/null || true
+            cat /tmp/kb-coverage.json 2>/dev/null || true
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const catalog = JSON.parse(fs.readFileSync('/tmp/kb-catalog.json', 'utf8'));
+          const coverage = JSON.parse(fs.readFileSync('/tmp/kb-coverage.json', 'utf8'));
+          const page = fs.readFileSync('/tmp/kb-page.html', 'utf8');
+          const failures = [];
+          if (catalog.success !== true) failures.push('catalog success missing');
+          if (catalog.policy !== 'DURABLE_FIRST_STRUCTURED_CORPUS') failures.push(`catalog policy ${catalog.policy}`);
+          if (!Array.isArray(catalog.platforms) || catalog.platforms.length < 10) failures.push('common platform catalog too small');
+          if (coverage.success !== true) failures.push('coverage success missing');
+          if (coverage.policy !== 'DURABLE_FIRST_STRUCTURED_CORPUS') failures.push(`coverage policy ${coverage.policy}`);
+          if (coverage.sourceRules?.optionalExternalCountsTowardDurableCoverage !== false) failures.push('optional source durable rule missing');
+          if (coverage.sourceRules?.rawOptionalManualContentReturned !== false) failures.push('raw optional manual boundary missing');
+          if (!Array.isArray(coverage.items) || coverage.items.length < 1 || coverage.items.length > 5) failures.push(`unexpected filtered item count ${coverage.items?.length}`);
+          for (const item of coverage.items || []) {
+            if (item.make !== 'Kia' || item.model !== 'Sorento') failures.push(`filter leak ${item.year} ${item.make} ${item.model}`);
+            if (!Array.isArray(item.gaps) || !Array.isArray(item.recommendedActions)) failures.push('gap/action arrays missing');
+            if (typeof item.coverageScore !== 'number' || typeof item.priorityScore !== 'number') failures.push('coverage/priority score missing');
+          }
+          if (!page.includes('SKSK <span>Knowledge Builder</span>')) failures.push('dashboard identity missing');
+          if (!page.includes('Durable-first rule')) failures.push('dashboard durable-first copy missing');
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          console.log(`Knowledge Builder runtime passed: ${coverage.items.length} filtered targets, durable policy intact, optional manuals excluded from durable readiness.`);
+          NODE

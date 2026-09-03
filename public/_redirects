@@ -2,6 +2,7 @@
 # Keep the legacy index.html available directly during rollout.
 / /lifecycle.html 200
 /estimate-center /estimate-center.html 200
+/knowledge-builder /knowledge-builder.html 200
 
 # Proxy all /api/* calls from skskprotech.pages.dev straight through to the
 # Render backend. Status 200 = transparent proxy (rewrite), not a redirect,
