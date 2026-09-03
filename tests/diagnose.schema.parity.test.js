@@ -121,6 +121,26 @@ test('Gemini preparation derives per-code schema keys from the bounded evidence 
   );
 });
 
+test('Gemini preparation recognizes v2 packet and derives only trusted packet DTC keys', () => {
+  const payload = diagnosePayload({
+    messages: [
+      { role: 'system', content: 'You are the expert diagnostic logic unit of SKSK ProTech.' },
+      {
+        role: 'user',
+        content: `DIAGNOSTIC_EVIDENCE_PACKET_V2:\n${JSON.stringify({
+          schemaVersion: 2,
+          stage: 'DIAGNOSE',
+          dtcs: ['P0300'],
+          dtcProvenance: { policy: 'VERIFIED_SCAN_TOOL_ONLY', verifiedCount: 1, excludedCount: 2 }
+        })}`
+      }
+    ]
+  });
+  const prepared = prepareGeminiDiagnosePayload(payload);
+  assert.deepEqual(prepared.response_format.json_schema.schema.properties.codeExplanations.required, ['P0300']);
+  assert.deepEqual(extractDiagnoseObdCodes(payload), ['P0300']);
+});
+
 test('direct Gemini and Groq fallback prepare the same Diagnose contract', () => {
   const direct = prepareGeminiDiagnosePayload(diagnosePayload());
   const fallback = prepareGeminiDiagnosePayload(diagnosePayload({

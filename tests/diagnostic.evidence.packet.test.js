@@ -9,14 +9,17 @@ const {
   compactDiagnosticEvidencePacket
 } = require('../src/core/evidence/diagnostic.evidence.packet');
 
+function verifiedDtc(code) {
+  return { code, source: 'SCAN_TOOL', verified: true };
+}
+
 function build(overrides = {}) {
   return buildDiagnosticEvidencePacket({
     vin: 'KNDJC735785123456',
     mileage: 150000,
     vehicle: {
       year: 2008,
-      make: 'Kia',
-      model: 'Sorento',
+      make: 'Kia', model: 'Sorento',
       engine: '3.8L',
       drivetrain: '4WD',
       componentData: {
@@ -26,7 +29,7 @@ function build(overrides = {}) {
     },
     customerObservations: ['repetitive bump on accelerator release', 'clunk at full steering lock'],
     mechanicObservations: ['CV axles replaced', 'upper control arms replaced', 'lower ball joints replaced'],
-    dtcs: ['p0300', 'P0171'],
+    dtcEvidence: [verifiedDtc('p0300'), verifiedDtc('P0171')],
     deterministicProfile: null,
     oemReferences: [],
     tsbReferences: [],
@@ -35,13 +38,16 @@ function build(overrides = {}) {
   });
 }
 
-test('canonical packet separates observations, completed work, DTCs, and trusted measurements', () => {
+test('canonical packet separates observations, completed work, verified DTCs, provenance, and trusted measurements', () => {
   const packet = build();
 
-  assert.equal(packet.schemaVersion, 1);
+  assert.equal(packet.schemaVersion, 2);
   assert.equal(packet.stage, 'DIAGNOSE');
   assert.equal(packet.vehicle.make, 'Kia');
   assert.deepEqual(packet.dtcs, ['P0300', 'P0171']);
+  assert.equal(packet.dtcProvenance.policy, 'VERIFIED_SCAN_TOOL_ONLY');
+  assert.equal(packet.dtcProvenance.verifiedCount, 2);
+  assert.equal(packet.dtcProvenance.excludedCount, 0);
   assert.deepEqual(packet.observations.customer, [
     'repetitive bump on accelerator release',
     'clunk at full steering lock'
@@ -53,6 +59,31 @@ test('canonical packet separates observations, completed work, DTCs, and trusted
   assert.equal(packet.measurements.values.brakes.padThickness, 0, 'real zero must survive');
   assert.equal(packet.measurements.values.brakes.brakeFluid, 18);
   assert.equal(packet.measurements.values.electrical.batteryVoltage, 12.2);
+});
+
+test('unverified, reported, and placeholder DTC values are excluded from model-facing packet', () => {
+  const packet = build({
+    dtcEvidence: [
+      { code: 'P0300', source: 'SCAN_TOOL', verified: true },
+      { code: 'P0171', source: 'PLACEHOLDER', verified: false },
+      { code: 'U0100', source: 'MANUAL_ENTRY', verified: false },
+      { code: 'B1234', source: 'CUSTOMER_REPORTED', verified: false }
+    ]
+  });
+
+  assert.deepEqual(packet.dtcs, ['P0300']);
+  assert.equal(packet.dtcProvenance.verifiedCount, 1);
+  assert.equal(packet.dtcProvenance.excludedCount, 3);
+  const modelFacing = compactDiagnosticEvidencePacket(packet);
+  assert.doesNotMatch(modelFacing, /P0171|U0100|B1234/);
+});
+
+test('legacy bare DTC arrays fail closed because they do not prove source provenance', () => {
+  const packet = build({ dtcEvidence: [], dtcs: ['P0300', 'P0171'] });
+  assert.deepEqual(packet.dtcs, []);
+  assert.equal(packet.dtcProvenance.verifiedCount, 0);
+  assert.equal(packet.dtcProvenance.excludedCount, 2);
+  assert.doesNotMatch(compactDiagnosticEvidencePacket(packet), /P0300|P0171/);
 });
 
 test('evidence references remain bounded while preserving source, matched signals, and supporting excerpt', () => {

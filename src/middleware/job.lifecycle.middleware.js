@@ -10,6 +10,11 @@ const {
   hydrateInvoiceInput
 } = require('../services/job.lifecycle');
 const { buildDiagnosticEvidencePacket } = require('../core/evidence/diagnostic.evidence.packet');
+const {
+  resolveRequestDtcEvidence,
+  trustedDtcCodes,
+  publicDtcEvidence
+} = require('../core/evidence/dtc.provenance');
 
 function wrapJson(res, handler) {
   const originalJson = res.json.bind(res);
@@ -28,6 +33,7 @@ function packetFromDiagnosisRequest(req, payload) {
   const body = req.body || {};
   const evidence = payload?.result?.evidence || {};
   const vehicle = body.vehicle || {};
+  const dtcEvidence = resolveRequestDtcEvidence(body);
   return buildDiagnosticEvidencePacket({
     vin: body.vin || vehicle.vin || '',
     mileage: body.mileage || vehicle.mileage,
@@ -40,7 +46,7 @@ function packetFromDiagnosisRequest(req, payload) {
       ...(Array.isArray(body.mechanicNotices) ? body.mechanicNotices : []),
       ...(Array.isArray(body.notes) ? body.notes : [])
     ],
-    dtcs: Array.isArray(body.codes) && body.codes.length ? body.codes : (body.obdCodes || []),
+    dtcEvidence,
     deterministicProfile: payload?.result?.localVehicleTelemetry || null,
     localSafetyTriggered: payload?.result?.safetyRisk === true,
     safetyNotes: payload?.result?.notes || '',
@@ -57,7 +63,20 @@ async function diagnosisLifecycle(req, res, next) {
   if (req.method !== 'POST' || req.path !== '/') return next();
 
   try {
-    const job = await createJob(req.body || {});
+    const dtcEvidence = resolveRequestDtcEvidence(req.body || {});
+    let job = await createJob(req.body || {});
+
+    // Sanitize provenance immediately, before the Diagnose route runs. This
+    // means even a failed diagnosis job cannot leave raw typed/placeholder DTCs
+    // sitting in the trusted obdCodes field.
+    job = await patchJob(job.jobId, {
+      intake: {
+        ...(job.intake || {}),
+        dtcEvidence: publicDtcEvidence(dtcEvidence),
+        obdCodes: trustedDtcCodes(dtcEvidence)
+      }
+    });
+
     req.jobLifecycle = job;
     req.body = { ...(req.body || {}), jobId: job.jobId };
 
@@ -67,6 +86,11 @@ async function diagnosisLifecycle(req, res, next) {
         const persisted = await getJob(job.jobId);
         const evidencePacket = packetFromDiagnosisRequest(req, payload);
         await patchJob(job.jobId, {
+          intake: {
+            ...(persisted?.intake || {}),
+            dtcEvidence: publicDtcEvidence(dtcEvidence),
+            obdCodes: trustedDtcCodes(dtcEvidence)
+          },
           diagnosis: { ...(persisted?.diagnosis || {}), evidencePacket }
         });
         return { ...payload, jobId: job.jobId, invoiceNumber: job.jobId };

@@ -18,7 +18,10 @@ function jobFixture() {
     },
     customerObservations: ['bump on accelerator release'],
     mechanicObservations: ['CV axles replaced'],
-    dtcs: ['P0300', 'P0171'],
+    dtcEvidence: [
+      { code: 'P0300', source: 'SCAN_TOOL', verified: true },
+      { code: 'P0171', source: 'SCAN_TOOL', verified: true }
+    ],
     tsbReferences: [{ sourceAuthority: 'NHTSA_BULK', bulletinNumber: 'TEST-1', title: 'Misfire bulletin', bodyText: 'P0300 diagnostic information' }],
     evidenceAvailable: true
   });
@@ -66,6 +69,7 @@ test('VERIFIED_CASE freezes the persisted diagnosis packet, tests, explicit faul
   assert.equal(verifiedCase.tests[0].confirmedFault, 'Engine mount failure');
   assert.equal(verifiedCase.tests[0].result, 'excess movement');
   assert.equal(verifiedCase.evidencePacket.dtcs[0], 'P0300');
+  assert.equal(verifiedCase.evidencePacket.dtcProvenance.verifiedCount, 2);
   assert.equal(verifiedCase.evidencePacket.measurements.values.brakes.padThickness, 0);
   assert.ok(verifiedCase.fingerprint);
 

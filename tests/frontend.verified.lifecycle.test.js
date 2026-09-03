@@ -18,12 +18,28 @@ test('public root enters the verified lifecycle UI', () => {
   assert.match(html, /INVOICE/);
 });
 
-test('frontend captures engine trim and sends engine plus DTC context through retrieval', () => {
+test('frontend captures engine trim and sends only verified DTC context through automatic retrieval', () => {
   assert.match(html, /<label>Engine \/ Trim<\/label><input id="engine"/);
   const enginePayloadUses = html.match(/engine:\$\('engine'\)\.value\.trim\(\)/g) || [];
   assert.equal(enginePayloadUses.length, 2);
-  assert.match(html, /const codeContext=list\(\$\('codes'\)\.value\)\.join\(' '\)/);
+  assert.match(html, /function verifiedDtcContext\(\)/);
+  assert.match(html, /filter\(item=>item\.verified===true&&item\.source==='SCAN_TOOL'\)/);
+  assert.match(html, /const codeContext=verifiedDtcContext\(\)/);
   assert.match(html, /query:retrievalQuery/);
+});
+
+test('frontend requires explicit DTC provenance and sends provenance objects to Diagnose', () => {
+  assert.match(html, /id="dtcSource"/);
+  assert.match(html, /value="MANUAL_ENTRY" selected>Typed \/ not verified/);
+  assert.match(html, /value="SCAN_TOOL">Read from scan tool — verified/);
+  assert.match(html, /value="CUSTOMER_REPORTED">Customer reported/);
+  assert.match(html, /value="PLACEHOLDER">Placeholder \/ test data/);
+  assert.match(html, /Only codes explicitly marked <b>Read from scan tool — verified<\/b> enter diagnostic ranking/);
+  assert.match(html, /function dtcEvidenceFromForm\(\)/);
+  assert.match(html, /const verified=source==='SCAN_TOOL'/);
+  assert.match(html, /dtcEvidence:dtcEvidenceFromForm\(\)/);
+  assert.doesNotMatch(html, /codes:list\(\$\('codes'\)\.value\)/);
+  assert.match(html, /kept in the job audit trail but excluded from diagnostic ranking/);
 });
 
 test('lifecycle restores explicit VIN decode autofill and shared customer-language normalization', () => {

@@ -10,6 +10,12 @@ const { applyCompletedWorkGuard } = require('../core/orchestrator/completed.work
 const { applyDiagnosticStageGuard } = require('../core/orchestrator/diagnostic.stage.guard');
 const { recordGuardCatch } = require('../core/learning/guard.catch.recorder');
 const { buildDiagnosticEvidencePacket, compactDiagnosticEvidencePacket } = require('../core/evidence/diagnostic.evidence.packet');
+const {
+  resolveRequestDtcEvidence,
+  trustedDtcCodes,
+  summarizeDtcProvenance,
+  publicDtcEvidence
+} = require('../core/evidence/dtc.provenance');
 const { collectVehicleEvidence, selectRelevantTsbs } = require('../services/vehicle.evidence');
 const { resolveVehicleProfile, waitForVehicleWarmup } = require('../services/vehicle.warmup');
 
@@ -38,6 +44,7 @@ function safeResult(overrides = {}) {
     codeExplanations: {}, probability: [], knownIssues: [], repairSteps: [], proTips: [], recommendedTests: [],
     additionalChecks: [], estimatedRepairTime: 'N/A', notes: '', diagnosticConfidence: { percentage: 30, rating: 'LOW' },
     localVehicleTelemetry: null, injectedFieldProtocols: [], calculatedLaborBreakdown: [], partsRiskAnalysis: [], vinManufacturingTelemetry: null,
+    dtcProvenance: null,
     ...overrides
   };
 }
@@ -48,12 +55,31 @@ function withDynamicRisk(profile, dynamicRisk) {
   return { ...profile, dynamicCalculatedRisk: dynamicRisk };
 }
 
+function filterCodeExplanations(value, trustedCodes = []) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const output = {};
+  for (const code of trustedCodes) {
+    const explanation = String(source[code] ?? '').replace(/\s+/g, ' ').trim();
+    if (explanation) output[code] = explanation.slice(0, 800);
+  }
+  return output;
+}
+
 router.post('/', async (req, res) => {
   const executionTrace = { traceId: 'TR-' + Date.now().toString(16).toUpperCase(), stage: 'INGESTION', logs: [], log(stage, message) { this.stage = stage; this.logs.push(`[${stage}] ${message}`); } };
   executionTrace.log('API_ROUTER', 'Payload received.');
   try {
-    const { vin = '', mileage = 0, symptoms = [], codes = [], customerStates = [], mechanicNotices = [], obdCodes = [], notes = [], keywords = [], vehicle = {}, laborRate = 65, axleCode = '' } = req.body;
-    const targetCodes = Array.isArray(codes) && codes.length ? codes : (Array.isArray(obdCodes) ? obdCodes : []);
+    const { vin = '', mileage = 0, symptoms = [], customerStates = [], mechanicNotices = [], notes = [], keywords = [], vehicle = {}, laborRate = 65, axleCode = '' } = req.body;
+    const normalizedDtcEvidence = resolveRequestDtcEvidence(req.body || {});
+    const targetCodes = trustedDtcCodes(normalizedDtcEvidence);
+    const dtcProvenance = summarizeDtcProvenance(normalizedDtcEvidence);
+    if (dtcProvenance.excludedCount > 0) {
+      executionTrace.log('DTC_PROVENANCE', `${dtcProvenance.excludedCount} entered DTC record(s) excluded from diagnostic reasoning because they were not verified scan-tool evidence.`);
+    }
+    if (dtcProvenance.verifiedCount > 0) {
+      executionTrace.log('DTC_PROVENANCE', `${dtcProvenance.verifiedCount} verified scan-tool DTC record(s) admitted to diagnostic reasoning.`);
+    }
+
     const customerSymptomContext = [...(Array.isArray(symptoms) ? symptoms : []), ...(Array.isArray(customerStates) ? customerStates : [])].map(s => String(s).toLowerCase().trim()).filter(Boolean);
     const mechanicContext = [...(Array.isArray(mechanicNotices) ? mechanicNotices : []), ...(Array.isArray(notes) ? notes : [])].map(s => String(s).trim()).filter(Boolean);
     const targetSymptoms = [...customerSymptomContext, ...(Array.isArray(mechanicNotices) ? mechanicNotices : [])].map(s => String(s).toLowerCase().trim()).filter(Boolean);
@@ -74,7 +100,7 @@ router.post('/', async (req, res) => {
       executionTrace.log('LOCAL_MATCH', `Deterministic hit: ${hit.patternName}`);
       const rawTips = procedureSpecs && procedureSpecs.criticalSpecs ? [procedureSpecs.criticalSpecs.torqueSequence, procedureSpecs.criticalSpecs.antiseizeNote] : [];
       const cleanTips = rawTips.filter(Boolean); if (!cleanTips.length) cleanTips.push('Always verify clearance specifications against factory block data prior to teardown.');
-      const localResult = safeResult({ urgency: 'immediate', safetyRisk: true, primaryCause: hit.patternName.toUpperCase(), notes: `Offline deterministic match active. ${hit.primaryCause}`.trim(), diagnosticConfidence: confidence || { percentage: 95, rating: 'HIGH' }, localVehicleTelemetry: withDynamicRisk(localProfile, dynamicRisk), probability: [{ cause: hit.patternName, likelihood: hit.likelihood }], recommendedTests: procedureSpecs ? procedureSpecs.clearanceSteps : [], repairSteps: [], proTips: cleanTips });
+      const localResult = safeResult({ urgency: 'immediate', safetyRisk: true, primaryCause: hit.patternName.toUpperCase(), notes: `Offline deterministic match active. ${hit.primaryCause}`.trim(), diagnosticConfidence: confidence || { percentage: 95, rating: 'HIGH' }, localVehicleTelemetry: withDynamicRisk(localProfile, dynamicRisk), probability: [{ cause: hit.patternName, likelihood: hit.likelihood }], recommendedTests: procedureSpecs ? procedureSpecs.clearanceSteps : [], repairSteps: [], proTips: cleanTips, dtcProvenance: { ...dtcProvenance, records: publicDtcEvidence(normalizedDtcEvidence) } });
       return res.json({ success: true, result: localResult, traceLog: { traceId: executionTrace.traceId, logs: executionTrace.logs } });
     }
 
@@ -97,7 +123,7 @@ router.post('/', async (req, res) => {
       vehicle: resolvedVehicle,
       customerObservations: customerSymptomContext,
       mechanicObservations: mechanicContext,
-      dtcs: targetCodes,
+      dtcEvidence: normalizedDtcEvidence,
       deterministicProfile: isProfileValidContext ? profile : null,
       localSafetyTriggered,
       safetyNotes,
@@ -115,12 +141,14 @@ Output a single valid JSON object ONLY. No backticks, markdown, or text before/a
 {"urgency":"immediate|soon|monitor","safetyRisk":false,"primaryCause":"string","secondaryCauses":["string"],"codeExplanations":{"P0300":"string"},"probability":[{"cause":"string","likelihood":80}],"knownIssues":["string"],"repairSteps":["string"],"proTips":["string"],"recommendedTests":["string"],"additionalChecks":["string"],"estimatedRepairTime":"string","notes":"string"}
 RULES:
 - urgency exactly immediate, soon, or monitor. safetyRisk true only if driving the vehicle as-is risks loss of control, fire, or injury.
-- codeExplanations must cover every OBD code provided, keyed exactly as given.
+- DIAGNOSTIC_EVIDENCE_PACKET_V2.dtcs contains the ONLY DTC values authorized as diagnostic evidence. These codes were explicitly marked verified scan-tool evidence.
+- dtcProvenance contains counts/source metadata only. Excluded DTC values are intentionally absent. Never infer, guess, or reconstruct excluded code identities.
+- codeExplanations must cover every code in packet.dtcs, keyed exactly as given, and must not invent explanations for excluded/unlisted codes.
 - probability likelihoods should roughly sum to 100; rank by evidence, not symptom order.
 - All array values must be strings.
 - DIAGNOSIS STAGE IS TEST-FIRST. No component is repair-authorized yet. repairSteps MUST contain only non-invasive inspection, measurement, verification, or confirmation steps. Do not instruct removal, teardown, replacement, installation, adjustment, lubrication-as-a-fix, or alignment as a repair. Put discriminating tests in recommendedTests. Actual repair procedure belongs only after TEST -> VERIFY.
 - Prefer tests that separate the highest-ranked candidate from the next candidate. Order tests by safety, diagnostic value, low invasiveness, then time/cost.
-- Treat DIAGNOSTIC_EVIDENCE_PACKET_V1 as the sole structured case context for reasoning.
+- Treat DIAGNOSTIC_EVIDENCE_PACKET_V2 as the sole structured case context for reasoning.
 - EVIDENCE HIERARCHY: trusted measurements and deterministic knowledge outrank mechanic observations; mechanic observations outrank customer symptom wording.
 - Customer observations are directional context only and must not override trusted measurements or deterministic evidence.
 - Never invent a TSB, recall, campaign, measurement, completed repair, or vehicle-specific fact absent from the packet.
@@ -128,7 +156,7 @@ RULES:
 - Never recommend replacing completed work listed in observations.completedWork. You MAY inspect or verify its installation, torque, fitment, binding, or measured condition when diagnostically relevant.
 MULTI-CONDITION REASONING: When a symptom occurs under distinct operating conditions, analyze what changes mechanically in each condition and prioritize causes plausible under all conditions. Consider one common cause, multiple causes in one system, and two unrelated faults. Use overlap to narrow the diagnostic tree.
 - Output raw JSON only.`;
-    const userPrompt = `DIAGNOSTIC_EVIDENCE_PACKET_V1:\n${compactDiagnosticEvidencePacket(evidencePacket)}`;
+    const userPrompt = `DIAGNOSTIC_EVIDENCE_PACKET_V2:\n${compactDiagnosticEvidencePacket(evidencePacket)}`;
 
     executionTrace.log('AI_DISPATCH', 'Sending canonical diagnostic evidence packet to shared AI provider router...');
     const aiRes = await aiChat({
@@ -158,6 +186,9 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     parsed = guardResult.output;
 
     const finalResult = { ...safeResult(), ...parsed };
+    // Provider output is never allowed to resurrect a DTC that provenance
+    // excluded. Keep explanations strictly keyed to trusted scan-tool codes.
+    finalResult.codeExplanations = filterCodeExplanations(parsed.codeExplanations, targetCodes);
     finalResult.knownIssues = relevantTsbs.slice(0, 3).map(x => `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
     finalResult.evidence = { oem: oemReferences, tsbs: relevantTsbs.slice(0, 5), sources: vehicleEvidence.sources || [], available: vehicleEvidence.available, warmup: warmupStatus, packetSchemaVersion: evidencePacket.schemaVersion };
     finalResult.probability = calibrateProbabilityArray(finalResult.probability || [], confidence);
@@ -167,6 +198,10 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     finalResult.injectedFieldProtocols = matchedPatterns || [];
     finalResult.calculatedLaborBreakdown = assemblyData ? assemblyData.breakdowns : [];
     finalResult.partsRiskAnalysis = assemblyData ? assemblyData.partsRisks : [];
+    finalResult.dtcProvenance = { ...dtcProvenance, records: publicDtcEvidence(normalizedDtcEvidence) };
+    if (dtcProvenance.excludedCount > 0) {
+      finalResult.notes = `${finalResult.notes || ''} ${dtcProvenance.excludedCount} entered DTC record${dtcProvenance.excludedCount === 1 ? ' was' : 's were'} excluded from diagnostic ranking because the source was not verified scan-tool evidence.`.trim();
+    }
     if (localSafetyTriggered) { finalResult.safetyRisk = true; finalResult.urgency = 'immediate'; finalResult.notes = `${finalResult.notes || ''} ${safetyNotes || ''}`.trim(); }
     if (symptomTelemetry?.hasMismatchedSignals) finalResult.notes = `${finalResult.notes || ''} Multiple symptom classes detected; verify whether one fault or multiple faults are present.`.trim();
     executionTrace.log('COMPLETE', 'Diagnostic result assembled.');
@@ -178,3 +213,4 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
 });
 
 module.exports = router;
+module.exports.filterCodeExplanations = filterCodeExplanations;

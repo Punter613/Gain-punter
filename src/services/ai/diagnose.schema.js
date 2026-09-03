@@ -27,6 +27,10 @@ const DIAGNOSE_MODEL_OWNED_FIELDS = Object.freeze(
 
 const OBD_CODE_PATTERN = /^[PCBU][0-3][0-9A-F]{3}$/;
 const OBD_CODE_SEARCH_PATTERN = /\b[PCBU][0-3][0-9A-F]{3}\b/gi;
+const EVIDENCE_PACKET_MARKERS = Object.freeze([
+  'DIAGNOSTIC_EVIDENCE_PACKET_V2:',
+  'DIAGNOSTIC_EVIDENCE_PACKET_V1:'
+]);
 
 function normalizeObdCodes(values = []) {
   const codes = Array.isArray(values) ? values : [values];
@@ -37,18 +41,19 @@ function normalizeObdCodes(values = []) {
 }
 
 function extractEvidencePacket(text = '') {
-  const marker = 'DIAGNOSTIC_EVIDENCE_PACKET_V1:';
   const source = String(text || '');
-  const markerIndex = source.indexOf(marker);
-  if (markerIndex === -1) return null;
-
-  const packetText = source.slice(markerIndex + marker.length).trim();
-  try {
-    const packet = JSON.parse(packetText);
-    return packet && typeof packet === 'object' ? packet : null;
-  } catch (_) {
-    return null;
+  for (const marker of EVIDENCE_PACKET_MARKERS) {
+    const markerIndex = source.indexOf(marker);
+    if (markerIndex === -1) continue;
+    const packetText = source.slice(markerIndex + marker.length).trim();
+    try {
+      const packet = JSON.parse(packetText);
+      return packet && typeof packet === 'object' ? packet : null;
+    } catch (_) {
+      return null;
+    }
   }
+  return null;
 }
 
 function extractDiagnoseObdCodes(payload = {}) {
@@ -184,7 +189,7 @@ function isDiagnosePayload(payload = {}) {
     .map(message => String(message?.content || ''))
     .join('\n');
   return systemText.includes('expert diagnostic logic unit of SKSK ProTech') ||
-    userText.includes('DIAGNOSTIC_EVIDENCE_PACKET_V1');
+    EVIDENCE_PACKET_MARKERS.some(marker => userText.includes(marker.slice(0, -1)));
 }
 
 function prepareGeminiDiagnosePayload(payload = {}) {
@@ -204,6 +209,7 @@ module.exports = {
   DIAGNOSE_CANONICAL_SCHEMA,
   DIAGNOSE_GEMINI_SCHEMA,
   DIAGNOSE_GEMINI_RESPONSE_FORMAT,
+  EVIDENCE_PACKET_MARKERS,
   normalizeObdCodes,
   extractEvidencePacket,
   extractDiagnoseObdCodes,

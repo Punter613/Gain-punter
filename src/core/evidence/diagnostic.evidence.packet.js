@@ -3,8 +3,14 @@
 const { normalizeVehicleMeasurements } = require('../measurement/measurement-normalizer');
 const { extractCompletedWork } = require('../orchestrator/completed.work.guard');
 const { getVehicleRiskProfile } = require('../../knowledge/vehicle.risk.table');
+const {
+  normalizeDtcEvidence,
+  trustedDtcCodes,
+  summarizeDtcProvenance,
+  DTC_SOURCES
+} = require('./dtc.provenance');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_OBSERVATIONS = 12;
 const MAX_OBSERVATION_CHARS = 500;
 const MAX_OEM_REFERENCES = 6;
@@ -121,7 +127,14 @@ function buildDiagnosticEvidencePacket(input = {}) {
   const vehicle = input.vehicle || {};
   const customerObservations = boundedList(input.customerObservations || []);
   const mechanicObservations = boundedList(input.mechanicObservations || []);
-  const dtcs = boundedList(input.dtcs || [], 20, 32).map(code => code.toUpperCase());
+  const rawDtcEvidence = Array.isArray(input.dtcEvidence) && input.dtcEvidence.length
+    ? input.dtcEvidence
+    : (input.dtcs || []);
+  const dtcEvidence = normalizeDtcEvidence(rawDtcEvidence, {
+    fallbackSource: DTC_SOURCES.LEGACY_UNSPECIFIED
+  });
+  const dtcs = trustedDtcCodes(dtcEvidence);
+  const dtcProvenance = summarizeDtcProvenance(dtcEvidence);
   const completedWork = extractCompletedWork(mechanicObservations);
   const oemReferences = (input.oemReferences || []).slice(0, MAX_OEM_REFERENCES).map(compactEvidenceReference);
   const tsbReferences = (input.tsbReferences || []).slice(0, MAX_TSB_REFERENCES).map(compactEvidenceReference);
@@ -155,7 +168,11 @@ function buildDiagnosticEvidencePacket(input = {}) {
       mileage: optionalPositiveNumber(input.mileage)
     },
     observations: { customer: customerObservations, mechanic: mechanicObservations, completedWork },
+    // Only explicitly verified scan-tool codes are allowed to reach model or
+    // deterministic diagnostic reasoning. Unverified code values remain in the
+    // persisted job intake audit record, not in this model-facing packet.
     dtcs,
+    dtcProvenance,
     measurements: compactTrustedMeasurements(vehicle),
     deterministic,
     evidence: {
