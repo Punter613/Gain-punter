@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { getJob } = require('../services/job.lifecycle');
+const { workOrderSummary } = require('../services/work.order');
 const {
   createEstimateOnlyLifecycle,
   createQuickEstimate,
@@ -35,7 +36,11 @@ router.post('/job', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const job = await getJob(req.params.id);
   if (!job) return fail(res, 404, 'Lifecycle number not found', { lifecycleNumber: req.params.id });
-  return res.json({ success: true, ...estimateCenterSummary(job) });
+  return res.json({
+    success: true,
+    ...estimateCenterSummary(job),
+    workOrders: workOrderSummary(job)
+  });
 });
 
 router.post('/:id/quick', async (req, res) => {
