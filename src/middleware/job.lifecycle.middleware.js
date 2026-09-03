@@ -63,7 +63,20 @@ async function diagnosisLifecycle(req, res, next) {
   if (req.method !== 'POST' || req.path !== '/') return next();
 
   try {
-    const job = await createJob(req.body || {});
+    const dtcEvidence = resolveRequestDtcEvidence(req.body || {});
+    let job = await createJob(req.body || {});
+
+    // Sanitize provenance immediately, before the Diagnose route runs. This
+    // means even a failed diagnosis job cannot leave raw typed/placeholder DTCs
+    // sitting in the trusted obdCodes field.
+    job = await patchJob(job.jobId, {
+      intake: {
+        ...(job.intake || {}),
+        dtcEvidence: publicDtcEvidence(dtcEvidence),
+        obdCodes: trustedDtcCodes(dtcEvidence)
+      }
+    });
+
     req.jobLifecycle = job;
     req.body = { ...(req.body || {}), jobId: job.jobId };
 
@@ -72,14 +85,9 @@ async function diagnosisLifecycle(req, res, next) {
         await recordDiagnosis(job.jobId, payload.result, payload.traceLog || null);
         const persisted = await getJob(job.jobId);
         const evidencePacket = packetFromDiagnosisRequest(req, payload);
-        const dtcEvidence = resolveRequestDtcEvidence(req.body || {});
         await patchJob(job.jobId, {
           intake: {
             ...(persisted?.intake || {}),
-            // Audit keeps every valid entered code with its provenance. obdCodes
-            // is deliberately reduced to only verified scan-tool evidence so
-            // downstream lifecycle code cannot accidentally resurrect legacy or
-            // placeholder codes as trusted diagnostic truth.
             dtcEvidence: publicDtcEvidence(dtcEvidence),
             obdCodes: trustedDtcCodes(dtcEvidence)
           },
