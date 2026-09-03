@@ -70,7 +70,7 @@ function normalizeWorkItem(item = {}, index = 0, defaults = {}) {
   const laborHours = count(item.laborHours ?? 0);
   const partsCost = money(item.partsCost ?? 0);
   const shopSupplies = money(item.shopSupplies ?? 0);
-  const taxRate = count(item.taxRate ?? defaults.taxRate);
+  const taxRate = Math.min(100, count(item.taxRate ?? defaults.taxRate));
   const laborCost = money(laborHours * laborRate);
   const beforeTax = money(partsCost + laborCost + shopSupplies);
   const tax = money(beforeTax * (taxRate / 100));
@@ -89,9 +89,11 @@ function normalizeWorkItem(item = {}, index = 0, defaults = {}) {
     taxRate,
     tax,
     estimatedTotal,
-    decision: normalizeDecision(item.decision),
-    decisionAt: item.decisionAt || null,
-    decisionNote: clean(item.decisionNote, 600)
+    // A new quote or revision always starts unapproved. Customer decisions from
+    // an older price must never silently carry onto a changed document.
+    decision: 'PROPOSED',
+    decisionAt: null,
+    decisionNote: ''
   };
 }
 
@@ -129,12 +131,17 @@ function buildQuickEstimate(job, input = {}, options = {}) {
   const estimateId = options.estimateId || `QE-${String(nextEstimateSequence(job)).padStart(3, '0')}`;
   const revision = Number(options.revision || 1);
   const laborRate = money(input.laborRate ?? 0);
-  const taxRate = count(input.taxRate ?? 0);
+  const taxRate = Math.min(100, count(input.taxRate ?? 0));
   const rawItems = Array.isArray(input.workItems) ? input.workItems : [];
   if (!rawItems.length) throw new Error('Quick estimate requires at least one work item');
   if (rawItems.length > 30) throw new Error('Quick estimate supports up to 30 work items');
 
   const workItems = rawItems.map((item, index) => normalizeWorkItem(item, index, { laborRate, taxRate }));
+  const itemIds = new Set();
+  for (const item of workItems) {
+    if (itemIds.has(item.itemId)) throw new Error(`Duplicate work item id: ${item.itemId}`);
+    itemIds.add(item.itemId);
+  }
   const totals = totalsForItems(workItems);
 
   return {
@@ -172,7 +179,9 @@ function latestEstimate(job, estimateId) {
 }
 
 async function createEstimateOnlyLifecycle(input = {}) {
-  let job = await createJob(input);
+  // The estimate-only endpoint always creates a fresh lifecycle. Ignore any
+  // request-body jobId so a caller cannot overwrite an existing persisted job.
+  let job = await createJob({ ...input, jobId: undefined });
   job = await patchJob(job.jobId, {
     intake: {
       ...(job.intake || {}),
@@ -204,12 +213,13 @@ async function reviseQuickEstimate(jobId, estimateId, input = {}) {
   if (previous.status === 'SUPERSEDED') throw new Error('Cannot revise a superseded estimate revision directly');
 
   const revision = Number(previous.revision) + 1;
+  const sourceItems = input.workItems?.length ? input.workItems : previous.workItems;
   const estimate = buildQuickEstimate(job, {
     basis: input.basis ?? previous.basis,
     title: input.title ?? previous.title,
     laborRate: input.laborRate,
     taxRate: input.taxRate,
-    workItems: input.workItems?.length ? input.workItems : previous.workItems
+    workItems: sourceItems
   }, { estimateId, revision });
 
   const now = new Date().toISOString();
@@ -282,10 +292,18 @@ async function recordCustomerDecisions(jobId, estimateId, revision, decisions = 
   });
   const totals = totalsForItems(workItems);
   const status = statusFromDecisions(workItems, target.presentedAt ? 'PRESENTED' : 'DRAFT');
+  const hasCustomerDecision = workItems.some(item => item.decision !== 'PROPOSED');
   let updatedEstimate;
   const versions = quickEstimates(job).map(version => {
     if (version.estimateId === estimateId && Number(version.revision) === Number(revision)) {
-      updatedEstimate = { ...version, workItems, totals, status, updatedAt: now };
+      updatedEstimate = {
+        ...version,
+        workItems,
+        totals,
+        status,
+        presentedAt: version.presentedAt || (hasCustomerDecision ? now : null),
+        updatedAt: now
+      };
       return updatedEstimate;
     }
     return version;
