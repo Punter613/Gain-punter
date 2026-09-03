@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const jobsRouter = require('./jobs');
+const customerEstimateCenter = require('./customer.estimate.center');
 const {
   getJob,
   isMeaningfulTestResult,
@@ -11,6 +12,11 @@ const {
 function clean(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
+
+// Commercial estimate documents live under the persisted lifecycle number but
+// remain separate from diagnostic verification truth. A QUICK_ESTIMATE never
+// creates VERIFIED_CASE and never unlocks the verified Estimate -> Invoice lane.
+router.use('/estimate-center', customerEstimateCenter);
 
 // Protective boundary in front of the existing jobs router.
 // A recorded confirmation test must contain an actual mechanic observation or measurement.

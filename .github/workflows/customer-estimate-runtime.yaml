@@ -1,0 +1,141 @@
+name: Customer Estimate Center Runtime Gate
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/services/customer.estimate.center.js'
+      - 'src/routes/customer.estimate.center.js'
+      - 'src/routes/jobs.protected.js'
+      - 'public/estimate-center.html'
+      - 'public/_redirects'
+      - 'tests/customer.estimate.center.test.js'
+      - 'tests/frontend.customer.estimate.center.test.js'
+      - 'package.json'
+      - 'api/.render-preview-trigger'
+      - '.github/workflows/customer-estimate-runtime.yaml'
+
+jobs:
+  exact-head-customer-estimate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.number }}.onrender.com
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Wait for exact Render preview head
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 60); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/estimate-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/estimate-health.json', 'utf8'));
+          process.exit(health?.preview?.commit === process.env.HEAD_SHA ? 0 : 1);
+          NODE
+              then
+                MATCHED=1
+                break
+              fi
+            fi
+            echo "Estimate preview not ready on exact head (attempt $attempt/60, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+          if [ "$MATCHED" != "1" ]; then
+            echo "::error::Customer Estimate runtime requires exact Render PR head $HEAD_SHA."
+            cat /tmp/estimate-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Exercise partial authorization and revision history
+        run: |
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/estimate-job.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{"customer":{"name":"RUNTIME ESTIMATE CUSTOMER","phone":"555-0100"},"vehicle":{"year":2018,"make":"Honda","model":"Accord","mileage":88000},"requestedService":"Runtime customer estimate canary"}' \
+            "$PREVIEW_URL/api/jobs/estimate-center/job" || true)"
+          cat /tmp/estimate-job.json
+          test "$HTTP_CODE" = "201"
+
+          JOB_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/estimate-job.json', 'utf8'));
+          if (!body.lifecycleNumber) process.exit(1);
+          process.stdout.write(body.lifecycleNumber);
+          NODE
+          )"
+          ENCODED_JOB_ID="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/estimate-created.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{"basis":"CUSTOMER_REQUEST","title":"Runtime three-item estimate","laborRate":100,"taxRate":0,"workItems":[{"description":"Front brake service","priority":"CRITICAL","partsCost":280,"laborHours":2},{"description":"Rear wheel bearing","priority":"WARNING","partsCost":320,"laborHours":3},{"description":"Valve cover leak repair","priority":"ADVISORY","partsCost":190,"laborHours":2}]}' \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB_ID/quick" || true)"
+          cat /tmp/estimate-created.json
+          test "$HTTP_CODE" = "201"
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/estimate-decisions.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{"decisions":[{"itemId":"LI-001","decision":"AUTHORIZED","note":"Runtime partial authorization"},{"itemId":"LI-002","decision":"DEFERRED","note":"Runtime budget deferral"},{"itemId":"LI-003","decision":"DEFERRED","note":"Runtime budget deferral"}]}' \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB_ID/quick/QE-001/1/decisions" || true)"
+          cat /tmp/estimate-decisions.json
+          test "$HTTP_CODE" = "200"
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/estimate-decisions.json', 'utf8'));
+          const failures = [];
+          if (body.estimate?.status !== 'PARTIALLY_AUTHORIZED') failures.push(`status ${body.estimate?.status}`);
+          if (body.totalIdentified !== 1490) failures.push(`identified ${body.totalIdentified}`);
+          if (body.authorizedToday !== 480) failures.push(`authorized ${body.authorizedToday}`);
+          if (body.deferred !== 1010) failures.push(`deferred ${body.deferred}`);
+          if (body.estimate?.workItems?.[0]?.decision !== 'AUTHORIZED') failures.push('line 1 not authorized');
+          if (body.estimate?.workItems?.[1]?.decision !== 'DEFERRED') failures.push('line 2 not deferred');
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          NODE
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/estimate-revision.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{"laborRate":100,"taxRate":0,"workItems":[{"itemId":"LI-001","description":"Front brake service with additional hardware","priority":"CRITICAL","partsCost":300,"laborHours":2},{"itemId":"LI-002","description":"Rear wheel bearing","priority":"WARNING","partsCost":320,"laborHours":3},{"itemId":"LI-003","description":"Valve cover leak repair","priority":"ADVISORY","partsCost":190,"laborHours":2}]}' \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB_ID/quick/QE-001/revise" || true)"
+          cat /tmp/estimate-revision.json
+          test "$HTTP_CODE" = "201"
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/estimate-center.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB_ID" || true)"
+          cat /tmp/estimate-center.json
+          test "$HTTP_CODE" = "200"
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/estimate-job-state.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID" || true)"
+          cat /tmp/estimate-job-state.json
+          test "$HTTP_CODE" = "200"
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/estimate-ui.html -w '%{http_code}' \
+            "$PREVIEW_URL/estimate-center.html" || true)"
+          test "$HTTP_CODE" = "200"
+          grep -q 'Estimate Center' /tmp/estimate-ui.html
+          grep -q 'Total authorized today' /tmp/estimate-ui.html
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const center = JSON.parse(fs.readFileSync('/tmp/estimate-center.json', 'utf8'));
+          const job = JSON.parse(fs.readFileSync('/tmp/estimate-job-state.json', 'utf8'));
+          const failures = [];
+          const r1 = center.quickEstimates?.find(x => x.documentNumber === 'QE-001-R1');
+          const r2 = center.quickEstimates?.find(x => x.documentNumber === 'QE-001-R2');
+          if (!r1 || !r2) failures.push('estimate revisions missing');
+          if (r1?.status !== 'SUPERSEDED') failures.push(`R1 status ${r1?.status}`);
+          if (r1?.workItems?.[0]?.decision !== 'AUTHORIZED') failures.push('R1 authorization history lost');
+          if (r2?.workItems?.some(item => item.decision !== 'PROPOSED')) failures.push('R2 inherited old authorization');
+          if (job.job?.verifiedCase) failures.push('quick estimate created VERIFIED_CASE');
+          if (job.job?.estimate) failures.push('quick estimate created canonical verified estimate');
+          if (job.job?.status !== 'DIAGNOSING') failures.push(`estimate-only lifecycle status ${job.job?.status}`);
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          console.log(`Customer estimate runtime passed: ${center.lifecycleNumber}, partial authorization retained, revision reset to PROPOSED, diagnostic truth untouched.`);
+          NODE
