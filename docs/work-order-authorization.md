@@ -24,7 +24,7 @@ Work Orders use policy:
 
 A preliminary Quick Estimate may create an authorized Work Order without creating `VERIFIED_CASE`. In that case the Work Order explicitly records `diagnosticTruthSnapshot.status = NOT_VERIFIED` and each line states that customer authorization does not establish mechanical necessity.
 
-If a canonical verified case already exists, the Work Order records that fact and its fingerprint separately. Authorization and verification remain independent facts.
+If a canonical verified case already exists somewhere else on the lifecycle, the Work Order records that fact and its fingerprint separately as `VERIFIED_CASE_PRESENT_BUT_SCOPE_UNLINKED`. A Quick Estimate line is still stored with `physicallyVerified: false` and `scopeMatchEstablished: false` unless a future verified-estimate handoff explicitly proves that line belongs to the verified repair scope. Authorization and verification remain independent facts.
 
 Work Order creation never creates or changes `VERIFIED_CASE`, the canonical verified estimate, or an invoice.
 
@@ -67,13 +67,17 @@ These totals prepare the boundary for the next milestone: invoice generation fro
 
 Work Order creation is serialized per lifecycle and is idempotent for the same source estimate/item set. An optional `requestId`/`idempotencyKey` is also persisted with the authorization request.
 
-A mobile retry of the same authorized scope returns the existing Work Order rather than creating duplicate scope.
+A mobile retry of the same authorized scope returns the existing Work Order rather than creating duplicate scope. Reusing the same request ID for a different estimate revision fails closed instead of silently returning or creating the wrong Work Order.
 
 ## Safety/dependency packages
 
-The Work Order engine understands `packageId` plus `packagePolicy = ALL_OR_NONE` on estimate lines. When present, every line in that package must be authorized and selected together. SKSK refuses to split such a package across a Work Order.
+The Work Order engine understands `packageId` plus `packagePolicy = ALL_OR_NONE` on stored estimate lines. When present, every line in that package must be authorized and selected together. SKSK refuses to split such a package across a Work Order.
 
 This is the execution-layer guard for repairs that should not be partially authorized simply to hit a budget target. Estimate authoring/UI support for defining these package fields can be expanded independently.
+
+## Estimate Center handoff
+
+Estimate Center lifecycle lookup now includes a compact `workOrders` summary so the commercial document chain can be viewed from the same lifecycle number without changing the Quick Estimate document itself.
 
 ## API
 
