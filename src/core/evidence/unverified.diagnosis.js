@@ -1,5 +1,12 @@
 'use strict';
 
+const {
+  normalizeDtcEvidence,
+  trustedDtcCodes,
+  summarizeDtcProvenance,
+  DTC_SOURCES
+} = require('./dtc.provenance');
+
 const SCHEMA_VERSION = 1;
 const STATE = 'UNVERIFIED_DIAGNOSIS';
 
@@ -16,6 +23,15 @@ function list(values, maxItems = 12, maxLen = 500) {
     .map(value => clean(value, maxLen))
     .filter(Boolean)
     .slice(0, maxItems);
+}
+
+function jobDtcEvidence(job = {}) {
+  if (Array.isArray(job.intake?.dtcEvidence) && job.intake.dtcEvidence.length) {
+    return normalizeDtcEvidence(job.intake.dtcEvidence);
+  }
+  return normalizeDtcEvidence(job.intake?.obdCodes || [], {
+    fallbackSource: DTC_SOURCES.LEGACY_UNSPECIFIED
+  });
 }
 
 function normalizeConfidence(result = {}) {
@@ -58,13 +74,16 @@ function remainingVerificationSteps(job = {}, result = {}) {
 
 function buildRationale(job = {}, result = {}, mostLikelyCause) {
   const reasons = [];
-  const dtcs = list(job.intake?.obdCodes, 12, 30);
+  const dtcEvidence = jobDtcEvidence(job);
+  const dtcs = trustedDtcCodes(dtcEvidence);
+  const dtcSummary = summarizeDtcProvenance(dtcEvidence);
   const customer = list(job.intake?.customerStates, 6, 300);
   const mechanic = list(job.intake?.mechanicNotices, 6, 300);
   const ranked = Array.isArray(result.probability) ? result.probability : [];
   const matching = ranked.find(item => clean(item?.cause, 300).toLowerCase() === mostLikelyCause.toLowerCase()) || ranked[0];
 
-  if (dtcs.length) reasons.push(`DTC context: ${dtcs.join(', ')}`);
+  if (dtcs.length) reasons.push(`Verified scan-tool DTC context: ${dtcs.join(', ')}`);
+  if (dtcSummary.excludedCount) reasons.push(`${dtcSummary.excludedCount} entered DTC record${dtcSummary.excludedCount === 1 ? ' was' : 's were'} excluded because the source was not verified scan-tool evidence.`);
   if (customer.length) reasons.push(`Customer symptoms: ${customer.join(' | ')}`);
   if (mechanic.length) reasons.push(`Mechanic observations: ${mechanic.join(' | ')}`);
   if (matching?.cause) {
@@ -96,6 +115,7 @@ function buildUnverifiedDiagnosis(job = {}, recordedAt = new Date().toISOString(
   const mostLikelyCause = selectMostLikelyCause(result);
   const evidencePacket = job.diagnosis?.evidencePacket || {};
   const evidence = result.evidence || {};
+  const dtcEvidence = jobDtcEvidence(job);
   const alternatives = uniqueAlternatives([
     ...list(result.secondaryCauses, 5, 300),
     ...(Array.isArray(result.probability) ? result.probability.map(item => clean(item?.cause, 300)) : [])
@@ -113,7 +133,8 @@ function buildUnverifiedDiagnosis(job = {}, recordedAt = new Date().toISOString(
     whatRemainsUnverified: remainingVerificationSteps(job, result),
     evidenceUsed: {
       vehicle: clone(evidencePacket.vehicle || job.vehicle || {}),
-      dtcs: list(job.intake?.obdCodes, 12, 30),
+      dtcs: trustedDtcCodes(dtcEvidence),
+      dtcProvenance: summarizeDtcProvenance(dtcEvidence),
       customerStates: list(job.intake?.customerStates, 8, 400),
       mechanicNotices: list(job.intake?.mechanicNotices, 8, 400),
       recordedTests: clone(job.tests || []),
@@ -136,5 +157,6 @@ module.exports = {
   normalizeConfidence,
   selectMostLikelyCause,
   remainingVerificationSteps,
-  uniqueAlternatives
+  uniqueAlternatives,
+  jobDtcEvidence
 };
