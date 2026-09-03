@@ -61,16 +61,20 @@ function sourceHealthEntry(source, status, details = {}) {
   };
 }
 
+function isExternalReferenceAffected(entry = {}) {
+  return entry.sourceClass === SOURCE_CLASS.OPTIONAL_EXTERNAL_REFERENCE &&
+    [SOURCE_STATUS.UNAVAILABLE, SOURCE_STATUS.DEGRADED, SOURCE_STATUS.SKIPPED].includes(entry.status);
+}
+
 function summarizeSourceHealth(entries = []) {
   const normalized = (Array.isArray(entries) ? entries : Object.values(entries || {})).filter(Boolean);
   const unavailable = normalized.filter(entry => entry.status === SOURCE_STATUS.UNAVAILABLE);
   const degraded = normalized.filter(entry => entry.status === SOURCE_STATUS.DEGRADED);
-  const skipped = normalized.filter(entry => entry.status === SOURCE_STATUS.SKIPPED);
+  const externalAffected = normalized.filter(isExternalReferenceAffected);
   const optionalUnavailable = unavailable.filter(entry => entry.required !== true);
-  const optionalAffected = normalized.filter(entry => entry.required !== true && [SOURCE_STATUS.UNAVAILABLE, SOURCE_STATUS.DEGRADED, SOURCE_STATUS.SKIPPED].includes(entry.status));
   const durableAvailable = normalized.some(entry => entry.durable === true && entry.status === SOURCE_STATUS.AVAILABLE);
   const anyAvailable = normalized.some(entry => entry.status === SOURCE_STATUS.AVAILABLE);
-  const mode = unavailable.length || degraded.length || skipped.length ? 'DEGRADED' : 'NORMAL';
+  const mode = unavailable.length || degraded.length || externalAffected.length ? 'DEGRADED' : 'NORMAL';
 
   return {
     policy: SOURCE_RESILIENCE_POLICY,
@@ -80,26 +84,20 @@ function summarizeSourceHealth(entries = []) {
     durableAvailable,
     unavailableCount: unavailable.length,
     optionalUnavailableCount: optionalUnavailable.length,
-    affectedOptionalCount: optionalAffected.length,
+    affectedOptionalCount: externalAffected.length,
     entries: normalized
   };
 }
 
 function sourceStatusMessage(summary = {}) {
   const entries = Array.isArray(summary.entries) ? summary.entries : [];
-  const unavailableOptional = entries
-    .filter(entry => entry.required !== true && entry.status === SOURCE_STATUS.UNAVAILABLE)
-    .map(entry => entry.source);
-  const skippedOptional = entries
-    .filter(entry => entry.required !== true && entry.status === SOURCE_STATUS.SKIPPED)
-    .map(entry => entry.source);
+  const affected = entries.filter(isExternalReferenceAffected).map(entry => entry.source);
 
-  if (!unavailableOptional.length && !skippedOptional.length) {
+  if (!affected.length) {
     return 'Evidence sources operating normally; no single external provider is required for diagnosis.';
   }
 
-  const affected = [...new Set([...unavailableOptional, ...skippedOptional])].join(', ');
-  return `Optional evidence source unavailable or disabled: ${affected}. Continuing with other available evidence sources; diagnosis does not depend on any single external manual provider.`;
+  return `Optional evidence source unavailable or disabled: ${[...new Set(affected)].join(', ')}. Continuing with other available evidence sources; diagnosis does not depend on any single external manual provider.`;
 }
 
 function publicSourceHealth(summary = {}) {
@@ -130,6 +128,7 @@ module.exports = {
   isOptionalExternalSourceEnabled,
   sourceDefinition,
   sourceHealthEntry,
+  isExternalReferenceAffected,
   summarizeSourceHealth,
   sourceStatusMessage,
   publicSourceHealth
