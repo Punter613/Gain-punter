@@ -2,6 +2,7 @@
 
 const express = require('express');
 const router = express.Router({ mergeParams: true });
+const { getJob } = require('../services/job.lifecycle');
 const {
   createWorkOrder,
   getWorkOrder,
@@ -72,6 +73,26 @@ router.get('/:workOrderId', async (req, res) => {
 
 router.post('/:workOrderId/items/:workItemId/state', async (req, res) => {
   try {
+    const job = await getJob(req.params.id);
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lifecycle number not found',
+        code: 'LIFECYCLE_NOT_FOUND',
+        lifecycleNumber: req.params.id
+      });
+    }
+    if (job.invoice) {
+      return res.status(409).json({
+        success: false,
+        error: 'Work Order execution is locked after the final invoice is created.',
+        code: 'FINAL_INVOICE_LOCKS_WORK_ORDER',
+        lifecycleNumber: req.params.id,
+        workOrderId: req.params.workOrderId,
+        workItemId: req.params.workItemId
+      });
+    }
+
     const workOrder = await updateWorkItemState(
       req.params.id,
       req.params.workOrderId,
