@@ -28,19 +28,30 @@ function jobFixture(overrides = {}) {
     evidenceAvailable: true
   });
 
+  const confirmedCause = 'Worn outer CV joint';
   const job = {
     jobId: 'SKSK-OUTCOME-TEST',
     status: 'VERIFIED',
     vehicle: { year: 2008, make: 'Kia', model: 'Sorento' },
     diagnosis: {
-      result: { primaryCause: 'Worn outer CV joint', probability: [{ cause: 'Worn outer CV joint', likelihood: 80 }] },
-      evidencePacket
+      result: { primaryCause: confirmedCause, probability: [{ cause: confirmedCause, likelihood: 80 }] },
+      evidencePacket,
+      revision: 1
     },
-    tests: [{ id: 'T1', name: 'Axle rotation test', result: 'clicking on turn', recordedAt: '2026-08-15T00:00:00.000Z' }],
+    tests: [{
+      id: 'T1',
+      name: 'Axle rotation test',
+      result: 'clicking on turn',
+      evidenceRole: 'CONFIRMS',
+      confirmedFault: confirmedCause,
+      recordedAt: '2026-08-15T00:00:00.000Z'
+    }],
     verification: {
       confirmed: true,
-      confirmedCause: 'Worn outer CV joint',
+      confirmedCause,
       conclusion: 'Clicking isolated to CV joint',
+      evidenceTestIds: ['T1'],
+      diagnosisRevision: 1,
       notes: '',
       verifiedAt: '2026-08-15T00:01:00.000Z'
     },
