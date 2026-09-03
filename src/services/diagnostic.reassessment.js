@@ -5,7 +5,8 @@ const {
   normalizeDtcEvidence,
   trustedDtcCodes,
   summarizeDtcProvenance,
-  DTC_SOURCES
+  DTC_SOURCES,
+  TRUST_POLICY
 } = require('../core/evidence/dtc.provenance');
 
 function clean(value, max = 1200) {
@@ -32,6 +33,30 @@ function jobDtcEvidence(job = {}) {
 
 function trustedJobDtcs(job = {}) {
   return trustedDtcCodes(jobDtcEvidence(job));
+}
+
+function legacyDiagnosisDtcValues(job = {}) {
+  const packetDtcs = Array.isArray(job.diagnosis?.evidencePacket?.dtcs) ? job.diagnosis.evidencePacket.dtcs : [];
+  const intakeDtcs = Array.isArray(job.intake?.obdCodes) ? job.intake.obdCodes : [];
+  return [...new Set([...packetDtcs, ...intakeDtcs].map(value => clean(value, 32).toUpperCase()).filter(Boolean))];
+}
+
+function needsDtcProvenanceReassessment(job = {}) {
+  if (!job.diagnosis?.result) return false;
+  const packet = job.diagnosis?.evidencePacket || {};
+  const provenance = packet.dtcProvenance || {};
+  const alreadyCurrent = Number(packet.schemaVersion) >= 2 && provenance.policy === TRUST_POLICY;
+  if (alreadyCurrent) return false;
+  return legacyDiagnosisDtcValues(job).length > 0;
+}
+
+function reassessmentReason(job = {}) {
+  const newEvidence = hasNewEvidenceSinceDiagnosis(job);
+  const provenanceMigration = needsDtcProvenanceReassessment(job);
+  if (newEvidence && provenanceMigration) return 'NEW_TEST_EVIDENCE_AND_DTC_PROVENANCE';
+  if (provenanceMigration) return 'DTC_PROVENANCE_MIGRATION';
+  if (newEvidence) return 'NEW_TEST_EVIDENCE';
+  return null;
 }
 
 function extractJSON(text) {
@@ -110,7 +135,7 @@ function sanitizeNotes(notes, dtcs = []) {
   return output;
 }
 
-function sanitizeReassessment(job = {}, previous = {}, candidate = {}) {
+function sanitizeReassessment(job = {}, previous = {}, candidate = {}, reason = reassessmentReason(job) || 'NEW_TEST_EVIDENCE') {
   const primaryCause = clean(candidate.primaryCause || candidate.diagnosis || previous.primaryCause || previous.diagnosis, 300);
   const primaryKey = primaryCause.toLowerCase();
   const probability = normalizeProbability(candidate.probability?.length ? candidate.probability : previous.probability);
@@ -139,17 +164,18 @@ function sanitizeReassessment(job = {}, previous = {}, candidate = {}) {
     diagnosticConfidence: normalizeConfidence(candidate.diagnosticConfidence, previous.diagnosticConfidence),
     reassessment: {
       applied: true,
-      reason: 'NEW_TEST_EVIDENCE',
+      reason,
       evidenceCount: Array.isArray(job.tests) ? job.tests.length : 0,
       reassessedAt: new Date().toISOString()
     }
   };
 }
 
-function buildReassessmentPayload(job = {}) {
+function buildReassessmentPayload(job = {}, reason = reassessmentReason(job)) {
   const previous = job.diagnosis?.result || {};
   const dtcEvidence = jobDtcEvidence(job);
   return {
+    reassessmentReason: reason || null,
     vehicle: job.vehicle || {},
     dtcs: trustedDtcCodes(dtcEvidence),
     dtcProvenance: summarizeDtcProvenance(dtcEvidence),
@@ -176,15 +202,21 @@ function buildReassessmentPayload(job = {}) {
 }
 
 async function reassessDiagnosis(job = {}) {
-  if (!job.diagnosis?.result || !hasNewEvidenceSinceDiagnosis(job)) return null;
+  if (!job.diagnosis?.result) return null;
+  const reason = reassessmentReason(job);
+  if (!reason) return null;
+
   const previous = job.diagnosis.result;
-  const packet = buildReassessmentPayload(job);
-  const systemPrompt = `You are SKSK ProTech's diagnostic reassessment unit. Re-rank an existing diagnosis after NEW mechanic test evidence has been recorded. Return one JSON object only.\n\nRequired shape:\n{"primaryCause":"string","secondaryCauses":["string"],"probability":[{"cause":"string","likelihood":0}],"recommendedTests":["string"],"notes":"string","diagnosticConfidence":{"percentage":0,"rating":"LOW|MODERATE|HIGH"}}\n\nRules:\n- New physical observations and measurements can and should overturn the previous hypothesis when they conflict with it. Do not anchor on recently replaced parts merely because they are mentioned.\n- Rank causes by the full evidence packet, especially the operating condition under which the symptom occurs.\n- Evidence roles are semantic boundaries: NEUTRAL is an observation only; SUPPORTS raises a hypothesis but does not verify it; REFUTES lowers a hypothesis; CONFIRMS is mechanic-classified confirmation evidence tied to a named confirmedFault.\n- Use words such as observed, reproduced, supports, or points toward for NEUTRAL/SUPPORTS evidence. Do not say that a component fault was confirmed unless the packet contains matching CONFIRMS evidence for that named fault.\n- Distinguish separate faults when evidence supports more than one condition.\n- Never call an unverified cause repair-authorized.\n- recommendedTests must be physically possible and must reproduce or discriminate the actual operating condition. If a symptom occurs only while the vehicle is moving, do not propose a stationary-only test as though it can reproduce that symptom.\n- Do not duplicate the primary cause in secondaryCauses.\n- dtcs contains the ONLY DTC values authorized as diagnostic evidence. dtcProvenance may report excluded entries, but their code values are intentionally unavailable and must not be guessed.\n- If verified dtcs are supplied, never say that no DTCs are present.\n- probability values are candidate weights, not physical-verification confidence.\n- diagnosticConfidence represents confidence in the current diagnostic direction based on evidence sufficiency, not the top candidate's weight.\n- Do not invent TSBs, measurements, completed repairs, components, or vehicle-specific facts absent from the packet.`;
+  const packet = buildReassessmentPayload(job, reason);
+  const migrationInstruction = reason.includes('DTC_PROVENANCE')
+    ? '\n- PROVENANCE MIGRATION: the previous diagnosis may have been influenced by legacy DTC values whose source was not recorded. Those legacy values are not authorized now. Re-rank the case from the current packet and do not preserve a prior candidate merely because an excluded legacy code once supported it.'
+    : '';
+  const systemPrompt = `You are SKSK ProTech's diagnostic reassessment unit. Re-rank an existing diagnosis after the case evidence boundary has changed. Return one JSON object only.\n\nRequired shape:\n{"primaryCause":"string","secondaryCauses":["string"],"probability":[{"cause":"string","likelihood":0}],"recommendedTests":["string"],"notes":"string","diagnosticConfidence":{"percentage":0,"rating":"LOW|MODERATE|HIGH"}}\n\nRules:\n- New physical observations and measurements can and should overturn the previous hypothesis when they conflict with it. Do not anchor on recently replaced parts merely because they are mentioned.\n- Rank causes by the full evidence packet, especially the operating condition under which the symptom occurs.\n- Evidence roles are semantic boundaries: NEUTRAL is an observation only; SUPPORTS raises a hypothesis but does not verify it; REFUTES lowers a hypothesis; CONFIRMS is mechanic-classified confirmation evidence tied to a named confirmedFault.\n- Use words such as observed, reproduced, supports, or points toward for NEUTRAL/SUPPORTS evidence. Do not say that a component fault was confirmed unless the packet contains matching CONFIRMS evidence for that named fault.\n- Distinguish separate faults when evidence supports more than one condition.\n- Never call an unverified cause repair-authorized.\n- recommendedTests must be physically possible and must reproduce or discriminate the actual operating condition. If a symptom occurs only while the vehicle is moving, do not propose a stationary-only test as though it can reproduce that symptom.\n- Do not duplicate the primary cause in secondaryCauses.\n- dtcs contains the ONLY DTC values authorized as diagnostic evidence. dtcProvenance may report excluded entries, but their code values are intentionally unavailable and must not be guessed.\n- If verified dtcs are supplied, never say that no DTCs are present.\n- probability values are candidate weights, not physical-verification confidence.\n- diagnosticConfidence represents confidence in the current diagnostic direction based on evidence sufficiency, not the top candidate's weight.\n- Do not invent TSBs, measurements, completed repairs, components, or vehicle-specific facts absent from the packet.${migrationInstruction}`;
 
   const aiRes = await aiChat({
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: `CASE_WITH_NEW_EVIDENCE:\n${JSON.stringify(packet)}` }
+      { role: 'user', content: `CASE_WITH_CURRENT_EVIDENCE_BOUNDARY:\n${JSON.stringify(packet)}` }
     ],
     max_tokens: 1800,
     temperature: 0.1,
@@ -194,12 +226,15 @@ async function reassessDiagnosis(job = {}) {
   const text = typeof aiRes === 'string' ? aiRes : (aiRes?.choices?.[0]?.message?.content || '');
   const parsed = extractJSON(text);
   if (!parsed || typeof parsed !== 'object') throw new Error('Diagnostic reassessment returned invalid JSON');
-  return sanitizeReassessment(job, previous, parsed);
+  return sanitizeReassessment(job, previous, parsed, reason);
 }
 
 module.exports = {
   buildReassessmentPayload,
   hasNewEvidenceSinceDiagnosis,
+  needsDtcProvenanceReassessment,
+  reassessmentReason,
+  legacyDiagnosisDtcValues,
   normalizeProbability,
   reassessDiagnosis,
   sanitizeReassessment,
