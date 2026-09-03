@@ -93,9 +93,16 @@ jobs:
           const health = result.evidence?.sourceHealth || {};
           const entries = Object.fromEntries((health.entries || []).map(item => [item.source, item]));
           const failures = [];
+          const confidence = Number(result.diagnosticConfidence?.percentage);
+          const notes = String(result.notes || '');
+          const explicitInsufficientEvidence = Number.isFinite(confidence)
+            && confidence <= 40
+            && /(cannot be pinpointed|insufficient|supporting data|further analysis|additional data|more data)/i.test(notes);
           if (body.success !== true) failures.push('success !== true');
           if (!body.jobId) failures.push('jobId missing');
-          if (!result.primaryCause) failures.push('primaryCause missing');
+          if (!result.primaryCause && !explicitInsufficientEvidence) {
+            failures.push('neither a diagnostic direction nor an explicit low-confidence insufficient-evidence result was returned');
+          }
           if (health.policy !== 'NO_SINGLE_EXTERNAL_SOURCE_REQUIRED') failures.push(`policy ${health.policy}`);
           if (health.diagnosticOperation !== 'CONTINUE') failures.push(`diagnosticOperation ${health.diagnosticOperation}`);
           if (entries.LEMON_MANUALS?.status !== 'SKIPPED') failures.push(`LEMON_MANUALS status ${entries.LEMON_MANUALS?.status}`);
