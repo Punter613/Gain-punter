@@ -103,7 +103,7 @@ test('quick estimate supports line-item authorization without creating diagnosti
   });
 });
 
-test('quick estimate revisions preserve the prior customer document', async () => {
+test('quick estimate revisions preserve the prior document and require fresh authorization', async () => {
   await withServer(async base => {
     const created = await request(base, '/api/jobs/estimate-center/job', 'POST', {
       customer: { name: 'Revision Customer' },
@@ -117,12 +117,21 @@ test('quick estimate revisions preserve the prior customer document', async () =
     });
     assert.equal(first.body.estimate.documentNumber, 'QE-001-R1');
 
+    const authorization = await request(base, `/api/jobs/estimate-center/${jobId}/quick/QE-001/1/decisions`, 'POST', {
+      decisions: [{ itemId: 'LI-001', decision: 'AUTHORIZED', note: 'Approved at original price' }]
+    });
+    assert.equal(authorization.status, 200);
+    assert.equal(authorization.body.estimate.status, 'AUTHORIZED');
+    assert.equal(authorization.body.authorizedToday, 430);
+
     const revision = await request(base, `/api/jobs/estimate-center/${jobId}/quick/QE-001/revise`, 'POST', {
       laborRate: 120,
       workItems: [{ itemId: 'LI-001', description: 'Front brake service with additional hardware', priority: 'CRITICAL', partsCost: 300, laborHours: 1.5 }]
     });
     assert.equal(revision.status, 201);
     assert.equal(revision.body.estimate.documentNumber, 'QE-001-R2');
+    assert.equal(revision.body.estimate.workItems[0].decision, 'PROPOSED');
+    assert.equal(revision.body.estimate.totals.authorized, 0);
 
     const center = await request(base, `/api/jobs/estimate-center/${jobId}`);
     const r1 = center.body.quickEstimates.find(x => x.documentNumber === 'QE-001-R1');
@@ -131,7 +140,9 @@ test('quick estimate revisions preserve the prior customer document', async () =
     assert.ok(r2);
     assert.equal(r1.status, 'SUPERSEDED');
     assert.equal(r1.supersededBy, 'QE-001-R2');
+    assert.equal(r1.workItems[0].decision, 'AUTHORIZED');
     assert.equal(r2.status, 'DRAFT');
+    assert.equal(r2.workItems[0].decision, 'PROPOSED');
     assert.equal(r1.totals.identified, 430);
     assert.equal(r2.totals.identified, 480);
   });
