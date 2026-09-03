@@ -57,6 +57,10 @@ function withTiming(telemetry = {}, elapsedMs, timedOut = false) {
   };
 }
 
+function isLemonPublishedRow(row = {}) {
+  return /LEMON/i.test(String(row.source || row.sourceAuthority || '')) || /lemon-manuals/i.test(String(row.source_url || row.url || ''));
+}
+
 async function settleWithin(label, work, budgetMs, fallbackFactory) {
   const startedAt = Date.now();
   let timer;
@@ -165,6 +169,10 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
     const manual = manualResult.value;
     const tsbs = tsbResult.value;
 
+    if (!manualEnabled) {
+      tsbs.ranked = (tsbs.ranked || []).filter(row => !isLemonPublishedRow(row));
+    }
+
     repairs.telemetry = withTiming(repairs.telemetry, repairsResult.elapsedMs, repairsResult.timedOut);
     tsbs.telemetry = withTiming(tsbs.telemetry, tsbResult.elapsedMs, tsbResult.timedOut);
 
@@ -219,7 +227,7 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
       warnings.unshift(`Published TSB retrieval exceeded its ${this.sourceBudgets.tsbsMs}ms retrieval budget; those results are temporarily omitted.`);
     }
     if (!manualEnabled || manual.skipped === true) {
-      warnings.unshift('Optional Repair & Diagnosis manual provider is disabled. Continuing with stored published evidence and confirmed-repair history.');
+      warnings.unshift('Optional Repair & Diagnosis manual provider is disabled. Continuing with stored non-LEMON published evidence and confirmed-repair history.');
     } else if (manual.error) {
       warnings.unshift(`Optional Repair & Diagnosis lookup unavailable: ${manual.error}. Continuing with other evidence sources.`);
     }
@@ -270,5 +278,6 @@ module.exports = {
   BoundedQuickAskRetriever,
   settleWithin,
   sourceBudgets,
-  timeoutTelemetry
+  timeoutTelemetry,
+  isLemonPublishedRow
 };
