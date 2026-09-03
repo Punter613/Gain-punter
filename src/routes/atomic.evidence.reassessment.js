@@ -26,13 +26,45 @@ function errorPayload(error, jobId) {
 }
 
 function previewReassessmentOptions(req) {
-  const requested = String(req.get('x-sksk-preview-reassessment-failure') || '').toLowerCase() === 'true';
-  if (process.env.IS_PULL_REQUEST !== 'true' || !requested) return {};
-  return {
-    reassessDiagnosisFn: async () => {
-      throw new Error('PR preview forced reassessment failure canary');
-    }
-  };
+  if (process.env.IS_PULL_REQUEST !== 'true') return {};
+
+  const forceFailure = String(req.get('x-sksk-preview-reassessment-failure') || '').toLowerCase() === 'true';
+  if (forceFailure) {
+    return {
+      reassessDiagnosisFn: async () => {
+        throw new Error('PR preview forced reassessment failure canary');
+      }
+    };
+  }
+
+  // Runtime CI proves lifecycle mutation semantics independently from temporary
+  // provider outages or malformed provider JSON. This hook exists only on PR
+  // previews; production can never activate it.
+  const forceSuccess = String(req.get('x-sksk-preview-reassessment-success') || '').toLowerCase() === 'true';
+  if (forceSuccess) {
+    return {
+      reassessDiagnosisFn: async job => ({
+        ...(job.diagnosis?.result || {}),
+        primaryCause: 'Preview deterministic reassessment candidate',
+        secondaryCauses: ['Preview alternate candidate'],
+        probability: [
+          { cause: 'Preview deterministic reassessment candidate', likelihood: 70 },
+          { cause: 'Preview alternate candidate', likelihood: 30 }
+        ],
+        recommendedTests: ['Continue physical confirmation testing before VERIFY'],
+        notes: 'PR preview deterministic canary proves atomic lifecycle ordering only.',
+        diagnosticConfidence: { percentage: 55, rating: 'MODERATE' },
+        reassessment: {
+          applied: true,
+          reason: 'NEW_TEST_EVIDENCE',
+          evidenceCount: Array.isArray(job.tests) ? job.tests.length : 0,
+          reassessedAt: new Date().toISOString()
+        }
+      })
+    };
+  }
+
+  return {};
 }
 
 router.post('/:id/tests/batch', async (req, res) => {
