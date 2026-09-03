@@ -70,9 +70,16 @@ jobs:
           }
           JSON
 
-          DIAG_HTTP="$(curl --connect-timeout 5 --max-time 150 -sS -o /tmp/atomic-diagnose-response.json -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/atomic-diagnose.json \
-            "$PREVIEW_URL/api/diagnose" || true)"
+          DIAG_HTTP=000
+          for attempt in $(seq 1 5); do
+            DIAG_HTTP="$(curl --connect-timeout 5 --max-time 150 -sS -o /tmp/atomic-diagnose-response.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' --data-binary @/tmp/atomic-diagnose.json \
+              "$PREVIEW_URL/api/diagnose" || true)"
+            if [ "$DIAG_HTTP" = "200" ]; then break; fi
+            echo "Atomic canary Diagnose not ready (attempt $attempt/5, HTTP $DIAG_HTTP)."
+            cat /tmp/atomic-diagnose-response.json 2>/dev/null || true
+            sleep 3
+          done
           cat /tmp/atomic-diagnose-response.json || true
           echo
           if [ "$DIAG_HTTP" != "200" ]; then
@@ -126,11 +133,11 @@ jobs:
           NODE
 
           FOUND=0
-          for attempt in $(seq 1 6); do
+          for attempt in $(seq 1 10); do
             JOB_HTTP="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/atomic-job-after-fail.json -w '%{http_code}' \
               "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID" || true)"
             if [ "$JOB_HTTP" = "200" ]; then FOUND=1; break; fi
-            echo "Persisted atomic job not readable yet (attempt $attempt/6, HTTP $JOB_HTTP)."
+            echo "Persisted atomic job not readable yet (attempt $attempt/10, HTTP $JOB_HTTP)."
             sleep 2
           done
           if [ "$FOUND" != "1" ]; then
@@ -148,8 +155,12 @@ jobs:
           if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
           NODE
 
-          RETRY_HTTP="$(curl --connect-timeout 5 --max-time 150 -sS -o /tmp/atomic-retry.json -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/atomic-evidence.json \
+          # The success hook is PR-preview-only. It proves the state transition
+          # independently of temporary AI provider invalid-JSON/outage behavior;
+          # production never exposes this deterministic reassessment hook.
+          RETRY_HTTP="$(curl --connect-timeout 5 --max-time 60 -sS -o /tmp/atomic-retry.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' -H 'x-sksk-preview-reassessment-success: true' \
+            --data-binary @/tmp/atomic-evidence.json \
             "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/unverified-diagnosis" || true)"
           cat /tmp/atomic-retry.json || true
           echo
@@ -173,7 +184,8 @@ jobs:
           )"
 
           REPEAT_HTTP="$(curl --connect-timeout 5 --max-time 45 -sS -o /tmp/atomic-repeat.json -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/atomic-evidence.json \
+            -X POST -H 'Content-Type: application/json' -H 'x-sksk-preview-reassessment-success: true' \
+            --data-binary @/tmp/atomic-evidence.json \
             "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/unverified-diagnosis" || true)"
           if [ "$REPEAT_HTTP" != "200" ]; then
             cat /tmp/atomic-repeat.json || true
