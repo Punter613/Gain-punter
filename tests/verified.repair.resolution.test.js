@@ -28,14 +28,21 @@ function makeVerifiedCase() {
     jobId: 'repair-resolution-job',
     status: 'VERIFIED',
     vehicle: evidencePacket.vehicle,
-    diagnosis: { result: { primaryCause: 'Ignition coil failure', probability: [] }, evidencePacket },
-    tests: [{ id: 'T1', name: 'coil swap', result: 'misfire moved' }],
+    diagnosis: { result: { primaryCause: 'Ignition coil failure', probability: [] }, evidencePacket, revision: 1 },
+    tests: [{
+      id: 'T1',
+      name: 'coil swap',
+      result: 'misfire moved',
+      evidenceRole: 'CONFIRMS',
+      confirmedFault: 'Ignition coil failure'
+    }],
     verification: {
       confirmed: true,
       confirmedCause: 'Ignition coil failure',
       conclusion: 'Fault followed coil',
       notes: 'Confirmed by mechanic',
       evidenceTestIds: ['T1'],
+      diagnosisRevision: 1,
       verifiedAt: '2026-08-15T00:00:00.000Z'
     }
   });
