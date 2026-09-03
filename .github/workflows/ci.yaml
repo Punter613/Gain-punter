@@ -101,11 +101,11 @@ jobs:
           MANUAL_REUSE_CHANGED=1
         fi
 
-        if echo "$CHANGED_FILES" | grep -Eq '^(api/server\.js$|public/lifecycle\.html$|src/services/job\.lifecycle\.js$|src/core/evidence/unverified\.diagnosis\.js$|src/routes/(jobs|jobs\.protected)\.js$)'; then
+        if echo "$CHANGED_FILES" | grep -Eq '^(api/server\.js$|public/lifecycle\.html$|src/services/(job\.lifecycle|diagnostic\.reassessment)\.js$|src/core/evidence/(unverified\.diagnosis|verified\.case)\.js$|src/routes/(jobs|jobs\.protected)\.js$)'; then
           UNVERIFIED_CHANGED=1
         fi
 
-        if echo "$CHANGED_FILES" | grep -Eq '^(src/services/job\.lifecycle\.js$|src/routes/jobs\.protected\.js$)'; then
+        if echo "$CHANGED_FILES" | grep -Eq '^(src/services/job\.lifecycle\.js$|src/core/evidence/verified\.case\.js$|src/routes/jobs\.protected\.js$|public/lifecycle\.html$)'; then
           TEST_EVIDENCE_CHANGED=1
         fi
 
@@ -288,21 +288,60 @@ jobs:
               exit 1
             fi
 
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-neutral-test.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' \
+              --data '{"name":"Road-test operating-condition observation","result":"Mechanical impact reproduced during throttle release; exact failed component was not isolated.","evidenceRole":"NEUTRAL"}' \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/tests" || true)"
+            cat /tmp/render-neutral-test.json || true
+            echo
+            if [ "$HTTP_CODE" != "201" ]; then
+              echo "Neutral mechanic observation was not accepted; HTTP $HTTP_CODE."
+              exit 1
+            fi
+
+            NEUTRAL_TEST_ID="$(node - <<'NODE'
+        const fs = require('fs');
+        const body = JSON.parse(fs.readFileSync('/tmp/render-neutral-test.json', 'utf8'));
+        if (!body.test?.id || body.test?.evidenceRole !== 'NEUTRAL') process.exit(1);
+        process.stdout.write(body.test.id);
+        NODE
+        )"
+
+            NEUTRAL_TEST_ID="$NEUTRAL_TEST_ID" node - <<'NODE'
+        const fs = require('fs');
+        fs.writeFileSync('/tmp/render-neutral-verify-body.json', JSON.stringify({
+          confirmed: true,
+          confirmedCause: 'Knock sensor circuit signal fault',
+          conclusion: 'This neutral road-test observation must not be sufficient to verify a component fault.',
+          evidenceTestIds: [process.env.NEUTRAL_TEST_ID]
+        }));
+        NODE
+
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-neutral-verify.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' --data-binary @/tmp/render-neutral-verify-body.json \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/verify" || true)"
+            cat /tmp/render-neutral-verify.json || true
+            echo
+            if [ "$HTTP_CODE" != "409" ]; then
+              echo "Neutral evidence incorrectly unlocked VERIFY; HTTP $HTTP_CODE."
+              exit 1
+            fi
+
             HTTP_CODE="$(curl --connect-timeout 5 --max-time 15 -sS -o /tmp/render-valid-test.json -w '%{http_code}' \
               -X POST -H 'Content-Type: application/json' \
-              --data '{"name":"Inspect knock sensor connector","result":"Connector dry; no corrosion observed."}' \
+              --data '{"name":"Knock sensor circuit confirmation test","result":"Circuit measurement failed the applicable confirmation limit and isolated the fault to the knock sensor circuit.","evidenceRole":"CONFIRMS","confirmedFault":"Knock sensor circuit signal fault"}' \
               "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID/tests" || true)"
             cat /tmp/render-valid-test.json || true
             echo
             if [ "$HTTP_CODE" != "201" ]; then
-              echo "Descriptive observation was not accepted; HTTP $HTTP_CODE."
+              echo "Confirmation-grade observation was not accepted; HTTP $HTTP_CODE."
               exit 1
             fi
 
             TEST_ID="$(node - <<'NODE'
         const fs = require('fs');
         const body = JSON.parse(fs.readFileSync('/tmp/render-valid-test.json', 'utf8'));
-        if (!body.test?.id) process.exit(1);
+        if (!body.test?.id || body.test?.evidenceRole !== 'CONFIRMS' || body.test?.confirmedFault !== 'Knock sensor circuit signal fault') process.exit(1);
         process.stdout.write(body.test.id);
         NODE
         )"
@@ -312,7 +351,7 @@ jobs:
         fs.writeFileSync('/tmp/render-valid-verify-body.json', JSON.stringify({
           confirmed: true,
           confirmedCause: 'Knock sensor circuit signal fault',
-          conclusion: 'Connector inspection was recorded as a real mechanic observation for the runtime verification path.',
+          conclusion: 'The recorded circuit measurement failed the confirmation limit and isolated the same named fault.',
           evidenceTestIds: [process.env.TEST_ID]
         }));
         NODE
@@ -334,14 +373,13 @@ jobs:
         if (body.status !== 'VERIFIED') failures.push(`status ${body.status}`);
         if (body.estimateReady !== true) failures.push('estimateReady !== true');
         if (!body.verifiedCase) failures.push('VERIFIED_CASE missing');
-        if (!Array.isArray(body.verification?.evidenceTestIds) || !body.verification.evidenceTestIds.includes(process.env.TEST_ID)) {
-          failures.push('selected test not bound to verification');
-        }
+        if (!Array.isArray(body.verification?.evidenceTestIds) || !body.verification.evidenceTestIds.includes(process.env.TEST_ID)) failures.push('selected confirmation test not bound to verification');
+        if (body.verifiedCase?.tests?.find(test => test.id === process.env.TEST_ID)?.evidenceRole !== 'CONFIRMS') failures.push('VERIFIED_CASE did not freeze confirmation evidence role');
         if (failures.length) {
           console.error(failures.join('; '));
           process.exit(1);
         }
-        console.log(`Verification-evidence runtime smoke passed: placeholders=409, missing-evidence verify=409, valid test=201, verify=200 VERIFIED, test=${process.env.TEST_ID}`);
+        console.log(`Verification-evidence runtime smoke passed: placeholders=409, missing-evidence verify=409, neutral=201 but neutral verify=409, confirms=201, verify=200 VERIFIED, test=${process.env.TEST_ID}`);
         NODE
           fi
         else
