@@ -3,6 +3,14 @@ const {
   QUICK_ASK_SCAN_BOUNDS,
   tokens
 } = require('./quick.ask.retriever');
+const {
+  SOURCE_STATUS,
+  isOptionalExternalSourceEnabled,
+  sourceHealthEntry,
+  summarizeSourceHealth,
+  sourceStatusMessage,
+  publicSourceHealth
+} = require('../evidence/source.resilience');
 
 function positiveNumber(value, fallback) {
   const parsed = Number(value);
@@ -47,6 +55,10 @@ function withTiming(telemetry = {}, elapsedMs, timedOut = false) {
     timedOut: !!timedOut,
     resultsMayBePartial: !!telemetry.resultsMayBePartial || !!timedOut
   };
+}
+
+function isLemonPublishedRow(row = {}) {
+  return /LEMON/i.test(String(row.source || row.sourceAuthority || '')) || /lemon-manuals/i.test(String(row.source_url || row.url || ''));
 }
 
 async function settleWithin(label, work, budgetMs, fallbackFactory) {
@@ -99,6 +111,7 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
     const startedAt = Date.now();
     const repairBounds = QUICK_ASK_SCAN_BOUNDS.confirmedRepairs;
     const tsbBounds = QUICK_ASK_SCAN_BOUNDS.tsbs;
+    const manualEnabled = isOptionalExternalSourceEnabled('LEMON_MANUALS');
 
     const [repairsResult, manualResult, tsbResult] = await Promise.all([
       settleWithin(
@@ -111,19 +124,25 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
           telemetry: timeoutTelemetry('feedback_examples', repairBounds, 'database-json', elapsedMs)
         })
       ),
-      settleWithin(
-        'Repair & Diagnosis manual retrieval',
-        () => this._manualEvidence(vehicle, queryText, capped),
-        this.sourceBudgets.manualMs,
-        elapsedMs => ({
-          references: [],
-          source: null,
-          fromCache: false,
-          error: `Repair & Diagnosis lookup exceeded ${this.sourceBudgets.manualMs}ms source budget`,
-          timedOut: true,
-          elapsedMs
-        })
-      ),
+      manualEnabled
+        ? settleWithin(
+          'Repair & Diagnosis manual retrieval',
+          () => this._manualEvidence(vehicle, queryText, capped),
+          this.sourceBudgets.manualMs,
+          elapsedMs => ({
+            references: [],
+            source: null,
+            fromCache: false,
+            error: `Repair & Diagnosis lookup exceeded ${this.sourceBudgets.manualMs}ms source budget`,
+            timedOut: true,
+            elapsedMs
+          })
+        )
+        : Promise.resolve({
+          value: { references: [], source: 'LEMON_MANUALS', fromCache: false, error: null, skipped: true },
+          timedOut: false,
+          elapsedMs: 0
+        }),
       settleWithin(
         'published TSB retrieval',
         () => this._tsbs(vehicle, queryText, capped),
@@ -139,7 +158,7 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
     if (manualResult.error) {
       manualResult.value = {
         references: [],
-        source: null,
+        source: 'LEMON_MANUALS',
         fromCache: false,
         error: manualResult.error.message
       };
@@ -150,6 +169,10 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
     const manual = manualResult.value;
     const tsbs = tsbResult.value;
 
+    if (!manualEnabled) {
+      tsbs.ranked = (tsbs.ranked || []).filter(row => !isLemonPublishedRow(row));
+    }
+
     repairs.telemetry = withTiming(repairs.telemetry, repairsResult.elapsedMs, repairsResult.timedOut);
     tsbs.telemetry = withTiming(tsbs.telemetry, tsbResult.elapsedMs, tsbResult.timedOut);
 
@@ -157,9 +180,32 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
       source: manual.source || 'REPAIR_DIAGNOSIS',
       elapsedMs: manualResult.elapsedMs,
       timedOut: !!manualResult.timedOut || !!manual.timedOut,
+      skipped: manual.skipped === true,
       fromCache: !!manual.fromCache,
       resultsMayBePartial: !!manualResult.timedOut || !!manual.timedOut || !!manual.error
     };
+
+    const sourceHealth = summarizeSourceHealth([
+      sourceHealthEntry(
+        'LEMON_MANUALS',
+        !manualEnabled || manual.skipped === true
+          ? SOURCE_STATUS.SKIPPED
+          : manual.error || manualTelemetry.timedOut
+            ? SOURCE_STATUS.UNAVAILABLE
+            : SOURCE_STATUS.AVAILABLE,
+        { evidenceCount: (manual.references || []).length, fromCache: !!manual.fromCache, reason: manual.error || '' }
+      ),
+      sourceHealthEntry(
+        'PUBLISHED_TSB_CORPUS',
+        tsbs.telemetry.timedOut ? SOURCE_STATUS.DEGRADED : SOURCE_STATUS.AVAILABLE,
+        { evidenceCount: (tsbs.ranked || []).length }
+      ),
+      sourceHealthEntry(
+        'CONFIRMED_REPAIRS',
+        repairs.telemetry.timedOut ? SOURCE_STATUS.DEGRADED : SOURCE_STATUS.AVAILABLE,
+        { evidenceCount: (repairs.ranked || []).length }
+      )
+    ]);
 
     const warnings = [
       'Repair & Diagnosis references are source material, not confirmation of a fault.',
@@ -180,7 +226,11 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
     if (tsbs.telemetry.timedOut) {
       warnings.unshift(`Published TSB retrieval exceeded its ${this.sourceBudgets.tsbsMs}ms retrieval budget; those results are temporarily omitted.`);
     }
-    if (manual.error) warnings.unshift(`Repair & Diagnosis lookup unavailable: ${manual.error}`);
+    if (!manualEnabled || manual.skipped === true) {
+      warnings.unshift('Optional Repair & Diagnosis manual provider is disabled. Continuing with stored non-LEMON published evidence and confirmed-repair history.');
+    } else if (manual.error) {
+      warnings.unshift(`Optional Repair & Diagnosis lookup unavailable: ${manual.error}. Continuing with other evidence sources.`);
+    }
     if (!tokens(queryText).length) {
       warnings.unshift('No question or symptom text was provided; published and manual evidence are not ranked without a query.');
     }
@@ -189,7 +239,7 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
     console.log(
       `[Quick Ask] retrieval completed in ${totalMs}ms ` +
       `(repairs=${repairsResult.elapsedMs}ms${repairsResult.timedOut ? '/timeout' : ''}, ` +
-      `manual=${manualResult.elapsedMs}ms${manualResult.timedOut ? '/timeout' : ''}, ` +
+      `manual=${manualResult.elapsedMs}ms${manualResult.timedOut ? '/timeout' : manual.skipped ? '/skipped' : ''}, ` +
       `tsbs=${tsbResult.elapsedMs}ms${tsbResult.timedOut ? '/timeout' : ''})`
     );
 
@@ -210,6 +260,8 @@ class BoundedQuickAskRetriever extends QuickAskRetriever {
       commonConfirmedRepairs: repairs.ranked,
       confirmedRepairSampleSize: repairs.sampleSize,
       publishedEvidence: tsbs.ranked,
+      sourceHealth: publicSourceHealth(sourceHealth),
+      sourceStatusMessage: sourceStatusMessage(sourceHealth),
       retrievalTelemetry: {
         totalMs,
         budgets: { ...this.sourceBudgets },
@@ -226,5 +278,6 @@ module.exports = {
   BoundedQuickAskRetriever,
   settleWithin,
   sourceBudgets,
-  timeoutTelemetry
+  timeoutTelemetry,
+  isLemonPublishedRow
 };

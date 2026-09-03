@@ -1,0 +1,143 @@
+name: Evidence Source Resilience Runtime Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/core/evidence/source.resilience.js'
+      - 'src/core/evidence/diagnostic.evidence.packet.js'
+      - 'src/core/knowledge/quick.ask.bounded.js'
+      - 'src/services/vehicle.evidence.js'
+      - 'src/routes/diagnose.js'
+      - 'src/middleware/job.lifecycle.middleware.js'
+      - 'tests/source.resilience.test.js'
+      - 'package.json'
+      - 'api/.render-preview-trigger'
+      - '.github/workflows/source-resilience-runtime.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-source-resilience:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Run deterministic source resilience regressions
+        run: npm install --ignore-scripts && npm run test:source-resilience
+
+      - name: Wait for exact Render preview head
+        shell: bash
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 48); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/source-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/source-health.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) {
+            console.error(`preview commit ${health?.preview?.commit || 'missing'} != ${process.env.HEAD_SHA}`);
+            process.exit(1);
+          }
+          NODE
+              then
+                MATCHED=1
+                break
+              fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/48, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/source-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Prove Diagnose survives optional manual provider outage
+        shell: bash
+        run: |
+          cat > /tmp/source-request.json <<'JSON'
+          {
+            "vehicle": {"year": 2008, "make": "Kia", "model": "Sorento", "engine": "2.7L V6", "mileage": 150000},
+            "mileage": 150000,
+            "customerStates": ["Continuous clunk thump on throttle release"],
+            "mechanicNotices": ["Runtime source-resilience canary; no repair authorization"]
+          }
+          JSON
+
+          HTTP_CODE="$(curl --connect-timeout 5 --max-time 120 -sS -o /tmp/source-diagnose.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' -H 'x-sksk-preview-source-outage: LEMON' \
+            --data-binary @/tmp/source-request.json "$PREVIEW_URL/api/diagnose" || true)"
+          cat /tmp/source-diagnose.json || true
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Source resilience Diagnose canary failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          JOB_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/source-diagnose.json', 'utf8'));
+          const result = body.result || {};
+          const health = result.evidence?.sourceHealth || {};
+          const entries = Object.fromEntries((health.entries || []).map(item => [item.source, item]));
+          const failures = [];
+          if (body.success !== true) failures.push('success !== true');
+          if (!body.jobId) failures.push('jobId missing');
+          if (!result.primaryCause) failures.push('primaryCause missing');
+          if (health.policy !== 'NO_SINGLE_EXTERNAL_SOURCE_REQUIRED') failures.push(`policy ${health.policy}`);
+          if (health.diagnosticOperation !== 'CONTINUE') failures.push(`diagnosticOperation ${health.diagnosticOperation}`);
+          if (entries.LEMON_MANUALS?.status !== 'SKIPPED') failures.push(`LEMON_MANUALS status ${entries.LEMON_MANUALS?.status}`);
+          if (entries.LEMON_TSB_CORPUS?.status !== 'SKIPPED') failures.push(`LEMON_TSB_CORPUS status ${entries.LEMON_TSB_CORPUS?.status}`);
+          if ((result.evidence?.sources || []).includes('LEMON_MANUALS')) failures.push('LEMON source leaked while outage canary disabled it');
+          if (!/continuing with other available evidence sources/i.test(String(result.evidence?.sourceStatusMessage || ''))) failures.push('continuation source status message missing');
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          process.stdout.write(body.jobId);
+          NODE
+          )"
+
+          ENCODED_JOB_ID="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+          FOUND=0
+          for attempt in $(seq 1 6); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 20 -sS -o /tmp/source-job.json -w '%{http_code}' \
+              "$PREVIEW_URL/api/jobs/$ENCODED_JOB_ID" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then FOUND=1; break; fi
+            echo "Persisted job not readable yet (attempt $attempt/6, HTTP $HTTP_CODE)."
+            sleep 2
+          done
+          if [ "$FOUND" != "1" ]; then
+            cat /tmp/source-job.json 2>/dev/null || true
+            echo "Persisted source-resilience job fetch failed."
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/source-job.json', 'utf8'));
+          const health = body.job?.diagnosis?.evidencePacket?.evidence?.sourceHealth || {};
+          const entries = Object.fromEntries((health.entries || []).map(item => [item.source, item]));
+          const failures = [];
+          if (health.policy !== 'NO_SINGLE_EXTERNAL_SOURCE_REQUIRED') failures.push('persisted source policy missing');
+          if (health.diagnosticOperation !== 'CONTINUE') failures.push('persisted diagnostic operation not CONTINUE');
+          if (entries.LEMON_MANUALS?.status !== 'SKIPPED') failures.push('persisted LEMON manual source status missing');
+          if (entries.LEMON_TSB_CORPUS?.status !== 'SKIPPED') failures.push('persisted LEMON TSB source status missing');
+          if (failures.length) {
+            console.error(failures.join('; '));
+            process.exit(1);
+          }
+          console.log('Source resilience runtime passed: Diagnose completed and persisted its evidence boundary with LEMON unavailable.');
+          NODE

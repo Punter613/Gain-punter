@@ -3,6 +3,13 @@ const crypto = require('crypto');
 const { scrapeLEMONManuals } = require('./lemon');
 const { harvestVehicleTsbs } = require('./tsb.harvester');
 const { loadNhtsaCorpus, mergeTsbReferences } = require('./nhtsa.tsb.corpus');
+const {
+  SOURCE_STATUS,
+  isOptionalExternalSourceEnabled,
+  sourceHealthEntry,
+  summarizeSourceHealth,
+  sourceStatusMessage
+} = require('../core/evidence/source.resilience');
 
 const cache = new NodeCache({ stdTTL: 60 * 60 * 12, checkperiod: 600, useClones: false });
 const NHTSA_BASE = 'https://api.nhtsa.gov';
@@ -21,6 +28,17 @@ function evidenceContextKey(context = {}) {
     keywords: Array.isArray(context.keywords) ? context.keywords.map(clean) : clean(context.keywords)
   });
   return crypto.createHash('sha1').update(payload).digest('hex').slice(0, 16);
+}
+
+function sourceOptionsKey(options = {}) {
+  return [
+    options.includeManual !== false,
+    options.includeLemonTsb !== false,
+    options.includeNhtsaCorpus !== false,
+    options.includeNhtsa !== false,
+    isOptionalExternalSourceEnabled('LEMON_MANUALS'),
+    isOptionalExternalSourceEnabled('LEMON_TSB_CORPUS')
+  ].map(Boolean).map(value => value ? '1' : '0').join('');
 }
 
 function tsbContextEligible(reference, context = {}) {
@@ -144,7 +162,12 @@ async function scrapeNhtsa(vehicle) {
 async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
   if (!vehicle?.make || !vehicle?.model || !vehicle?.year) return { available: false, error: 'Vehicle year, make, and model are required' };
 
-  const key = `${vehicleKey(vehicle)}|${evidenceContextKey(context)}`;
+  const manualEnabled = options.includeManual !== false && isOptionalExternalSourceEnabled('LEMON_MANUALS');
+  const lemonTsbEnabled = options.includeLemonTsb !== false && isOptionalExternalSourceEnabled('LEMON_TSB_CORPUS');
+  const nhtsaCorpusEnabled = options.includeNhtsaCorpus !== false;
+  const nhtsaEnabled = options.includeNhtsa !== false;
+
+  const key = `${vehicleKey(vehicle)}|${evidenceContextKey(context)}|${sourceOptionsKey(options)}`;
   const cached = cache.get(key);
   if (cached) return { ...cached, fromCache: true };
 
@@ -154,25 +177,30 @@ async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
       year: vehicle.year, make: vehicle.make, model: vehicle.model, trim: vehicle.trim || '', engine: vehicle.engine || '',
       drivetrain: vehicle.drivetrain || vehicle.driveType || vehicle.drive || ''
     },
-    oem: { references: [], source: 'LEMON_MANUALS' },
+    oem: { references: [], source: manualEnabled ? 'LEMON_MANUALS' : null },
     tsbs: {
       references: [], corpusTotal: 0, corpusStored: false, corpusHarvested: false, corpusTruncated: false,
       nhtsaCorpusFetched: 0, nhtsaCorpusTruncated: false,
       status: 'candidate references only; verify bulletin identity/applicability before claiming a TSB'
     },
-    recalls: [], knownIssues: [], sources: [], errors: []
+    recalls: [], knownIssues: [], sources: [], errors: [], sourceHealth: null, sourceStatusMessage: ''
   };
 
-  // NHTSA bulk is a local Supabase corpus lookup, independent of the live ODI API.
-  // Diagnose can disable live NHTSA network calls while still using pre-ingested official manufacturer communications.
+  // Every source settles independently. Optional external manual providers are never
+  // required for Diagnose to continue, and can be disabled immediately with
+  // LEMON_EVIDENCE_ENABLED=false without changing the diagnostic workflow.
   const [manualResult, tsbResult, nhtsaCorpusResult, nhtsaResult] = await Promise.allSettled([
-    scrapeLEMONManuals(vehicle, context),
-    harvestVehicleTsbs(vehicle, { ...context, keywords: context.keywords || [] }),
-    options.includeNhtsaCorpus === false ? Promise.resolve(null) : loadNhtsaCorpus(vehicle, context, { limit: 12, minScore: 1 }),
-    options.includeNhtsa === false ? Promise.resolve(null) : scrapeNhtsa(vehicle)
+    manualEnabled ? scrapeLEMONManuals(vehicle, context) : Promise.resolve(null),
+    lemonTsbEnabled ? harvestVehicleTsbs(vehicle, { ...context, keywords: context.keywords || [] }) : Promise.resolve(null),
+    nhtsaCorpusEnabled ? loadNhtsaCorpus(vehicle, context, { limit: 12, minScore: 1 }) : Promise.resolve(null),
+    nhtsaEnabled ? scrapeNhtsa(vehicle) : Promise.resolve(null)
   ]);
 
-  if (manualResult.status === 'fulfilled') {
+  const healthEntries = [];
+
+  if (!manualEnabled) {
+    healthEntries.push(sourceHealthEntry('LEMON_MANUALS', SOURCE_STATUS.SKIPPED, { reason: 'optional source disabled' }));
+  } else if (manualResult.status === 'fulfilled') {
     const manual = manualResult.value || {};
     const references = classifyFactoryItems(manual.items || []).sort((a, b) => b.relevanceScore - a.relevanceScore);
     result.oem = {
@@ -181,10 +209,21 @@ async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
       schemaVersion: manual.schemaVersion || 1, crawledUrls: manual.crawled_urls || 0
     };
     if (references.length) result.sources.push('LEMON_MANUALS');
-    if (manual.error) result.errors.push(`LEMON: ${manual.error}`);
-  } else result.errors.push(`LEMON: ${manualResult.reason?.message || 'scrape failed'}`);
+    if (manual.error) {
+      result.errors.push(`LEMON: ${manual.error}`);
+      healthEntries.push(sourceHealthEntry('LEMON_MANUALS', SOURCE_STATUS.UNAVAILABLE, { reason: manual.error, fromCache: !!manual.fromCache }));
+    } else {
+      healthEntries.push(sourceHealthEntry('LEMON_MANUALS', SOURCE_STATUS.AVAILABLE, { evidenceCount: references.length, fromCache: !!manual.fromCache }));
+    }
+  } else {
+    const reason = manualResult.reason?.message || 'scrape failed';
+    result.errors.push(`LEMON: ${reason}`);
+    healthEntries.push(sourceHealthEntry('LEMON_MANUALS', SOURCE_STATUS.UNAVAILABLE, { reason }));
+  }
 
-  if (tsbResult.status === 'fulfilled') {
+  if (!lemonTsbEnabled) {
+    healthEntries.push(sourceHealthEntry('LEMON_TSB_CORPUS', SOURCE_STATUS.SKIPPED, { reason: 'optional source disabled' }));
+  } else if (tsbResult.status === 'fulfilled') {
     const corpus = tsbResult.value || {};
     const references = tsbCorpusToReferences(corpus.bulletins || []).sort((a, b) => b.relevanceScore - a.relevanceScore);
     result.tsbs = {
@@ -197,33 +236,61 @@ async function collectVehicleEvidence(vehicle, context = {}, options = {}) {
       crawledUrls: Number(corpus.crawledUrls || 0), rootUrl: corpus.tsbRootUrl || ''
     };
     if (references.length && !result.sources.includes('LEMON_MANUALS')) result.sources.push('LEMON_MANUALS');
-    if (corpus.error) result.errors.push(`LEMON TSB corpus: ${corpus.error}`);
-  } else result.errors.push(`LEMON TSB corpus: ${tsbResult.reason?.message || 'harvest failed'}`);
+    if (corpus.error) {
+      result.errors.push(`LEMON TSB corpus: ${corpus.error}`);
+      healthEntries.push(sourceHealthEntry('LEMON_TSB_CORPUS', SOURCE_STATUS.UNAVAILABLE, { reason: corpus.error, evidenceCount: references.length, fromCache: !!corpus.fromStore }));
+    } else {
+      healthEntries.push(sourceHealthEntry('LEMON_TSB_CORPUS', SOURCE_STATUS.AVAILABLE, { evidenceCount: references.length, fromCache: !!corpus.fromStore }));
+    }
+  } else {
+    const reason = tsbResult.reason?.message || 'harvest failed';
+    result.errors.push(`LEMON TSB corpus: ${reason}`);
+    healthEntries.push(sourceHealthEntry('LEMON_TSB_CORPUS', SOURCE_STATUS.UNAVAILABLE, { reason }));
+  }
 
-  if (nhtsaCorpusResult.status === 'fulfilled' && nhtsaCorpusResult.value) {
+  if (!nhtsaCorpusEnabled) {
+    healthEntries.push(sourceHealthEntry('NHTSA_BULK', SOURCE_STATUS.SKIPPED, { reason: 'source disabled for this request' }));
+  } else if (nhtsaCorpusResult.status === 'fulfilled' && nhtsaCorpusResult.value) {
     const nhtsaCorpus = nhtsaCorpusResult.value;
     result.tsbs.references = mergeTsbReferences(result.tsbs.references, nhtsaCorpus.references || [], 15);
     result.tsbs.nhtsaCorpusFetched = Number(nhtsaCorpus.totalFetched || 0);
     result.tsbs.nhtsaCorpusTruncated = !!nhtsaCorpus.truncated;
     if ((nhtsaCorpus.references || []).length && !result.sources.includes('NHTSA_BULK')) result.sources.push('NHTSA_BULK');
-    if (nhtsaCorpus.error) result.errors.push(`NHTSA TSB corpus: ${nhtsaCorpus.error}`);
+    if (nhtsaCorpus.error) {
+      result.errors.push(`NHTSA TSB corpus: ${nhtsaCorpus.error}`);
+      healthEntries.push(sourceHealthEntry('NHTSA_BULK', SOURCE_STATUS.DEGRADED, { reason: nhtsaCorpus.error, evidenceCount: (nhtsaCorpus.references || []).length }));
+    } else {
+      healthEntries.push(sourceHealthEntry('NHTSA_BULK', SOURCE_STATUS.AVAILABLE, { evidenceCount: (nhtsaCorpus.references || []).length }));
+    }
   } else if (nhtsaCorpusResult.status === 'rejected') {
-    result.errors.push(`NHTSA TSB corpus: ${nhtsaCorpusResult.reason?.message || 'lookup failed'}`);
+    const reason = nhtsaCorpusResult.reason?.message || 'lookup failed';
+    result.errors.push(`NHTSA TSB corpus: ${reason}`);
+    healthEntries.push(sourceHealthEntry('NHTSA_BULK', SOURCE_STATUS.UNAVAILABLE, { reason }));
+  } else {
+    healthEntries.push(sourceHealthEntry('NHTSA_BULK', SOURCE_STATUS.AVAILABLE, { evidenceCount: 0 }));
   }
 
-  if (options.includeNhtsa !== false) {
-    if (nhtsaResult.status === 'fulfilled') {
-      const nhtsa = nhtsaResult.value || {};
-      result.recalls = nhtsa.recalls || [];
-      result.knownIssues = nhtsa.knownIssues || [];
-      result.complaintCount = nhtsa.complaintCount || 0;
-      if (result.recalls.length || result.knownIssues.length) result.sources.push('NHTSA_ODI');
-    } else result.errors.push(`NHTSA: ${nhtsaResult.reason?.message || 'lookup failed'}`);
+  if (!nhtsaEnabled) {
+    healthEntries.push(sourceHealthEntry('NHTSA_ODI', SOURCE_STATUS.SKIPPED, { reason: 'live API disabled for this request' }));
+  } else if (nhtsaResult.status === 'fulfilled') {
+    const nhtsa = nhtsaResult.value || {};
+    result.recalls = nhtsa.recalls || [];
+    result.knownIssues = nhtsa.knownIssues || [];
+    result.complaintCount = nhtsa.complaintCount || 0;
+    if (result.recalls.length || result.knownIssues.length) result.sources.push('NHTSA_ODI');
+    healthEntries.push(sourceHealthEntry('NHTSA_ODI', SOURCE_STATUS.AVAILABLE, { evidenceCount: result.recalls.length + result.knownIssues.length }));
+  } else {
+    const reason = nhtsaResult.reason?.message || 'lookup failed';
+    result.errors.push(`NHTSA: ${reason}`);
+    healthEntries.push(sourceHealthEntry('NHTSA_ODI', SOURCE_STATUS.UNAVAILABLE, { reason }));
   }
 
+  result.sourceHealth = summarizeSourceHealth(healthEntries);
+  result.sourceStatusMessage = sourceStatusMessage(result.sourceHealth);
+  result.degraded = result.sourceHealth.mode === 'DEGRADED';
   result.available = result.sources.length > 0;
   cache.set(key, result);
   return result;
 }
 
-module.exports = { collectVehicleEvidence, selectRelevantTsbs, tsbContextEligible, evidenceContextKey };
+module.exports = { collectVehicleEvidence, selectRelevantTsbs, tsbContextEligible, evidenceContextKey, sourceOptionsKey };

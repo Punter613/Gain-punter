@@ -99,7 +99,8 @@ function packetFromDiagnosisRequest(req, payload) {
     tsbReferences: evidence.tsbs || [],
     sources: evidence.sources || [],
     evidenceAvailable: evidence.available === true,
-    warmupStatus: evidence.warmup || null
+    warmupStatus: evidence.warmup || null,
+    sourceHealth: evidence.sourceHealth || null
   });
   return {
     ...packet,

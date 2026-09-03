@@ -10,6 +10,7 @@ const { applyCompletedWorkGuard } = require('../core/orchestrator/completed.work
 const { applyDiagnosticStageGuard } = require('../core/orchestrator/diagnostic.stage.guard');
 const { recordGuardCatch } = require('../core/learning/guard.catch.recorder');
 const { buildDiagnosticEvidencePacket, compactDiagnosticEvidencePacket } = require('../core/evidence/diagnostic.evidence.packet');
+const { publicSourceHealth } = require('../core/evidence/source.resilience');
 const {
   resolveRequestDtcEvidence,
   trustedDtcCodes,
@@ -111,10 +112,21 @@ router.post('/', async (req, res) => {
     else if (profileId === 'FORD_3.5_ECOBOOST_V1' && inputMake.includes('ford') && (inputModel.includes('150') || inputModel.includes('f-150'))) isProfileValidContext = true;
 
     const evidenceContext = { symptoms: customerSymptomContext.join(' '), mechanicNotices: mechanicContext, obdCodes: targetCodes, keywords };
-    let vehicleEvidence = { available: false, oem: { references: [] }, tsbs: { references: [] }, sources: [], errors: [] }; let warmupStatus = { status: 'NOT_STARTED' };
+    let vehicleEvidence = { available: false, oem: { references: [] }, tsbs: { references: [] }, sources: [], errors: [], sourceHealth: null, sourceStatusMessage: '' }; let warmupStatus = { status: 'NOT_STARTED' };
     if (resolvedVehicle?.year && resolvedVehicle?.make && resolvedVehicle?.model) {
-      try { warmupStatus = await waitForVehicleWarmup(resolvedVehicle, 2500); vehicleEvidence = await collectVehicleEvidence(resolvedVehicle, evidenceContext, { includeNhtsa: false }); }
-      catch (err) { executionTrace.log('EVIDENCE_WARN', `Vehicle evidence unavailable: ${err.message}`); }
+      try {
+        warmupStatus = await waitForVehicleWarmup(resolvedVehicle, 2500);
+        const previewLemonOutage = process.env.IS_PULL_REQUEST === 'true' && String(req.get('x-sksk-preview-source-outage') || '').toUpperCase() === 'LEMON';
+        if (previewLemonOutage) executionTrace.log('EVIDENCE_SOURCE_CANARY', 'Simulating optional LEMON source outage on PR preview.');
+        vehicleEvidence = await collectVehicleEvidence(resolvedVehicle, evidenceContext, {
+          includeNhtsa: false,
+          includeManual: !previewLemonOutage,
+          includeLemonTsb: !previewLemonOutage
+        });
+        if (vehicleEvidence.sourceHealth?.mode === 'DEGRADED' || Number(vehicleEvidence.sourceHealth?.optionalUnavailableCount || 0) > 0) {
+          executionTrace.log('EVIDENCE_SOURCE_DEGRADED', vehicleEvidence.sourceStatusMessage || 'Optional evidence source unavailable; continuing with remaining sources.');
+        }
+      } catch (err) { executionTrace.log('EVIDENCE_WARN', `Vehicle evidence unavailable: ${err.message}`); }
     }
     const relevantTsbs = selectRelevantTsbs(vehicleEvidence, evidenceContext, 12); const oemReferences = (vehicleEvidence.oem?.references || []).slice(0, 6);
     const evidencePacket = buildDiagnosticEvidencePacket({
@@ -133,7 +145,8 @@ router.post('/', async (req, res) => {
       tsbReferences: relevantTsbs,
       sources: vehicleEvidence.sources || [],
       evidenceAvailable: vehicleEvidence.available,
-      warmupStatus
+      warmupStatus,
+      sourceHealth: vehicleEvidence.sourceHealth
     });
 
     const systemPrompt = `You are the expert diagnostic logic unit of SKSK ProTech — a master automotive diagnostician with 25 years of real shop experience.
@@ -149,6 +162,8 @@ RULES:
 - DIAGNOSIS STAGE IS TEST-FIRST. No component is repair-authorized yet. repairSteps MUST contain only non-invasive inspection, measurement, verification, or confirmation steps. Do not instruct removal, teardown, replacement, installation, adjustment, lubrication-as-a-fix, or alignment as a repair. Put discriminating tests in recommendedTests. Actual repair procedure belongs only after TEST -> VERIFY.
 - Prefer tests that separate the highest-ranked candidate from the next candidate. Order tests by safety, diagnostic value, low invasiveness, then time/cost.
 - Treat DIAGNOSTIC_EVIDENCE_PACKET_V2 as the sole structured case context for reasoning.
+- Evidence source health is retrieval telemetry, not vehicle evidence. An unavailable/disabled source is not evidence that a fault is absent and must never block diagnostic reasoning from the evidence that remains.
+- No single external manual provider is required. Continue from trusted measurements, mechanic observations, deterministic knowledge, stored official bulletins, and any other available sources.
 - EVIDENCE HIERARCHY: trusted measurements and deterministic knowledge outrank mechanic observations; mechanic observations outrank customer symptom wording.
 - Customer observations are directional context only and must not override trusted measurements or deterministic evidence.
 - Never invent a TSB, recall, campaign, measurement, completed repair, or vehicle-specific fact absent from the packet.
@@ -186,11 +201,18 @@ MULTI-CONDITION REASONING: When a symptom occurs under distinct operating condit
     parsed = guardResult.output;
 
     const finalResult = { ...safeResult(), ...parsed };
-    // Provider output is never allowed to resurrect a DTC that provenance
-    // excluded. Keep explanations strictly keyed to trusted scan-tool codes.
     finalResult.codeExplanations = filterCodeExplanations(parsed.codeExplanations, targetCodes);
     finalResult.knownIssues = relevantTsbs.slice(0, 3).map(x => `TSB candidate: ${x.title || 'Factory service bulletin reference'}${x.url ? ` — ${x.url}` : ''}`);
-    finalResult.evidence = { oem: oemReferences, tsbs: relevantTsbs.slice(0, 5), sources: vehicleEvidence.sources || [], available: vehicleEvidence.available, warmup: warmupStatus, packetSchemaVersion: evidencePacket.schemaVersion };
+    finalResult.evidence = {
+      oem: oemReferences,
+      tsbs: relevantTsbs.slice(0, 5),
+      sources: vehicleEvidence.sources || [],
+      available: vehicleEvidence.available,
+      warmup: warmupStatus,
+      packetSchemaVersion: evidencePacket.schemaVersion,
+      sourceHealth: publicSourceHealth(vehicleEvidence.sourceHealth || {}),
+      sourceStatusMessage: vehicleEvidence.sourceStatusMessage || ''
+    };
     finalResult.probability = calibrateProbabilityArray(finalResult.probability || [], confidence);
     finalResult.diagnosticConfidence = confidence || { percentage: 30, rating: 'LOW' };
     finalResult.localVehicleTelemetry = withDynamicRisk(localProfile, dynamicRisk);

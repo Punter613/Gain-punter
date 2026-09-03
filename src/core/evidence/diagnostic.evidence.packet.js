@@ -9,6 +9,7 @@ const {
   summarizeDtcProvenance,
   DTC_SOURCES
 } = require('./dtc.provenance');
+const { publicSourceHealth } = require('./source.resilience');
 
 const SCHEMA_VERSION = 2;
 const MAX_OBSERVATIONS = 12;
@@ -180,7 +181,8 @@ function buildDiagnosticEvidencePacket(input = {}) {
       tsbs: tsbReferences,
       sources,
       available: input.evidenceAvailable === true,
-      warmupStatus: boundedText(input.warmupStatus?.status || '', 80) || undefined
+      warmupStatus: boundedText(input.warmupStatus?.status || '', 80) || undefined,
+      sourceHealth: publicSourceHealth(input.sourceHealth || {})
     },
     contradictions
   };
