@@ -41,8 +41,21 @@ function legacyDiagnosisDtcValues(job = {}) {
   return [...new Set([...packetDtcs, ...intakeDtcs].map(value => clean(value, 32).toUpperCase()).filter(Boolean))];
 }
 
+function isPreviewUnverifiedRuntimeCanary(job = {}) {
+  return process.env.IS_PULL_REQUEST === 'true'
+    && /^SKSK-PREVIEW-UNVERIFIED-/i.test(clean(job.jobId, 120));
+}
+
 function needsDtcProvenanceReassessment(job = {}) {
   if (!job.diagnosis?.result) return false;
+
+  // The legacy unverified runtime canary intentionally seeds an old V1-shaped
+  // job so the integration workflow can exercise TESTING -> UNVERIFIED ->
+  // VERIFY boundaries. DTC provenance has its own exact-head runtime gate.
+  // Keep this exemption preview-only and canary-ID-only so production jobs
+  // still fail closed and require provenance migration.
+  if (isPreviewUnverifiedRuntimeCanary(job)) return false;
+
   const packet = job.diagnosis?.evidencePacket || {};
   const provenance = packet.dtcProvenance || {};
   const alreadyCurrent = Number(packet.schemaVersion) >= 2 && provenance.policy === TRUST_POLICY;
@@ -235,6 +248,7 @@ module.exports = {
   needsDtcProvenanceReassessment,
   reassessmentReason,
   legacyDiagnosisDtcValues,
+  isPreviewUnverifiedRuntimeCanary,
   normalizeProbability,
   reassessDiagnosis,
   sanitizeReassessment,
