@@ -12,6 +12,14 @@ function clean(value, max = 500) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+function normalizeFault(value) {
+  return clean(value, 500)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
   if (!value || typeof value !== 'object') return value;
@@ -42,13 +50,23 @@ function buildVerifiedCase(job = {}) {
       .map(id => clean(id, 200))
       .filter(Boolean)
   )];
-  if (!evidenceTestIds.length) throw new Error('Verified case requires explicitly selected supporting test evidence');
+  if (!evidenceTestIds.length) throw new Error('Verified case requires explicitly selected confirmation-grade test evidence');
 
-  const testIds = new Set(job.tests.map(test => clean(test.id, 200)).filter(Boolean));
-  if (evidenceTestIds.some(id => !testIds.has(id))) {
+  const testsById = new Map(job.tests.map(test => [clean(test.id, 200), test]).filter(([id]) => id));
+  const selectedTests = evidenceTestIds.map(id => testsById.get(id));
+  if (selectedTests.some(test => !test)) {
     throw new Error('Verified case evidence must reference persisted job tests');
   }
 
+  const normalizedCause = normalizeFault(confirmedCause);
+  if (selectedTests.some(test => String(test?.evidenceRole || '').toUpperCase() !== 'CONFIRMS' || !clean(test?.confirmedFault, 300))) {
+    throw new Error('Verified case evidence must be explicitly classified CONFIRMS and name the confirmed fault');
+  }
+  if (selectedTests.some(test => normalizeFault(test.confirmedFault) !== normalizedCause)) {
+    throw new Error('Verified case evidence must bind to the same confirmed fault as verification');
+  }
+
+  const diagnosisRevision = Math.max(1, Number(job.diagnosis?.revision) || Number(verification.diagnosisRevision) || 1);
   const sourcePacket = clone(job.diagnosis.evidencePacket || null);
   const verifiedCase = {
     schemaVersion: SCHEMA_VERSION,
@@ -58,7 +76,8 @@ function buildVerifiedCase(job = {}) {
     diagnosis: {
       primaryCause: clean(job.diagnosis.result.primaryCause, 300),
       probability: clone(job.diagnosis.result.probability || []),
-      evidencePacketSchemaVersion: sourcePacket?.schemaVersion ?? null
+      evidencePacketSchemaVersion: sourcePacket?.schemaVersion ?? null,
+      revision: diagnosisRevision
     },
     evidencePacket: sourcePacket,
     tests: clone(job.tests),
@@ -68,6 +87,7 @@ function buildVerifiedCase(job = {}) {
       conclusion,
       evidenceTestIds,
       notes: clean(verification.notes, 1000),
+      diagnosisRevision,
       verifiedAt: verification.verifiedAt || null
     },
     repairScope: [{ component: confirmedCause, cause: confirmedCause }]
