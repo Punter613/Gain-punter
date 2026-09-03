@@ -15,6 +15,11 @@ const {
   trustedDtcCodes,
   publicDtcEvidence
 } = require('../core/evidence/dtc.provenance');
+const {
+  buildVehicleConfigurationBoundary,
+  applyComponentApplicabilityGuard
+} = require('../core/evidence/component.applicability');
+const { resolveVehicleProfile } = require('../services/vehicle.warmup');
 
 function wrapJson(res, handler) {
   const originalJson = res.json.bind(res);
@@ -29,12 +34,54 @@ function wrapJson(res, handler) {
   };
 }
 
+function diagnosisMechanicObservations(body = {}) {
+  return [
+    ...(Array.isArray(body.mechanicNotices) ? body.mechanicNotices : []),
+    ...(Array.isArray(body.notes) ? body.notes : [])
+  ];
+}
+
+async function applyDiagnosisConfigurationBoundary(req, payload) {
+  if (!payload?.success || !payload?.result) return payload;
+  const body = req.body || {};
+  const suppliedVehicle = body.vehicle || {};
+  const vin = body.vin || suppliedVehicle.vin || '';
+  let resolvedVehicle = suppliedVehicle;
+  let vinDecoded = false;
+
+  try {
+    resolvedVehicle = await resolveVehicleProfile(vin, suppliedVehicle);
+    vinDecoded = /^[A-HJ-NPR-Z0-9]{17}$/i.test(String(vin || '').trim());
+  } catch (err) {
+    console.warn('[JobLifecycle] vehicle configuration resolution failed closed:', err.message);
+  }
+
+  const boundary = buildVehicleConfigurationBoundary({
+    vin,
+    suppliedVehicle,
+    resolvedVehicle,
+    vinDecoded
+  });
+  const guarded = applyComponentApplicabilityGuard(payload.result, boundary, {
+    mechanicObservations: diagnosisMechanicObservations(body)
+  });
+
+  const traceLog = payload.traceLog && typeof payload.traceLog === 'object'
+    ? { ...payload.traceLog, logs: Array.isArray(payload.traceLog.logs) ? [...payload.traceLog.logs] : [] }
+    : payload.traceLog;
+  if (guarded.changed && traceLog?.logs) {
+    traceLog.logs.push(`[COMPONENT_APPLICABILITY] Bounded ${guarded.guardedKeys.length} configuration-sensitive component candidate(s); exact fitment must be proven or labeled if equipped.`);
+  }
+
+  return { ...payload, result: guarded.output, traceLog };
+}
+
 function packetFromDiagnosisRequest(req, payload) {
   const body = req.body || {};
   const evidence = payload?.result?.evidence || {};
   const vehicle = body.vehicle || {};
   const dtcEvidence = resolveRequestDtcEvidence(body);
-  return buildDiagnosticEvidencePacket({
+  const packet = buildDiagnosticEvidencePacket({
     vin: body.vin || vehicle.vin || '',
     mileage: body.mileage || vehicle.mileage,
     vehicle,
@@ -42,10 +89,7 @@ function packetFromDiagnosisRequest(req, payload) {
       ...(Array.isArray(body.symptoms) ? body.symptoms : []),
       ...(Array.isArray(body.customerStates) ? body.customerStates : [])
     ],
-    mechanicObservations: [
-      ...(Array.isArray(body.mechanicNotices) ? body.mechanicNotices : []),
-      ...(Array.isArray(body.notes) ? body.notes : [])
-    ],
+    mechanicObservations: diagnosisMechanicObservations(body),
     dtcEvidence,
     deterministicProfile: payload?.result?.localVehicleTelemetry || null,
     localSafetyTriggered: payload?.result?.safetyRisk === true,
@@ -57,6 +101,10 @@ function packetFromDiagnosisRequest(req, payload) {
     evidenceAvailable: evidence.available === true,
     warmupStatus: evidence.warmup || null
   });
+  return {
+    ...packet,
+    vehicleConfiguration: payload?.result?.vehicleConfiguration || null
+  };
 }
 
 async function diagnosisLifecycle(req, res, next) {
@@ -80,7 +128,8 @@ async function diagnosisLifecycle(req, res, next) {
     req.jobLifecycle = job;
     req.body = { ...(req.body || {}), jobId: job.jobId };
 
-    wrapJson(res, async payload => {
+    wrapJson(res, async originalPayload => {
+      const payload = await applyDiagnosisConfigurationBoundary(req, originalPayload);
       if (payload?.success && payload?.result) {
         await recordDiagnosis(job.jobId, payload.result, payload.traceLog || null);
         const persisted = await getJob(job.jobId);
@@ -164,4 +213,10 @@ async function invoiceLifecycle(req, res, next) {
   }
 }
 
-module.exports = { diagnosisLifecycle, estimateLifecycle, invoiceLifecycle, packetFromDiagnosisRequest };
+module.exports = {
+  diagnosisLifecycle,
+  estimateLifecycle,
+  invoiceLifecycle,
+  packetFromDiagnosisRequest,
+  applyDiagnosisConfigurationBoundary
+};
