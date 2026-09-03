@@ -1,0 +1,260 @@
+name: Completed Work Final Invoice Runtime Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/services/final.work.invoice.js'
+      - 'src/routes/final.work.invoice.js'
+      - 'src/routes/work.order.js'
+      - 'src/routes/jobs.protected.js'
+      - 'tests/final.work.invoice.test.js'
+      - 'docs/final-invoice-completed-work.md'
+      - 'package.json'
+      - 'api/.render-preview-trigger'
+      - '.github/workflows/final-invoice-runtime.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-final-invoice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PREVIEW_URL: https://p613-backend-pr-${{ github.event.pull_request.number }}.onrender.com
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Run deterministic final invoice regressions
+        run: npm install --ignore-scripts && npm run test:final-invoice
+
+      - name: Wait for exact Render preview head
+        shell: bash
+        run: |
+          MATCHED=0
+          for attempt in $(seq 1 60); do
+            HTTP_CODE="$(curl --connect-timeout 5 --max-time 10 -sS -o /tmp/final-invoice-health.json -w '%{http_code}' "$PREVIEW_URL/health" || true)"
+            if [ "$HTTP_CODE" = "200" ]; then
+              if HEAD_SHA="$HEAD_SHA" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/final-invoice-health.json', 'utf8'));
+          if (health?.preview?.commit !== process.env.HEAD_SHA) process.exit(1);
+          NODE
+              then MATCHED=1; break; fi
+            fi
+            echo "Preview not on exact head yet (attempt $attempt/60, HTTP $HTTP_CODE)."
+            sleep 5
+          done
+          if [ "$MATCHED" != "1" ]; then
+            echo "Render preview never reached exact PR head $HEAD_SHA."
+            cat /tmp/final-invoice-health.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Prove completed-only invoice truth on live preview
+        shell: bash
+        run: |
+          cat > /tmp/fi-job.json <<'JSON'
+          {
+            "customer": {"name": "FINAL INVOICE RUNTIME CANARY"},
+            "vehicle": {"year": 2018, "make": "Honda", "model": "Accord", "mileage": 90000},
+            "requestedService": "Customer-requested brake and alignment service"
+          }
+          JSON
+
+          JOB_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-job-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-job.json \
+            "$PREVIEW_URL/api/jobs/estimate-center/job" || true)"
+          if [ "$JOB_HTTP" != "201" ]; then cat /tmp/fi-job-response.json || true; exit 1; fi
+
+          JOB_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/fi-job-response.json', 'utf8'));
+          if (!body.jobId) process.exit(1);
+          process.stdout.write(body.jobId);
+          NODE
+          )"
+          ENCODED_JOB="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$JOB_ID")"
+
+          cat > /tmp/fi-estimate.json <<'JSON'
+          {
+            "basis": "CUSTOMER_REQUEST",
+            "laborRate": 100,
+            "taxRate": 0,
+            "workItems": [
+              {"description": "Front brake service", "partsCost": 300, "laborHours": 2, "priority": "WARNING"},
+              {"description": "Wheel alignment", "partsCost": 0, "laborHours": 1, "priority": "ROUTINE"},
+              {"description": "Cabin air filter", "partsCost": 40, "laborHours": 0.2, "priority": "ADVISORY"}
+            ]
+          }
+          JSON
+
+          EST_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-estimate-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-estimate.json \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB/quick" || true)"
+          if [ "$EST_HTTP" != "201" ]; then cat /tmp/fi-estimate-response.json || true; exit 1; fi
+
+          cat > /tmp/fi-decisions.json <<'JSON'
+          {
+            "decisions": [
+              {"itemId": "LI-001", "decision": "AUTHORIZED", "note": "Approved brakes"},
+              {"itemId": "LI-002", "decision": "AUTHORIZED", "note": "Approved alignment"},
+              {"itemId": "LI-003", "decision": "DEFERRED", "note": "Do later"}
+            ]
+          }
+          JSON
+
+          DEC_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-decisions-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-decisions.json \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB/quick/QE-001/1/decisions" || true)"
+          if [ "$DEC_HTTP" != "200" ]; then cat /tmp/fi-decisions-response.json || true; exit 1; fi
+
+          cat > /tmp/fi-work-order.json <<'JSON'
+          {
+            "estimateId": "QE-001",
+            "revision": 1,
+            "itemIds": ["LI-001", "LI-002"],
+            "requestId": "final-invoice-runtime-work-order",
+            "recordedBy": "runtime service desk"
+          }
+          JSON
+          WO_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-work-order-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-work-order.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders" || true)"
+          if [ "$WO_HTTP" != "201" ]; then cat /tmp/fi-work-order-response.json || true; exit 1; fi
+
+          WORK_ORDER_ID="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/fi-work-order-response.json', 'utf8'));
+          if (!body.workOrder?.workOrderId) process.exit(1);
+          process.stdout.write(body.workOrder.workOrderId);
+          NODE
+          )"
+          ENCODED_WO="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$WORK_ORDER_ID")"
+
+          cat > /tmp/fi-progress.json <<'JSON'
+          {"state":"IN_PROGRESS","recordedBy":"runtime tech label"}
+          JSON
+          curl --connect-timeout 5 --max-time 30 -fsS \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-progress.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders/$ENCODED_WO/items/WOI-001/state" >/tmp/fi-progress-response.json
+
+          cat > /tmp/fi-complete.json <<'JSON'
+          {
+            "state":"COMPLETED",
+            "completionNote":"Front brake service completed and final mechanical check performed.",
+            "recordedBy":"runtime tech label"
+          }
+          JSON
+          COMPLETE_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-complete-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-complete.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders/$ENCODED_WO/items/WOI-001/state" || true)"
+          if [ "$COMPLETE_HTTP" != "200" ]; then cat /tmp/fi-complete-response.json || true; exit 1; fi
+
+          cat > /tmp/fi-finalize.json <<'JSON'
+          {"requestId":"final-invoice-runtime-1","recordedBy":"runtime service desk","note":"Pickup invoice"}
+          JSON
+          EARLY_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-early.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-finalize.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/final-invoice" || true)"
+          if [ "$EARLY_HTTP" != "409" ]; then cat /tmp/fi-early.json || true; echo "Final invoice was not blocked by open work"; exit 1; fi
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/fi-early.json', 'utf8'));
+          if (body.code !== 'WORK_REMAINS_OPEN') {
+            console.error(`expected WORK_REMAINS_OPEN, got ${body.code}`);
+            process.exit(1);
+          }
+          NODE
+
+          cat > /tmp/fi-cancel.json <<'JSON'
+          {"state":"CANCELLED","note":"Alignment not performed today.","recordedBy":"runtime service desk"}
+          JSON
+          CANCEL_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-cancel-response.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-cancel.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders/$ENCODED_WO/items/WOI-002/state" || true)"
+          if [ "$CANCEL_HTTP" != "200" ]; then cat /tmp/fi-cancel-response.json || true; exit 1; fi
+
+          FINAL_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-final.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-finalize.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/final-invoice" || true)"
+          if [ "$FINAL_HTTP" != "201" ]; then cat /tmp/fi-final.json || true; exit 1; fi
+
+          INVOICE_FP="$(node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/fi-final.json', 'utf8'));
+          const invoice = body.invoice || {};
+          const failures = [];
+          if (body.created !== true) failures.push('initial invoice not created');
+          if (invoice.type !== 'FINAL_INVOICE') failures.push(`invoice type ${invoice.type}`);
+          if (invoice.status !== 'FINAL') failures.push(`invoice status ${invoice.status}`);
+          if (invoice.policy !== 'BILL_COMPLETED_AUTHORIZED_WORK_ONLY') failures.push(`policy ${invoice.policy}`);
+          if ((invoice.lineItems || []).length !== 1) failures.push(`line count ${invoice.lineItems?.length}`);
+          if (invoice.lineItems?.[0]?.sourceEstimateItemId !== 'LI-001') failures.push('completed brake line missing');
+          if ((invoice.lineItems || []).some(line => line.sourceEstimateItemId === 'LI-002')) failures.push('cancelled line billed');
+          if ((invoice.lineItems || []).some(line => line.sourceEstimateItemId === 'LI-003')) failures.push('deferred line billed');
+          if (invoice.totals?.total !== 500) failures.push(`invoice total ${invoice.totals?.total}`);
+          if (invoice.lineItems?.[0]?.diagnosticTruth?.physicallyVerified !== false) failures.push('preliminary line became diagnostic proof');
+          if (invoice.lineItems?.[0]?.completion?.actor?.identityVerified !== false) failures.push('actor identity boundary missing');
+          if (!invoice.invoiceFingerprint) failures.push('invoice fingerprint missing');
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          process.stdout.write(invoice.invoiceFingerprint);
+          NODE
+          )"
+
+          READ_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-read.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/final-invoice" || true)"
+          if [ "$READ_HTTP" != "200" ]; then cat /tmp/fi-read.json || true; exit 1; fi
+
+          RETRY_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-retry.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-finalize.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/final-invoice" || true)"
+          if [ "$RETRY_HTTP" != "200" ]; then cat /tmp/fi-retry.json || true; exit 1; fi
+          INVOICE_FP="$INVOICE_FP" node - <<'NODE'
+          const fs = require('fs');
+          const read = JSON.parse(fs.readFileSync('/tmp/fi-read.json', 'utf8'));
+          const retry = JSON.parse(fs.readFileSync('/tmp/fi-retry.json', 'utf8'));
+          if (read.invoice?.invoiceFingerprint !== process.env.INVOICE_FP) process.exit(1);
+          if (retry.created !== false || retry.invoice?.invoiceFingerprint !== process.env.INVOICE_FP) process.exit(1);
+          NODE
+
+          LOCK_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-lock.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data-binary @/tmp/fi-progress.json \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB/work-orders/$ENCODED_WO/items/WOI-002/state" || true)"
+          if [ "$LOCK_HTTP" != "409" ]; then cat /tmp/fi-lock.json || true; echo "Work Order was mutable after final invoice"; exit 1; fi
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/fi-lock.json', 'utf8'));
+          if (body.code !== 'FINAL_INVOICE_LOCKS_WORK_ORDER') process.exit(1);
+          NODE
+
+          JOB_READ_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-job-read.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/$ENCODED_JOB" || true)"
+          CENTER_HTTP="$(curl --connect-timeout 5 --max-time 30 -sS -o /tmp/fi-center.json -w '%{http_code}' \
+            "$PREVIEW_URL/api/jobs/estimate-center/$ENCODED_JOB" || true)"
+          if [ "$JOB_READ_HTTP" != "200" ] || [ "$CENTER_HTTP" != "200" ]; then
+            cat /tmp/fi-job-read.json 2>/dev/null || true
+            cat /tmp/fi-center.json 2>/dev/null || true
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const jobBody = JSON.parse(fs.readFileSync('/tmp/fi-job-read.json', 'utf8'));
+          const center = JSON.parse(fs.readFileSync('/tmp/fi-center.json', 'utf8'));
+          const job = jobBody.job || {};
+          const failures = [];
+          if (job.status !== 'INVOICED') failures.push(`lifecycle status ${job.status}`);
+          if (job.verifiedCase) failures.push('final invoice created VERIFIED_CASE');
+          if (job.invoice?.type !== 'FINAL_INVOICE') failures.push('persisted final invoice missing');
+          if (center.invoice?.total !== 500) failures.push(`Estimate Center invoice total ${center.invoice?.total}`);
+          if ((center.workOrders || []).length !== 1) failures.push(`Work Order summary count ${center.workOrders?.length}`);
+          if (failures.length) { console.error(failures.join('; ')); process.exit(1); }
+          console.log('Final invoice runtime passed: open work blocked finalization, only completed authorized scope billed, cancelled/deferred work stayed out, retry was idempotent, and Work Order locked after invoice.');
+          NODE

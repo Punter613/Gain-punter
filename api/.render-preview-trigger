@@ -1,3 +1,3 @@
 Render preview trigger
-reason: final Work Order authorization truth boundary plus monotonic atomic reassessment timestamps so fresh diagnosis revisions are always newer than consumed evidence
-updated: 2026-09-03T19:44:00Z
+reason: completed authorized Work Order lines -> immutable final invoice; open work blocks finalization and cancelled/deferred work stays unbilled
+updated: 2026-09-03T22:29:00Z
