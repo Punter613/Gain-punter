@@ -3,6 +3,7 @@ const router = express.Router();
 const jobsRouter = require('./jobs');
 const customerEstimateCenter = require('./customer.estimate.center');
 const atomicEvidenceReassessment = require('./atomic.evidence.reassessment');
+const workOrderRouter = require('./work.order');
 const {
   getJob,
   isMeaningfulTestResult,
@@ -18,6 +19,11 @@ function clean(value) {
 // remain separate from diagnostic verification truth. A QUICK_ESTIMATE never
 // creates VERIFIED_CASE and never unlocks the verified Estimate -> Invoice lane.
 router.use('/estimate-center', customerEstimateCenter);
+
+// Work Orders are lifecycle documents created only from customer-authorized
+// estimate lines. The route is separate from diagnostic verification truth:
+// authorization approves scope, but never proves that a repair is required.
+router.use('/:id/work-orders', workOrderRouter);
 
 // Atomic evidence/reassessment routes intentionally mount before the legacy
 // jobs router. They preserve the old endpoint shape while making the mobile
